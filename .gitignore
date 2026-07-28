@@ -1,0 +1,16 @@
+# colcon
+build/
+install/
+log/
+
+# compilati
+*.o
+*.a
+dmp_offline_test/dmp_offline_test
+dmp_offline_test/sweep_params
+dmp_offline_test/replay_saved_dmp
+
+# dati generati da sessioni reali (valuta se tenerne alcuni come esempio)
+dmp_weights.yaml
+dmp_demo_recorded.csv
+*.png

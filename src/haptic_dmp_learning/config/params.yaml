@@ -1,0 +1,8 @@
+haptic_dmp_wrapper_node:
+  ros__parameters:
+    n_basis: 20
+    alpha_x: 4.6
+    alpha_z: 25.0
+    beta_z: 6.25
+    output_yaml_path: "/root/thesis_ws/dmp_weights.yaml"
+    output_demo_csv_path: "/root/thesis_ws/demo_raw.csv"
