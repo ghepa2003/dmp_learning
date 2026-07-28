@@ -46,6 +46,8 @@ void saveToYaml(const DMP& dmp, const std::string& filepath) {
     root["tau"] = dmp.tau();
     root["y0"] = vec3ToYaml(dmp.y0());
     root["goal"] = vec3ToYaml(dmp.goal());
+    root["dG"] = vec3ToYaml(dmp.dG());
+    root["A"] = vec3ToYaml(dmp.A());
     root["centers"] = vectorToYaml(dmp.centers());
     root["widths"] = vectorToYaml(dmp.widths());
 
@@ -77,6 +79,8 @@ DMP loadFromYaml(const std::string& filepath) {
 
     Eigen::Vector3d y0 = yamlToVec3(root["y0"]);
     Eigen::Vector3d goal = yamlToVec3(root["goal"]);
+    Eigen::Vector3d dG = yamlToVec3(root["dG"]);
+    Eigen::Vector3d A = yamlToVec3(root["A"]);
     Eigen::VectorXd centers = yamlToVector(root["centers"]);
     Eigen::VectorXd widths = yamlToVector(root["widths"]);
 
@@ -88,7 +92,7 @@ DMP loadFromYaml(const std::string& filepath) {
     }
 
     DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
-    dmp.setLearnedParameters(tau, y0, goal, centers, widths, weights);
+    dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights);
     return dmp;
 }
 

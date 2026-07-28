@@ -5,7 +5,7 @@
 namespace haptic_dmp_learning {
 namespace core {
 
-DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z)
+DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z, bool second_order_canonical)
     : n_basis_(n_basis),
       alpha_x_(alpha_x),
       alpha_z_(alpha_z),
@@ -14,9 +14,15 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z)
       y0_(Eigen::Vector3d::Zero()),
       goal_(Eigen::Vector3d::Zero()),
       x_(1.0),
+      v_(0.0),
       y_(Eigen::Vector3d::Zero()),
       z_(Eigen::Vector3d::Zero()),
-      learned_(false) {
+      second_order_canonical_(second_order_canonical),
+      learned_(false),
+      dG_(Eigen::Vector3d::Zero()),
+      A_(Eigen::Vector3d::Zero()),
+      scale_(Eigen::Vector3d::Ones()) {
+    scale_reliable_.fill(true);
     for (auto& w : weights_) {
         w = Eigen::VectorXd::Zero(n_basis_);
     }
@@ -24,15 +30,19 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z)
 }
 
 void DMP::initBasisFunctions() {
-    // Centers equally spaced in phase space x in (0, 1] (simplified variant
-    // of the classic Ijspeert placement, which spaces them in time and then
-    // maps through the canonical system - equivalent in spirit, simpler to
-    // implement, and fine for a first working version).
-    centers_ = Eigen::VectorXd::LinSpaced(n_basis_, 1.0, 1e-3);
+    // Equispaced centers in the normalized time [0,1], then mapped to phase space via the canonical system decay
+    // - standard approach (Ijspeert).
+
+    Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
+    centers_.resize(n_basis_);
+    for (int i = 0; i < n_basis_; ++i) {
+        centers_(i) = std::exp(-alpha_x_ * t_norm(i));
+    }
+
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
-            double d = centers_(i + 1) - centers_(i);
+            double d = (centers_(i + 1) - centers_(i)) * 0.55;  // overlap factor from the reference implementation
             widths_(i) = 1.0 / (d * d);
         } else {
             widths_(i) = widths_(i - 1);
@@ -69,9 +79,15 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     // x(t) = exp(-alpha_x / tau * t_rel), where t_rel = t - t0
     std::vector<double> x_t(N);
     for (size_t k = 0; k < N; ++k) {
-        double t_rel = demo[k].t - demo.front().t;
-        x_t[k] = std::exp(-alpha_x_ / tau_ * t_rel);
+    double t_rel = demo[k].t - demo.front().t;
+    double t_norm = t_rel / tau_;
+    if (second_order_canonical_) {
+        double a = alpha_z_ / 2.0;
+        x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // soluzione chiusa, criticamente smorzata
+    } else {
+        x_t[k] = std::exp(-alpha_x_ * t_norm);
     }
+}
 
     // Estimate velocity and acceleration via central finite differences.
     // NOTE: haptic device data is typically noisy. If the learned DMP looks
@@ -100,19 +116,10 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
         Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
 
-        double scale = goal_(d) - y0_(d);
-        // Guard against the ill-conditioning case documented in the thesis
-        // (goal ~= start): fall back to a small nonzero scale to avoid
-        // dividing by ~0. Goal generalization along this dimension will not
-        // rescale correctly afterwards - accepted limitation for now.
-        if (std::abs(scale) < 1e-4) {
-            scale = (scale >= 0.0) ? 1e-4 : -1e-4;
-        }
-
         for (size_t k = 0; k < N; ++k) {
             double f_target = tau_ * tau_ * acc[k](d) -
                                alpha_z_ * (beta_z_ * (goal_(d) - demo[k].position(d)) - tau_ * vel[k](d));
-            double s = x_t[k] * scale;  // forcing-term regressor: x * (g - y0)
+            double s = x_t[k];
 
             for (int i = 0; i < n_basis_; ++i) {
                 double psi = basisFunction(i, x_t[k]);
@@ -126,6 +133,19 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         }
     }
 
+    dG_ = goal_ - y0_;
+    scale_ = Eigen::Vector3d::Ones();  // durante il fit stesso, scala unitaria
+    scale_reliable_.fill(true);
+
+    for (int d = 0; d < 3; ++d) {
+        double min_v = demo.front().position(d), max_v = min_v;
+        for (const auto& s : demo) {
+            min_v = std::min(min_v, s.position(d));
+            max_v = std::max(max_v, s.position(d));
+        }
+        A_(d) = max_v - min_v;
+    }
+
     learned_ = true;
 }
 
@@ -133,30 +153,50 @@ void DMP::reset() {
     x_ = 1.0;
     y_ = y0_;
     z_ = Eigen::Vector3d::Zero();
+    v_ = 0.0;
 }
 
 void DMP::setGoal(const Eigen::Vector3d& goal) {
+    constexpr double kAmplitudeRatioThreshold = 2.0;  // Same threshold of DMP::learnFromDemonstration for the amplitude ratio check
+    for (int d = 0; d < 3; ++d) {
+        double new_dG = goal(d) - y0_(d);
+        double ratio = A_(d) / (std::abs(dG_(d)) + 1e-10);
+        if (ratio > kAmplitudeRatioThreshold) {
+            // ill-conditioned: don't rescale for this dimension, keep the previous scale factor (default 1 or last manual value).
+            scale_reliable_[d] = false;
+        } else {
+            scale_(d) = new_dG / dG_(d);
+            scale_reliable_[d] = true;
+        }
+    }
     goal_ = goal;
 }
 
 void DMP::setLearnedParameters(double tau, const Eigen::Vector3d& y0, const Eigen::Vector3d& goal,
+                                const Eigen::Vector3d& dG, const Eigen::Vector3d& A,
                                 const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
                                 const std::array<Eigen::VectorXd, 3>& weights) {
-    tau_ = tau;
-    y0_ = y0;
-    goal_ = goal;
-    centers_ = centers;
-    widths_ = widths;
-    weights_ = weights;
+    tau_ = tau; y0_ = y0; goal_ = goal;
+    dG_ = dG; A_ = A;
+    scale_ = Eigen::Vector3d::Ones();
+    scale_reliable_.fill(true);
+    centers_ = centers; widths_ = widths; weights_ = weights;
     n_basis_ = static_cast<int>(centers.size());
     learned_ = true;
 }
 
-Eigen::Vector3d DMP::step(double dt) {
+Eigen::Vector3d DMP::step(double dt, const Eigen::Vector3d& ct, double cc) {
     // Canonical system: tau * dx = -alpha_x * x
     // Integrate forward with simple Euler step. x_ is clamped to [0,1].
-    double dx = -alpha_x_ / tau_ * x_;
-    x_ += dx * dt;
+    if (second_order_canonical_) {
+        double dv = (alpha_z_ * (beta_z_ * (0.0 - x_) - v_) + cc) / tau_;
+        double dx = v_ / tau_;
+        v_ += dv * dt;
+        x_ += dx * dt;
+    } else {
+        double dx = (-alpha_x_ * x_ + cc) / tau_;
+        x_ += dx * dt;
+    }
     if (x_ < 0.0) x_ = 0.0;
 
     // Forcing term (normalized weighted sum of Gaussian kernels), per dimension
@@ -176,11 +216,11 @@ Eigen::Vector3d DMP::step(double dt) {
         for (int i = 0; i < n_basis_; ++i) {
             weighted += weights_[d](i) * psi(i);
         }
-        f(d) = (weighted / psi_sum) * x_ * (goal_(d) - y0_(d));
+        f(d) = (weighted / psi_sum) * x_ * scale_(d);
     }
 
     // Transformation system: tau*dz = alpha_z(beta_z(g-y)-z) + f ; tau*dy = z
-    Eigen::Vector3d dz = (alpha_z_ * (beta_z_ * (goal_ - y_) - z_) + f) / tau_;
+    Eigen::Vector3d dz = (alpha_z_ * (beta_z_ * (goal_ - y_) - z_) + f + ct) / tau_;
     Eigen::Vector3d dy = z_ / tau_;
 
     z_ += dz * dt;
