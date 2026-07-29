@@ -18,6 +18,7 @@ public:
     // alpha_x: canonical system decay rate (default 4.6 => x(T)/x(0) ~ 1%)
     // alpha_z, beta_z: transformation system gains
     //   (critically damped when beta_z = alpha_z / 4)
+    // second_order_canonical: if true, the canonical system is second-order
     explicit DMP(int n_basis = 20, double alpha_x = 4.6, double alpha_z = 25.0, double beta_z = 6.25,
              bool second_order_canonical = false);
     // Fits the weights from a single recorded demonstration via locally
@@ -48,7 +49,10 @@ public:
     // Call reset() once before the first call.
     Eigen::Vector3d step(double dt, const Eigen::Vector3d& ct = Eigen::Vector3d::Zero(), double cc = 0.0);
 
+    // Returns the current phase (x) of the canonical system, in [0,1].
     double phase() const { return x_; }
+
+    // Returns true if the DMP has been learned from a demonstration (weights have been fitted).
     bool isLearned() const { return learned_; }
 
     // --- accessors needed for serialization (see dmp_io.hpp) ---

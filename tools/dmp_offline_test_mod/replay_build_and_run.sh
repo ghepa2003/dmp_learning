@@ -13,13 +13,15 @@ if [ ! -f "$DEMO_PATH" ] && [ -f "demo_raw.csv" ]; then
     DEMO_PATH="demo_raw.csv"
 fi
 
+PKG_DIR="../../src/haptic_dmp_learning"
+
 echo "Compilazione replay_saved_dmp..."
 g++ -std=c++17 -O2 \
-    -I core/include \
+    -I "$PKG_DIR/include" \
     -I/usr/include/eigen3 \
     replay_saved_dmp.cpp \
-    core/src/dmp.cpp \
-    core/src/dmp_io.cpp \
+    "$PKG_DIR/src/core/dmp.cpp" \
+    "$PKG_DIR/src/core/dmp_io.cpp" \
     -lyaml-cpp \
     -o replay_saved_dmp
 

@@ -36,13 +36,15 @@ void DMP::initBasisFunctions() {
     Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
     centers_.resize(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
+        // Map normalized time to phase space using the canonical system's exponential decay
+        // x(t) = exp(-alpha_x * t_norm)
         centers_(i) = std::exp(-alpha_x_ * t_norm(i));
     }
 
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
-            double d = (centers_(i + 1) - centers_(i)) * 0.55;  // overlap factor from the reference implementation
+            double d = (centers_(i + 1) - centers_(i)) * 0.55;  // overlap factor from the reference implementation (used by Schaal/Ijspeert)
             widths_(i) = 1.0 / (d * d);
         } else {
             widths_(i) = widths_(i - 1);
@@ -64,6 +66,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             "DMP::learnFromDemonstration: demonstration too short (need at least 5 samples).");
     }
 
+    // 
     const size_t N = demo.size();
     tau_ = demo.back().t - demo.front().t;
     if (tau_ <= 0.0) {
@@ -83,17 +86,13 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     double t_norm = t_rel / tau_;
     if (second_order_canonical_) {
         double a = alpha_z_ / 2.0;
-        x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // soluzione chiusa, criticamente smorzata
+        x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // closed-form solution of the second-order canonical system with critical damping
     } else {
         x_t[k] = std::exp(-alpha_x_ * t_norm);
     }
 }
 
     // Estimate velocity and acceleration via central finite differences.
-    // NOTE: haptic device data is typically noisy. If the learned DMP looks
-    // jittery when replayed, the first thing to try is low-pass filtering
-    // position (or velocity) before this step, rather than differentiating
-    // the raw samples directly.
     std::vector<Eigen::Vector3d> vel(N), acc(N);
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
@@ -128,13 +127,15 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             }
         }
 
+        // Compute weights for this dimension, with a guard against division by zero.
         for (int i = 0; i < n_basis_; ++i) {
             weights_[d](i) = (den(i) > 1e-8) ? num(i) / den(i) : 0.0;
         }
     }
 
+    // Compute the observed amplitude of the forcing term per dimension, for later scaling checks.
     dG_ = goal_ - y0_;
-    scale_ = Eigen::Vector3d::Ones();  // durante il fit stesso, scala unitaria
+    scale_ = Eigen::Vector3d::Ones();  
     scale_reliable_.fill(true);
 
     for (int d = 0; d < 3; ++d) {
@@ -158,6 +159,7 @@ void DMP::reset() {
 
 void DMP::setGoal(const Eigen::Vector3d& goal) {
     constexpr double kAmplitudeRatioThreshold = 2.0;  // Same threshold of DMP::learnFromDemonstration for the amplitude ratio check
+    // Compute the new scale factors for each dimension, based on the original amplitude and the new goal.
     for (int d = 0; d < 3; ++d) {
         double new_dG = goal(d) - y0_(d);
         double ratio = A_(d) / (std::abs(dG_(d)) + 1e-10);
@@ -176,6 +178,7 @@ void DMP::setLearnedParameters(double tau, const Eigen::Vector3d& y0, const Eige
                                 const Eigen::Vector3d& dG, const Eigen::Vector3d& A,
                                 const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
                                 const std::array<Eigen::VectorXd, 3>& weights) {
+    // Set the learned parameters directly, bypassing the learning step. This is used when loading a DMP from saved parameters.                                
     tau_ = tau; y0_ = y0; goal_ = goal;
     dG_ = dG; A_ = A;
     scale_ = Eigen::Vector3d::Ones();
@@ -210,6 +213,7 @@ Eigen::Vector3d DMP::step(double dt, const Eigen::Vector3d& ct, double cc) {
     // Guard against the case where all basis functions are effectively zero (e.g., x_ is very small and all kernels are far away).
     if (psi_sum < 1e-8) psi_sum = 1e-8;
 
+    // Compute the forcing term f(x) for each dimension, scaled by the learned weights and the current phase x_.
     Eigen::Vector3d f = Eigen::Vector3d::Zero();
     for (int d = 0; d < 3; ++d) {
         double weighted = 0.0;
