@@ -8,6 +8,14 @@ Uso:
 Si aspetta che 'replay_from_yaml.csv' sia gia' stato generato nella stessa
 cartella (con replay_build_and_run.sh).
 Richiede: matplotlib, numpy
+
+NOTA (allineamento temporale): il confronto qui sotto avviene per indice di
+campione k (replay[k] vs demo[k]), non per timestamp interpolato. Questo e'
+corretto solo se demo e replay sono campionati a intervalli regolari e
+sincronizzati a t=0. Il Geomagic Touch pubblica a ~1000Hz con jitter reale,
+quindi su demo lunghe un piccolo disallineamento puo' accumularsi - da tenere
+presente se l'istante di errore massimo individuato qui sotto non corrisponde
+visivamente a un'inversione nel grafico dei quaternioni.
 """
 import sys
 import os
@@ -64,9 +72,13 @@ def print_endpoint_metrics(demo, replay):
 
 
 def print_metrics(demo, replay):
+    """Calcola RMSE posizionale ed errore angolare, stampa il report e
+    restituisce (angular_errors, t_common) per la diagnostica Step 1
+    (localizzazione temporale dell'errore massimo). Se non ci sono dati di
+    orientamento restituisce (None, None)."""
     n = min(len(demo[0]), len(replay[0]))
     if n == 0:
-        return
+        return None, None
     sq = [0.0, 0.0, 0.0]
     max_err = 0.0
     for k in range(n):
@@ -83,16 +95,27 @@ def print_metrics(demo, replay):
     print(f"  [Posizione] RMSE x/y/z: {rmse[0]:.5f} / {rmse[1]:.5f} / {rmse[2]:.5f} m "
           f"| RMSE totale: {rmse_overall:.5f} m | Errore max: {max_err:.5f} m")
 
+    angular_errors = None
+    t_common = None
     if demo[8] and replay[8]:
+        angular_errors = []
         sum_ang, max_ang = 0.0, 0.0
+        idx_max_ang = 0
         for k in range(n):
             dot = abs(demo[4][k] * replay[4][k] + demo[5][k] * replay[5][k] +
                       demo[6][k] * replay[6][k] + demo[7][k] * replay[7][k])
             dot = max(-1.0, min(1.0, dot))
             angle_deg = 2.0 * math.acos(dot) * 180.0 / math.pi
+            angular_errors.append(angle_deg)
             sum_ang += angle_deg
-            max_ang = max(max_ang, angle_deg)
-        print(f"  [Orientamento] Errore angolare medio: {sum_ang / n:.4f} deg | massimo: {max_ang:.4f} deg")
+            if angle_deg > max_ang:
+                max_ang = angle_deg
+                idx_max_ang = k
+        t_common = demo[0][:n]
+        print(f"  [Orientamento] Errore angolare medio: {sum_ang / n:.4f} deg | massimo: {max_ang:.4f} deg "
+              f"al tempo t={t_common[idx_max_ang]:.3f}s (campione {idx_max_ang}/{n})")
+
+    return angular_errors, t_common
 
 
 if len(sys.argv) >= 2:
@@ -113,7 +136,7 @@ demo = load_csv(demo_path)
 replay = load_csv("replay_from_yaml.csv")
 
 print(f"Demo: {demo_path}")
-print_metrics(demo, replay)
+angular_errors, t_common = print_metrics(demo, replay)
 print_endpoint_metrics(demo, replay)
 
 fig = plt.figure(figsize=(20, 6))
@@ -160,4 +183,20 @@ else:
 plt.tight_layout()
 plt.savefig("real_demo_plot.png", dpi=150)
 print("Salvato real_demo_plot.png")
+
+# --- Errore angolare nel tempo (diagnostica Step 1: localizzazione del picco) ---
+if angular_errors is not None:
+    fig2, ax_err = plt.subplots(figsize=(10, 5))
+    ax_err.plot(t_common, angular_errors, color="tab:red")
+    idx_max = angular_errors.index(max(angular_errors))
+    ax_err.axvline(t_common[idx_max], color="k", linestyle="--",
+                    label=f"max = {angular_errors[idx_max]:.2f}\u00b0 @ t={t_common[idx_max]:.2f}s")
+    ax_err.set_xlabel("t [s]")
+    ax_err.set_ylabel("errore angolare [deg]")
+    ax_err.set_title("Errore angolare nel tempo")
+    ax_err.legend()
+    fig2.tight_layout()
+    fig2.savefig("angular_error_over_time.png", dpi=150)
+    print("Salvato angular_error_over_time.png")
+
 plt.show()
