@@ -45,6 +45,43 @@ def load_csv(path):
                 qz.append(float(row["qz"]))
     return t, x, y, z, qw, qx, qy, qz, has_quat
 
+def slerp_arrays(t_src, qw, qx, qy, qz, t_query):
+    """Interpola i quaternioni su una nuova base temporale, con correzione di
+    continuità di emisfero (nlerp + rinormalizzazione) per evitare che un
+    'nearest' cada dal lato sbagliato del segno durante un flip veloce."""
+    qw2, qx2, qy2, qz2 = list(qw), list(qx), list(qy), list(qz)
+    for k in range(1, len(qw2)):
+        dot = qw2[k]*qw2[k-1] + qx2[k]*qx2[k-1] + qy2[k]*qy2[k-1] + qz2[k]*qz2[k-1]
+        if dot < 0:
+            qw2[k], qx2[k], qy2[k], qz2[k] = -qw2[k], -qx2[k], -qy2[k], -qz2[k]
+
+    out = []
+    for comp in (qw2, qx2, qy2, qz2):
+        out.append(list(__import__("numpy").interp(t_query, t_src, comp)))
+    qwq, qxq, qyq, qzq = out
+    for k in range(len(qwq)):
+        n = math.sqrt(qwq[k]**2 + qxq[k]**2 + qyq[k]**2 + qzq[k]**2)
+        if n > 1e-9:
+            qwq[k], qxq[k], qyq[k], qzq[k] = qwq[k]/n, qxq[k]/n, qyq[k]/n, qzq[k]/n
+    return qwq, qxq, qyq, qzq
+
+
+def resample_to_common_time(demo, replay):
+    """Ricampiona replay sulla base temporale di demo (che ha risoluzione
+    comparabile, ~1kHz) cosi' il confronto punto-a-punto avviene a parita' di
+    istante temporale, non di indice di campione."""
+    import numpy as np
+    t_common = demo[0]
+    rx = list(np.interp(t_common, replay[0], replay[1]))
+    ry = list(np.interp(t_common, replay[0], replay[2]))
+    rz = list(np.interp(t_common, replay[0], replay[3]))
+    has_quat = demo[8] and replay[8]
+    if has_quat:
+        rqw, rqx, rqy, rqz = slerp_arrays(replay[0], replay[4], replay[5], replay[6], replay[7], t_common)
+    else:
+        rqw, rqx, rqy, rqz = [], [], [], []
+    return (t_common, rx, ry, rz, rqw, rqx, rqy, rqz, has_quat)
+
 
 def print_endpoint_metrics(demo, replay):
     if not demo[1] or not replay[1]:
@@ -133,7 +170,14 @@ else:
         sys.exit(1)
 
 demo = load_csv(demo_path)
-replay = load_csv("replay_from_yaml.csv")
+
+replay_csv_candidates = [
+    "data/replay_from_yaml.csv",
+    "replay_from_yaml.csv",
+]
+replay_path = next((c for c in replay_csv_candidates if os.path.exists(c)), "data/replay_from_yaml.csv")
+replay = load_csv(replay_path)
+replay = resample_to_common_time(demo, replay)
 
 print(f"Demo: {demo_path}")
 angular_errors, t_common = print_metrics(demo, replay)
@@ -180,9 +224,11 @@ else:
     ax_q.text(0.5, 0.5, "Nessun dato di orientamento nel CSV", ha="center", va="center")
     ax_q.set_axis_off()
 
+os.makedirs("plots", exist_ok=True)
 plt.tight_layout()
-plt.savefig("real_demo_plot.png", dpi=150)
-print("Salvato real_demo_plot.png")
+out_plot1 = os.path.join("plots", "real_demo_plot.png")
+plt.savefig(out_plot1, dpi=150)
+print(f"Salvato {out_plot1}")
 
 # --- Errore angolare nel tempo (diagnostica Step 1: localizzazione del picco) ---
 if angular_errors is not None:
@@ -196,7 +242,8 @@ if angular_errors is not None:
     ax_err.set_title("Errore angolare nel tempo")
     ax_err.legend()
     fig2.tight_layout()
-    fig2.savefig("angular_error_over_time.png", dpi=150)
-    print("Salvato angular_error_over_time.png")
+    out_plot2 = os.path.join("plots", "angular_error_over_time.png")
+    fig2.savefig(out_plot2, dpi=150)
+    print(f"Salvato {out_plot2}")
 
 plt.show()

@@ -1,6 +1,7 @@
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include <cmath>
 #include <stdexcept>
+#include <iostream>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -18,12 +19,13 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z, bool second
       v_(0.0),
       y_(Eigen::Vector3d::Zero()),
       z_(Eigen::Vector3d::Zero()),
+      z0_(Eigen::Vector3d::Zero()),
       learned_(false),
       dG_(Eigen::Vector3d::Zero()),
       A_(Eigen::Vector3d::Zero()),
       scale_(Eigen::Vector3d::Ones()) {
-    scale_reliable_.fill(true);
-    for (auto& w : weights_) {
+        scale_reliable_.fill(true);
+        for (auto& w : weights_) {
         w = Eigen::VectorXd::Zero(n_basis_);
     }
     initBasisFunctions();
@@ -106,6 +108,14 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         if (dt <= 0.0) dt = 1e-6;
         vel[k] = (demo[kp1].position - demo[km1].position) / dt;
     }
+
+    std::cerr << "[DMP diag] |vel(0)| = " << vel.front().norm()
+              << " m/s, |vel(N-1)| = " << vel.back().norm() << " m/s ("
+              << "|z(0)| = " << (tau_ * vel.front()).norm()
+              << ", |z(N-1)| = " << (tau_ * vel.back()).norm() << " scaled)\n";
+
+    z0_ = tau_ * vel.front();
+
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
         size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
@@ -158,7 +168,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 void DMP::reset() {
     x_ = 1.0;
     y_ = y0_;
-    z_ = Eigen::Vector3d::Zero();
+    z_ = z0_;
     v_ = 0.0;
 }
 
@@ -189,10 +199,11 @@ void DMP::setGoal(const Eigen::Vector3d& goal) {
 void DMP::setLearnedParameters(double tau, const Eigen::Vector3d& y0, const Eigen::Vector3d& goal,
                                 const Eigen::Vector3d& dG, const Eigen::Vector3d& A,
                                 const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
-                                const std::array<Eigen::VectorXd, 3>& weights) {
+                                const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& z0) {
     // Set the learned parameters directly, bypassing the learning step. This is used when loading a DMP from saved parameters.                                
     tau_ = tau; y0_ = y0; goal_ = goal;
     dG_ = dG; A_ = A;
+    z0_ = z0;
     scale_ = Eigen::Vector3d::Ones();
     scale_reliable_.fill(true);
     centers_ = centers; widths_ = widths; weights_ = weights;

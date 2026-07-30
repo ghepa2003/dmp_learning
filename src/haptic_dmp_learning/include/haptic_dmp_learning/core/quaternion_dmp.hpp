@@ -20,6 +20,7 @@ public:
     void reset();
     void setGoal(const Eigen::Quaterniond& goal);
     const Eigen::Quaterniond& goal() const { return goal_; }
+    const Eigen::Vector3d& eta0() const { return eta0_; }
 
     // Step integration; it returns the normalized current orientation
     Eigen::Quaterniond step(double dt);
@@ -38,7 +39,7 @@ public:
 
     void setLearnedParameters(double tau, const Eigen::Quaterniond& q0, const Eigen::Quaterniond& goal,
                                const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
-                               const std::array<Eigen::VectorXd, 3>& weights);
+                               const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& eta0);
 
     static Eigen::Vector3d logMap(const Eigen::Quaterniond& q);
     static Eigen::Quaterniond expMap(const Eigen::Vector3d& r);
@@ -57,6 +58,7 @@ private:
     double x_;
     Eigen::Quaterniond q_;
     Eigen::Vector3d eta_;
+    Eigen::Vector3d eta0_;
 
     bool learned_;
 };

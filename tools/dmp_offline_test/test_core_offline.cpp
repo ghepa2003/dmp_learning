@@ -9,6 +9,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 #include "haptic_dmp_learning/core/types.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
@@ -142,7 +143,10 @@ int main() {
         trajectories.push_back(def);
     }
 
-    const std::string summary_csv = "metrics_summary.csv";
+    std::filesystem::create_directories("data");
+    std::filesystem::create_directories("weights");
+
+    const std::string summary_csv = "data/metrics_summary.csv";
     std::remove(summary_csv.c_str());  // riparti da un riassunto pulito ad ogni esecuzione
 
     for (const auto& traj : trajectories) {
@@ -161,7 +165,7 @@ int main() {
             demo.push_back(sp);
             demo_t.push_back(t); demo_p.push_back(pos); demo_q.push_back(quat);
         }
-        writeCsv("demo_original_" + traj.name + ".csv", demo_t, demo_p, demo_q);
+        writeCsv("data/demo_original_" + traj.name + ".csv", demo_t, demo_p, demo_q);
 
         // --- Impara ---
         DMP dmp(20, 4.6, 25.0, 6.25);
@@ -169,7 +173,7 @@ int main() {
         QuaternionDMP qdmp(20, 4.6, 25.0, 6.25);
         qdmp.learnFromDemonstration(demo);
 
-        haptic_dmp_learning::core::dmp_io::saveToYaml(dmp, qdmp, "dmp_weights_" + traj.name + ".yaml");
+        haptic_dmp_learning::core::dmp_io::saveToYaml(dmp, qdmp, "weights/dmp_weights_" + traj.name + ".yaml");
 
         // --- Replay con lo STESSO goal: qui ha senso confrontare la forma ---
         dmp.reset(); qdmp.reset();
@@ -179,7 +183,7 @@ int main() {
             rq.push_back(qdmp.step(dt));
             rt.push_back(t);
         }
-        writeCsv("replay_same_goal_" + traj.name + ".csv", rt, rp, rq);
+        writeCsv("data/replay_same_goal_" + traj.name + ".csv", rt, rp, rq);
 
         auto pos_fid = m::computeTrajectoryFidelity(demo_p, rp);
         auto orient_fid = m::computeOrientationFidelity(demo_q, rq);
@@ -206,7 +210,7 @@ int main() {
             rq2.push_back(qdmp.step(dt));
             rt2.push_back(t);
         }
-        writeCsv("replay_new_goal_" + traj.name + ".csv", rt2, rp2, rq2);
+        writeCsv("data/replay_new_goal_" + traj.name + ".csv", rt2, rp2, rq2);
 
         double endpoint_pos_err = m::computeEndpointError(rp2.back(), new_pos_goal);
         double endpoint_orient_err = m::computeAngularEndpointError(rq2.back(), new_quat_goal);

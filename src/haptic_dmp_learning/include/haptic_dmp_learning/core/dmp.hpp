@@ -61,6 +61,7 @@ public:
     double alphaZ() const { return alpha_z_; }
     double betaZ() const { return beta_z_; }
     double tau() const { return tau_; }
+    const Eigen::Vector3d& z0() const { return z0_; }
     const Eigen::Vector3d& y0() const { return y0_; }
     // dG()[d] is the original movement amplitude (goal - y0) for dimension d, captured during the fit
     const Eigen::Vector3d& dG() const { return dG_; }
@@ -78,7 +79,7 @@ public:
     void setLearnedParameters(double tau, const Eigen::Vector3d& y0, const Eigen::Vector3d& goal,
                               const Eigen::Vector3d& dG, const Eigen::Vector3d& A,
                               const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
-                              const std::array<Eigen::VectorXd, 3>& weights);
+                              const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& z0);
 private:
     void initBasisFunctions();
     double basisFunction(int i, double x) const;
@@ -102,6 +103,7 @@ private:
     double v_;
     Eigen::Vector3d y_;
     Eigen::Vector3d z_;
+    Eigen::Vector3d z0_;
 
     bool learned_;
 

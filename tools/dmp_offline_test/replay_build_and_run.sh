@@ -5,7 +5,12 @@ cd "$SCRIPT_DIR"
 
 PKG_DIR="../../src/haptic_dmp_learning"
 
+mkdir -p build data weights plots
+
 DEFAULT_YAML="/home/lorenzo/thesis_ws/dmp_weights.yaml"
+if [ ! -f "$DEFAULT_YAML" ] && [ -f "weights/dmp_weights_reach_lift_pitch.yaml" ]; then
+    DEFAULT_YAML="weights/dmp_weights_reach_lift_pitch.yaml"
+fi
 YAML_PATH="${1:-$DEFAULT_YAML}"
 
 g++ -std=c++17 -O2 \
@@ -16,13 +21,14 @@ g++ -std=c++17 -O2 \
     "$PKG_DIR/src/core/quaternion_dmp.cpp" \
     "$PKG_DIR/src/core/dmp_io.cpp" \
     -lyaml-cpp \
-    -o replay_saved_dmp
+    -o build/replay_saved_dmp
 
 if [ -n "$2" ]; then
-    ./replay_saved_dmp "$YAML_PATH" "$2"
+    ./build/replay_saved_dmp "$YAML_PATH" "$2"
 else
-    ./replay_saved_dmp "$YAML_PATH"
+    ./build/replay_saved_dmp "$YAML_PATH"
 fi
 
 echo ""
-echo "Fatto. Per il grafico: python3 plot_real_demo.py"
+echo "Fatto. Replay generato in data/replay_from_yaml.csv"
+echo "Per il grafico: python3 plot_real_demo.py"

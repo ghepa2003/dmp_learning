@@ -44,6 +44,7 @@ YAML::Node dmpToNode(const DMP& dmp) {
     node["tau"] = dmp.tau();
     node["y0"] = vec3ToYaml(dmp.y0());
     node["goal"] = vec3ToYaml(dmp.goal());
+    node["z0"] = vec3ToYaml(dmp.z0());
     node["dG"] = vec3ToYaml(dmp.dG());
     node["A"] = vec3ToYaml(dmp.A());
     node["centers"] = vectorToYaml(dmp.centers());
@@ -80,6 +81,7 @@ YAML::Node quaternionDmpToNode(const QuaternionDMP& qdmp) {
     node["tau"] = qdmp.tau();
     node["q0"] = quatToYaml(qdmp.q0());
     node["goal"] = quatToYaml(qdmp.goal());
+    node["eta0"] = vec3ToYaml(qdmp.eta0());
     node["centers"] = vectorToYaml(qdmp.centers());
     node["widths"] = vectorToYaml(qdmp.widths());
 
@@ -120,6 +122,7 @@ DMP loadFromYaml(const std::string& filepath) {
     Eigen::Vector3d goal = yamlToVec3(root["goal"]);
     Eigen::Vector3d dG = yamlToVec3(root["dG"]);
     Eigen::Vector3d A = yamlToVec3(root["A"]);
+    Eigen::Vector3d z0 = root["z0"] ? yamlToVec3(root["z0"]) : Eigen::Vector3d::Zero();
     Eigen::VectorXd centers = yamlToVector(root["centers"]);
     Eigen::VectorXd widths = yamlToVector(root["widths"]);
 
@@ -131,7 +134,7 @@ DMP loadFromYaml(const std::string& filepath) {
     }
 
     DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
-    dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights);
+    dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights, z0);
     return dmp;
 }
 
@@ -161,12 +164,14 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
         int idx = (dim == "x") ? 0 : (dim == "y") ? 1 : 2;
         weights[idx] = yamlToVector(wd["values"]);
     }
+    Eigen::Vector3d z0 = p["z0"] ? yamlToVec3(p["z0"]) : Eigen::Vector3d::Zero();
     dmp = DMP(p["n_basis"].as<int>(), p["alpha_x"].as<double>(), p["alpha_z"].as<double>(), p["beta_z"].as<double>());
-    dmp.setLearnedParameters(p["tau"].as<double>(), y0, goal, dG, A, centers, widths, weights);
+    dmp.setLearnedParameters(p["tau"].as<double>(), y0, goal, dG, A, centers, widths, weights, z0);
 
     // --- orientation ---
     YAML::Node q = root["quaternion_dmp"];
     Eigen::Quaterniond q0 = yamlToQuat(q["q0"]), qgoal = yamlToQuat(q["goal"]);
+    Eigen::Vector3d qeta0 = yamlToVec3(q["eta0"]);
     Eigen::VectorXd qcenters = yamlToVector(q["centers"]), qwidths = yamlToVector(q["widths"]);
     std::array<Eigen::VectorXd, 3> qweights;
     for (const auto& wd : q["weights"]) {
@@ -175,7 +180,7 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
         qweights[idx] = yamlToVector(wd["values"]);
     }
     qdmp = QuaternionDMP(q["n_basis"].as<int>(), q["alpha_x"].as<double>(), q["alpha_z"].as<double>(), q["beta_z"].as<double>());
-    qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights);
+    qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights, qeta0);
 }
 
 }  // namespace dmp_io

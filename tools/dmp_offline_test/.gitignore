@@ -1,13 +1,17 @@
-# Compiled executables
+# Compiled executables and build output
+build/
 replay_saved_dmp
+dmp_offline_test
 test_core_offline
 sweep_params
 
-# Temporary / Generated CSV files
+# Generated directories (CSV data, YAML weights, PNG plots)
+data/
+weights/
+plots/
+
+# Legacy generated files
 *.csv
-
-# Generated plots
 *.png
+dmp_weights_*.yaml
 
-# Generated YAMLs (if synthetic)
-dmp_weights_synthetic.yaml

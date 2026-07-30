@@ -2,6 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
+#include <iostream>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -71,7 +72,6 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     if (tau_ <= 0.0) {
         throw std::runtime_error("QuaternionDMP::learnFromDemonstration: timestamp non crescenti.");
     }
-
     q0_ = demo.front().orientation.normalized();
     goal_ = demo.back().orientation.normalized();
 
@@ -80,7 +80,6 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         double t_rel = demo[k].t - demo.front().t;
         x_t[k] = std::exp(-alpha_x_ / tau_ * t_rel);
     }
-
 
     // Compute angular velocity (eta) and its derivative (eta_dot) using central finite differences.
     std::vector<Eigen::Vector3d> eta(N);
@@ -95,6 +94,12 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         Eigen::Vector3d omega = 2.0 * logMap(dq) / dt;
         eta[k] = tau_ * omega;
     }
+
+    eta0_ = eta.front();
+
+    std::cerr << "[QuaternionDMP diag] |eta(0)| = " << eta.front().norm()
+              << " rad/s (scaled by tau), |eta(N-1)| = " << eta.back().norm()
+              << " rad/s (scaled by tau)\n";
 
     // Compute the derivative of eta (angular acceleration) using central finite differences.
     std::vector<Eigen::Vector3d> eta_dot(N);
@@ -133,7 +138,7 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 void QuaternionDMP::reset() {
     x_ = 1.0;
     q_ = q0_;
-    eta_ = Eigen::Vector3d::Zero();
+    eta_ = eta0_;
 }
 
 void QuaternionDMP::setGoal(const Eigen::Quaterniond& goal) {
@@ -142,13 +147,14 @@ void QuaternionDMP::setGoal(const Eigen::Quaterniond& goal) {
 
 void QuaternionDMP::setLearnedParameters(double tau, const Eigen::Quaterniond& q0, const Eigen::Quaterniond& goal,
                                           const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
-                                          const std::array<Eigen::VectorXd, 3>& weights) {
+                                          const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& eta0) {
     tau_ = tau;
     q0_ = q0.normalized();
     goal_ = goal.normalized();
     centers_ = centers;
     widths_ = widths;
     weights_ = weights;
+    eta0_ = eta0;
     n_basis_ = static_cast<int>(centers.size());
     learned_ = true;
 }

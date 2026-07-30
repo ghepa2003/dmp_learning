@@ -8,6 +8,7 @@ Se non specifichi il nome, prova "reach_lift_pitch" come default e, se non
 esiste, elenca le traiettorie trovate nella cartella corrente.
 """
 import sys
+import os
 import glob
 import csv
 import matplotlib.pyplot as plt
@@ -36,8 +37,21 @@ def load_csv(path):
 
 
 def available_trajectories():
-    files = glob.glob("demo_original_*.csv")
-    return sorted(f.replace("demo_original_", "").replace(".csv", "") for f in files)
+    files = glob.glob("data/demo_original_*.csv") or glob.glob("demo_original_*.csv")
+    names = set()
+    for f in files:
+        basename = os.path.basename(f)
+        names.add(basename.replace("demo_original_", "").replace(".csv", ""))
+    return sorted(list(names))
+
+
+def find_data_file(filename):
+    path = os.path.join("data", filename)
+    if os.path.exists(path):
+        return path
+    if os.path.exists(filename):
+        return filename
+    return path
 
 
 if len(sys.argv) >= 2:
@@ -45,15 +59,15 @@ if len(sys.argv) >= 2:
 else:
     trajs = available_trajectories()
     if not trajs:
-        print("Nessuna traiettoria trovata (demo_original_*.csv). Esegui prima build_and_run.sh")
+        print("Nessuna traiettoria trovata (data/demo_original_*.csv). Esegui prima build_and_run.sh")
         sys.exit(1)
     traj_name = "reach_lift_pitch" if "reach_lift_pitch" in trajs else trajs[0]
     print(f"Nessun nome specificato, uso: {traj_name}")
     print(f"Traiettorie disponibili: {', '.join(trajs)}")
 
-demo_path = f"demo_original_{traj_name}.csv"
-replay_same_path = f"replay_same_goal_{traj_name}.csv"
-replay_new_path = f"replay_new_goal_{traj_name}.csv"
+demo_path = find_data_file(f"demo_original_{traj_name}.csv")
+replay_same_path = find_data_file(f"replay_same_goal_{traj_name}.csv")
+replay_new_path = find_data_file(f"replay_new_goal_{traj_name}.csv")
 
 try:
     demo = load_csv(demo_path)
@@ -104,7 +118,8 @@ if demo[8]:
     ax_q.legend()
 
 plt.tight_layout()
-out_path = f"dmp_test_plot_{traj_name}.png"
+os.makedirs("plots", exist_ok=True)
+out_path = os.path.join("plots", f"dmp_test_plot_{traj_name}.png")
 plt.savefig(out_path, dpi=150)
 print(f"Salvato {out_path}")
 plt.show()

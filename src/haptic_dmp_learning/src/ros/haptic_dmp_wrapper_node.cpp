@@ -137,7 +137,7 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
                         "controlla i timestamp della demo.",
                         dmp_.tau(), quat_dmp_.tau());
         }
-
+        std::cerr << "[SAVE diag] dmp.z0() norm before saveToYaml = " << dmp_.z0().norm() << "\n";
         core::dmp_io::saveToYaml(dmp_, quat_dmp_, output_yaml_path_);
         RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());
     } catch (const std::exception& e) {

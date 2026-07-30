@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
@@ -29,6 +30,8 @@ static void writeCsv(const std::string& path, const std::vector<double>& t,
 }
 
 int main(int argc, char** argv) {
+    std::filesystem::create_directories("data");
+
     std::string yaml_path = "/home/lorenzo/thesis_ws/dmp_weights.yaml";
     if (argc >= 2) {
         yaml_path = argv[1];
@@ -37,7 +40,9 @@ int main(int argc, char** argv) {
 
     std::ifstream f_check(yaml_path);
     if (!f_check.good()) {
-        if (std::ifstream("dmp_weights.yaml").good()) {
+        if (std::ifstream("weights/dmp_weights.yaml").good()) {
+            yaml_path = "weights/dmp_weights.yaml";
+        } else if (std::ifstream("dmp_weights.yaml").good()) {
             yaml_path = "dmp_weights.yaml";
         }
     }
@@ -73,8 +78,8 @@ int main(int argc, char** argv) {
         rt.push_back(t);
     }
 
-    writeCsv("replay_from_yaml.csv", rt, rp, rq);
-    std::cout << "Salvato replay_from_yaml.csv (" << rt.size() << " campioni, durata " << duration << "s)\n";
+    writeCsv("data/replay_from_yaml.csv", rt, rp, rq);
+    std::cout << "Salvato data/replay_from_yaml.csv (" << rt.size() << " campioni, durata " << duration << "s)\n";
 
     return 0;
 }

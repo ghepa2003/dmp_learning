@@ -8,11 +8,14 @@ pacchetto (`../../src/haptic_dmp_learning`), nessuna copia duplicata.
 
 ```
 tools/dmp_offline_test/
-├── metrics.hpp / metrics.cpp     # metriche di valutazione, LOCALI a tools
-│                                   (non fanno parte del pacchetto ROS2)
-├── test_core_offline.cpp          # test multi-traiettoria sintetico
+├── build/                          # Eseguibili compilati
+├── data/                           # File CSV generati (demo sintetiche, replay, metriche)
+├── weights/                        # File YAML con i pesi DMP generati
+├── plots/                          # Grafici PNG generati
+├── metrics.hpp / metrics.cpp       # metriche di valutazione, LOCALI a tools
+├── test_core_offline.cpp            # test multi-traiettoria sintetico
 ├── build_and_run.sh
-├── replay_saved_dmp.cpp           # carica un dmp_weights.yaml reale e rigenera il replay
+├── replay_saved_dmp.cpp             # carica un dmp_weights.yaml reale e rigenera il replay
 ├── replay_build_and_run.sh
 ├── plot_dmp_test.py                # grafico demo sintetica vs replay, per traiettoria
 └── plot_real_demo.py               # grafico demo REALE (Geomagic) vs replay + metriche
@@ -35,9 +38,9 @@ Prova **4 traiettorie diverse** in sequenza, ciascuna con motivazione specifica:
 | `reach_complesso_gradino` | Profilo quasi a gradino — riproduce (in piccolo) il limite osservato su hardware reale con traiettorie multi-segmento |
 
 Per ciascuna, genera:
-- `demo_original_<nome>.csv`, `replay_same_goal_<nome>.csv`, `replay_new_goal_<nome>.csv`
-- `dmp_weights_<nome>.yaml` (formato combinato posizione + orientamento)
-- Una riga in `metrics_summary.csv` per `_same_goal` (RMSE, errore max) e una per `_new_goal` (solo errore finale)
+- `data/demo_original_<nome>.csv`, `data/replay_same_goal_<nome>.csv`, `data/replay_new_goal_<nome>.csv`
+- `weights/dmp_weights_<nome>.yaml` (formato combinato posizione + orientamento)
+- Una riga in `data/metrics_summary.csv` per `_same_goal` (RMSE, errore max) e una per `_new_goal` (solo errore finale)
 - Stampa a console eventuali avvisi del guardrail A (`isScaleReliable`)
 
 ## Grafico di una traiettoria specifica
