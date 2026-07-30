@@ -10,6 +10,7 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z, bool second
       alpha_x_(alpha_x),
       alpha_z_(alpha_z),
       beta_z_(beta_z),
+      second_order_canonical_(second_order_canonical),
       tau_(1.0),
       y0_(Eigen::Vector3d::Zero()),
       goal_(Eigen::Vector3d::Zero()),
@@ -17,7 +18,6 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z, bool second
       v_(0.0),
       y_(Eigen::Vector3d::Zero()),
       z_(Eigen::Vector3d::Zero()),
-      second_order_canonical_(second_order_canonical),
       learned_(false),
       dG_(Eigen::Vector3d::Zero()),
       A_(Eigen::Vector3d::Zero()),
@@ -35,12 +35,17 @@ void DMP::initBasisFunctions() {
 
     Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
     centers_.resize(n_basis_);
+    // Compute the centers in phase space according to the canonical system dynamics.
     for (int i = 0; i < n_basis_; ++i) {
-        // Map normalized time to phase space using the canonical system's exponential decay
-        // x(t) = exp(-alpha_x * t_norm)
-        centers_(i) = std::exp(-alpha_x_ * t_norm(i));
+        if (second_order_canonical_) {
+            double a = alpha_z_ / 2.0; 
+            // Closed-form solution of the second-order canonical system with critical damping: x(t) = (1 + a * t) * exp(-a * t)
+            centers_(i) = (1.0 + a * t_norm(i)) * std::exp(-a * t_norm(i));
+        } else {
+            // First-order canonical system: x(t) = exp(-alpha_x * t)
+            centers_(i) = std::exp(-alpha_x_ * t_norm(i));
+        }
     }
-
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
@@ -158,13 +163,20 @@ void DMP::reset() {
 }
 
 void DMP::setGoal(const Eigen::Vector3d& goal) {
+    // Check if the new goal is too far from the original goal, in which case we might not want to scale the forcing term.
     constexpr double kAmplitudeRatioThreshold = 2.0;  // Same threshold of DMP::learnFromDemonstration for the amplitude ratio check
-    // Compute the new scale factors for each dimension, based on the original amplitude and the new goal.
+    constexpr double kMinDG = 1e-6;  
     for (int d = 0; d < 3; ++d) {
         double new_dG = goal(d) - y0_(d);
-        double ratio = A_(d) / (std::abs(dG_(d)) + 1e-10);
+        if (std::abs(dG_(d)) < kMinDG) {
+            scale_reliable_[d] = false;
+            // If the original movement amplitude is too small, we cannot reliably scale the forcing term. Set scale to 1.0 and mark it as unreliable.
+            scale_(d) = 1.0; 
+            continue;
+        }
+        // Check the ratio of the learned amplitude to the new amplitude. If it's too large, mark the scale as unreliable.
+        double ratio = A_(d) / std::abs(dG_(d));
         if (ratio > kAmplitudeRatioThreshold) {
-            // ill-conditioned: don't rescale for this dimension, keep the previous scale factor (default 1 or last manual value).
             scale_reliable_[d] = false;
         } else {
             scale_(d) = new_dG / dG_(d);

@@ -9,6 +9,7 @@
 
 #include "haptic_dmp_learning/core/demonstration_recorder.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
+#include "haptic_dmp_learning/core/quaternion_dmp.hpp" 
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -34,6 +35,7 @@ private:
     // core objects
     core::DemonstrationRecorder recorder_;
     core::DMP dmp_;
+    core::QuaternionDMP quat_dmp_;
 
     // state
     bool recording_;
@@ -45,6 +47,7 @@ private:
     std::string output_demo_csv_path_; 
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
+    bool second_order_canonical_;
 };
 
 }  // namespace ros_wrapper

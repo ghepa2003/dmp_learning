@@ -11,7 +11,7 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     : 
       // Initialize the ROS node with the name "haptic_dmp_wrapper_node"
       Node("haptic_dmp_wrapper_node"),
-      dmp_(20, 4.6, 25.0, 6.25),
+      dmp_(20, 4.6, 25.0, 6.25, false),  // default DMP parameters; will be overridden by ROS2 params
       recording_(false) {
 
     // Parameters - override via a params.yaml or -p on the command line.
@@ -20,6 +20,7 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     alpha_x_ = this->declare_parameter<double>("alpha_x", 4.6);
     alpha_z_ = this->declare_parameter<double>("alpha_z", 25.0);
     beta_z_ = this->declare_parameter<double>("beta_z", 6.25);
+    second_order_canonical_ = this->declare_parameter<bool>("second_order_canonical", false);
 
     // Default output paths: allow override via ROS2 parameter.
     const char* home = std::getenv("HOME");
@@ -29,7 +30,7 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", default_csv_path);
 
     // Initialize the DMP with the specified parameters
-    dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
+    dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_, second_order_canonical_);
 
     // Initialize the subscriptions to the Geomagic Touch topics
     // NOTE: /touch0/pose is published at ~1000 Hz -> best-effort sensor QoS,
@@ -62,9 +63,13 @@ void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::S
     }
 
     // Create a Sample object with the current time and position, and add it to the recorder
+    // The orientation is also captured and normalized.
     core::Sample s;
     s.t = (now - record_start_time_).seconds();
     s.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
+                           msg->pose.orientation.y, msg->pose.orientation.z);
+    s.orientation = orient.normalized();
     recorder_.addSample(s);
 }
 
@@ -124,8 +129,17 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
 
     try {
         dmp_.learnFromDemonstration(recorder_.samples());
-        core::dmp_io::saveToYaml(dmp_, output_yaml_path_);
-        RCLCPP_INFO(this->get_logger(), "DMP learned and saved to %s", output_yaml_path_.c_str());
+        quat_dmp_.learnFromDemonstration(recorder_.samples());
+
+        if (std::abs(dmp_.tau() - quat_dmp_.tau()) > 1e-6) {
+            RCLCPP_WARN(this->get_logger(),
+                        "tau posizione (%.4f) e tau orientamento (%.4f) non coincidono - "
+                        "controlla i timestamp della demo.",
+                        dmp_.tau(), quat_dmp_.tau());
+        }
+
+        core::dmp_io::saveToYaml(dmp_, quat_dmp_, output_yaml_path_);
+        RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Learning/saving failed: %s", e.what());
     }
@@ -136,9 +150,10 @@ void HapticDmpWrapperNode::saveDemoToCsv(const std::string& path) const {
     if (!f.is_open()) {
         throw std::runtime_error("saveDemoToCsv: cannot open file for writing: " + path);
     }
-    f << "t,x,y,z\n";
+    f << "t,x,y,z,qw,qx,qy,qz\n";
     for (const auto& s : recorder_.samples()) {
-        f << s.t << "," << s.position.x() << "," << s.position.y() << "," << s.position.z() << "\n";
+        f << s.t << "," << s.position.x() << "," << s.position.y() << "," << s.position.z() << ","
+        << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << "\n";
     }
 }
 

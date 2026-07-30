@@ -62,10 +62,14 @@ public:
     double betaZ() const { return beta_z_; }
     double tau() const { return tau_; }
     const Eigen::Vector3d& y0() const { return y0_; }
+    // dG()[d] is the original movement amplitude (goal - y0) for dimension d, captured during the fit
     const Eigen::Vector3d& dG() const { return dG_; }
+    // A()[d] is the observed amplitude of the forcing term for dimension d, captured during the fit
     const Eigen::Vector3d& A() const { return A_; }
     const Eigen::VectorXd& centers() const { return centers_; }
     const Eigen::VectorXd& widths() const { return widths_; }
+    // scaleReliable()[d] is true if the automatic rescaling of the forcing term is considered reliable for dimension d
+    const std::array<bool, 3>& scaleReliable() const { return scale_reliable_; }
     // weights()[d] is the weight vector (size n_basis) for dimension d (0=x,1=y,2=z)
     const std::array<Eigen::VectorXd, 3>& weights() const { return weights_; }
 
@@ -83,6 +87,7 @@ private:
     double alpha_x_;
     double alpha_z_;
     double beta_z_;
+    bool second_order_canonical_;
 
     double tau_;
     Eigen::Vector3d y0_;
@@ -97,7 +102,6 @@ private:
     double v_;
     Eigen::Vector3d y_;
     Eigen::Vector3d z_;
-    bool second_order_canonical_;
 
     bool learned_;
 

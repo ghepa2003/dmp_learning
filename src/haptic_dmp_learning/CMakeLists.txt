@@ -18,10 +18,10 @@ find_package(yaml-cpp REQUIRED)
 
 include_directories(include)
 
-# ---- core library: zero ROS dependencies (only Eigen + yaml-cpp) ----
 add_library(${PROJECT_NAME}_core
   src/core/demonstration_recorder.cpp
   src/core/dmp.cpp
+  src/core/quaternion_dmp.cpp  
   src/core/dmp_io.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC

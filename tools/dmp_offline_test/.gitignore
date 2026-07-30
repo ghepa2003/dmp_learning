@@ -1,0 +1,13 @@
+# Compiled executables
+replay_saved_dmp
+test_core_offline
+sweep_params
+
+# Temporary / Generated CSV files
+*.csv
+
+# Generated plots
+*.png
+
+# Generated YAMLs (if synthetic)
+dmp_weights_synthetic.yaml

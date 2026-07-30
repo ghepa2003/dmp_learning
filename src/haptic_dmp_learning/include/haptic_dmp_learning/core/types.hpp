@@ -1,5 +1,6 @@
 #pragma once
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -11,6 +12,7 @@ namespace core {
 struct Sample {
     double t;                  // seconds, relative to the start of the demo
     Eigen::Vector3d position;  // meters, expressed in the Geomagic Touch's own frame
+    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity(); // unit quaternion, expressed in the Geomagic Touch's own frame
 };
 
 }  // namespace core
