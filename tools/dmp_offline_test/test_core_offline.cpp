@@ -150,7 +150,7 @@ int main() {
     std::remove(summary_csv.c_str());  // riparti da un riassunto pulito ad ogni esecuzione
 
     for (const auto& traj : trajectories) {
-        std::cout << "\n================ Traiettoria: " << traj.name << " ================\n";
+        std::cout << "\n================ Trajectory: " << traj.name << " ================\n";
 
         // --- Genera la demo sintetica ---
         std::vector<Sample> demo;
@@ -187,7 +187,7 @@ int main() {
 
         auto pos_fid = m::computeTrajectoryFidelity(demo_p, rp);
         auto orient_fid = m::computeOrientationFidelity(demo_q, rq);
-        std::cout << "Replay stesso goal:\n";
+        std::cout << "Replay same goal:\n";
         m::printReport(traj.name, pos_fid);
         m::printReport(traj.name, orient_fid);
         m::appendToSummaryCsv(summary_csv, traj.name + "_same_goal", pos_fid, orient_fid,
@@ -214,13 +214,13 @@ int main() {
 
         double endpoint_pos_err = m::computeEndpointError(rp2.back(), new_pos_goal);
         double endpoint_orient_err = m::computeAngularEndpointError(rq2.back(), new_quat_goal);
-        std::cout << "Replay goal spostato:\n";
+        std::cout << "Replay shifted goal:\n";
         m::printEndpointError(traj.name, endpoint_pos_err, endpoint_orient_err);
 
         for (int d = 0; d < 3; ++d) {
             if (!dmp.isScaleReliable(d)) {
-                std::cout << "  ATTENZIONE: rescaling automatico bloccato sulla dimensione " << d
-                          << " (ampiezza/dG oltre soglia) - vedi guardrail A\n";
+                std::cout << "  WARNING: automatic rescaling disabled for dimension " << d
+                          << " (amplitude/dG threshold exceeded) - see guardrail A\n";
             }
         }
 
@@ -228,6 +228,6 @@ int main() {
                                endpoint_pos_err, endpoint_orient_err, dmp.scaleReliable());
     }
 
-    std::cout << "\n\nTutte le traiettorie completate. Riassunto in " << summary_csv << "\n";
+    std::cout << "\n\nAll trajectories completed. Summary saved to " << summary_csv << "\n";
     return 0;
 }

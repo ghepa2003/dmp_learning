@@ -121,9 +121,9 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
     if (!output_demo_csv_path_.empty()) {
         try {
             saveDemoToCsv(output_demo_csv_path_);
-            RCLCPP_INFO(this->get_logger(), "Demo grezza salvata in %s", output_demo_csv_path_.c_str());
+            RCLCPP_INFO(this->get_logger(), "Raw demo saved to %s", output_demo_csv_path_.c_str());
         } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Salvataggio demo grezza fallito: %s", e.what());
+            RCLCPP_ERROR(this->get_logger(), "Saving raw demo failed: %s", e.what());
         }
     }
 
@@ -133,8 +133,8 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
 
         if (std::abs(dmp_.tau() - quat_dmp_.tau()) > 1e-6) {
             RCLCPP_WARN(this->get_logger(),
-                        "tau posizione (%.4f) e tau orientamento (%.4f) non coincidono - "
-                        "controlla i timestamp della demo.",
+                        "position tau (%.4f) and orientation tau (%.4f) do not match - "
+                        "check demo timestamps.",
                         dmp_.tau(), quat_dmp_.tau());
         }
         std::cerr << "[SAVE diag] dmp.z0() norm before saveToYaml = " << dmp_.z0().norm() << "\n";

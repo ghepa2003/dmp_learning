@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Confronto visivo: demo sintetica originale vs replay (Posizione + Quaternion DMP).
+"""Visual comparison: original synthetic demo vs replay (Position + Quaternion DMP).
 
-Uso:
-    python3 plot_dmp_test.py [nome_traiettoria]
+Usage:
+    python3 plot_dmp_test.py [trajectory_name]
 
-Se non specifichi il nome, prova "reach_lift_pitch" come default e, se non
-esiste, elenca le traiettorie trovate nella cartella corrente.
+If no name is specified, tries "reach_lift_pitch" by default; if it does not
+exist, lists available trajectories in the current folder.
 """
 import sys
 import os
@@ -59,11 +59,11 @@ if len(sys.argv) >= 2:
 else:
     trajs = available_trajectories()
     if not trajs:
-        print("Nessuna traiettoria trovata (data/demo_original_*.csv). Esegui prima build_and_run.sh")
+        print("No trajectory found (data/demo_original_*.csv). Run build_and_run.sh first")
         sys.exit(1)
     traj_name = "reach_lift_pitch" if "reach_lift_pitch" in trajs else trajs[0]
-    print(f"Nessun nome specificato, uso: {traj_name}")
-    print(f"Traiettorie disponibili: {', '.join(trajs)}")
+    print(f"No name specified, using: {traj_name}")
+    print(f"Available trajectories: {', '.join(trajs)}")
 
 demo_path = find_data_file(f"demo_original_{traj_name}.csv")
 replay_same_path = find_data_file(f"replay_same_goal_{traj_name}.csv")
@@ -74,25 +74,25 @@ try:
     replay_same = load_csv(replay_same_path)
     replay_new = load_csv(replay_new_path)
 except FileNotFoundError as e:
-    print(f"File non trovato: {e}")
-    print(f"Traiettorie disponibili: {', '.join(available_trajectories())}")
+    print(f"File not found: {e}")
+    print(f"Available trajectories: {', '.join(available_trajectories())}")
     sys.exit(1)
 
 fig = plt.figure(figsize=(16, 6))
-fig.suptitle(f"Traiettoria: {traj_name}")
+fig.suptitle(f"Trajectory: {traj_name}")
 
-# --- Traiettoria 3D Posizione ---
+# --- 3D Position Trajectory ---
 ax3d = fig.add_subplot(1, 3, 1, projection="3d")
-ax3d.plot(demo[1], demo[2], demo[3], label="Demo originale (sintetica)", linewidth=2)
-ax3d.plot(replay_same[1], replay_same[2], replay_same[3], "--", label="Replay (stesso goal)")
-ax3d.plot(replay_new[1], replay_new[2], replay_new[3], ":", label="Replay (goal spostato)")
+ax3d.plot(demo[1], demo[2], demo[3], label="Original Demo (synthetic)", linewidth=2)
+ax3d.plot(replay_same[1], replay_same[2], replay_same[3], "--", label="Replay (same goal)")
+ax3d.plot(replay_new[1], replay_new[2], replay_new[3], ":", label="Replay (shifted goal)")
 ax3d.set_xlabel("x [m]")
 ax3d.set_ylabel("y [m]")
 ax3d.set_zlabel("z [m]")
-ax3d.set_title("Traiettoria 3D Posizione")
+ax3d.set_title("3D Position Trajectory")
 ax3d.legend()
 
-# --- Serie temporali Posizione ---
+# --- Position Time Series ---
 ax_t = fig.add_subplot(1, 3, 2)
 axes_labels = ["x", "y", "z"]
 colors = ["tab:blue", "tab:orange", "tab:green"]
@@ -100,11 +100,11 @@ for i, (label, color) in enumerate(zip(axes_labels, colors)):
     ax_t.plot(demo[0], demo[i + 1], color=color, linestyle="-", label=f"demo {label}")
     ax_t.plot(replay_same[0], replay_same[i + 1], color=color, linestyle="--", alpha=0.7)
 ax_t.set_xlabel("t [s]")
-ax_t.set_ylabel("posizione [m]")
-ax_t.set_title("Posizione: Demo (continua) vs Replay (tratteggiata)")
+ax_t.set_ylabel("position [m]")
+ax_t.set_title("Position: Demo (solid) vs Replay (dashed)")
 ax_t.legend()
 
-# --- Serie temporali Orientamento (Quaternione) ---
+# --- Orientation Time Series (Quaternion) ---
 if demo[8]:
     ax_q = fig.add_subplot(1, 3, 3)
     q_labels = ["qw", "qx", "qy", "qz"]
@@ -113,13 +113,13 @@ if demo[8]:
         ax_q.plot(demo[0], demo[i + 4], color=color, linestyle="-", label=f"demo {label}")
         ax_q.plot(replay_same[0], replay_same[i + 4], color=color, linestyle="--", alpha=0.7)
     ax_q.set_xlabel("t [s]")
-    ax_q.set_ylabel("componenti quaternione")
-    ax_q.set_title("Orientamento: Demo (continua) vs Replay (tratteggiata)")
+    ax_q.set_ylabel("quaternion components")
+    ax_q.set_title("Orientation: Demo (solid) vs Replay (dashed)")
     ax_q.legend()
 
 plt.tight_layout()
 os.makedirs("plots", exist_ok=True)
 out_path = os.path.join("plots", f"dmp_test_plot_{traj_name}.png")
 plt.savefig(out_path, dpi=150)
-print(f"Salvato {out_path}")
+print(f"Saved {out_path}")
 plt.show()

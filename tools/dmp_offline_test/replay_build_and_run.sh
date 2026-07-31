@@ -30,5 +30,5 @@ else
 fi
 
 echo ""
-echo "Fatto. Replay generato in data/replay_from_yaml.csv"
-echo "Per il grafico: python3 plot_real_demo.py"
+echo "Done. Replay generated in data/replay_from_yaml.csv"
+echo "To plot: python3 plot_real_demo.py"

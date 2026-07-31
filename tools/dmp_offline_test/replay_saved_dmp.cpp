@@ -51,17 +51,17 @@ int main(int argc, char** argv) {
     QuaternionDMP qdmp;
     haptic_dmp_learning::core::dmp_io::loadFromYaml(yaml_path, dmp, qdmp);
 
-    std::cout << "Caricato (" << yaml_path << "):\n"
-              << "  [Posizione] n_basis: " << dmp.nBasis() << " | tau: " << dmp.tau() << " s\n"
+    std::cout << "Loaded (" << yaml_path << "):\n"
+              << "  [Position] n_basis: " << dmp.nBasis() << " | tau: " << dmp.tau() << " s\n"
               << "    y0:   [" << dmp.y0().transpose() << "]\n"
               << "    goal: [" << dmp.goal().transpose() << "]\n"
-              << "  [Orientamento] n_basis: " << qdmp.nBasis() << " | tau: " << qdmp.tau() << " s\n"
+              << "  [Orientation] n_basis: " << qdmp.nBasis() << " | tau: " << qdmp.tau() << " s\n"
               << "    q0:   (w=" << qdmp.q0().w() << ", " << qdmp.q0().vec().transpose() << ")\n"
               << "    goal: (w=" << qdmp.goal().w() << ", " << qdmp.goal().vec().transpose() << ")\n";
 
     if (std::abs(dmp.tau() - qdmp.tau()) > 1e-6) {
-        std::cout << "ATTENZIONE: tau posizione (" << dmp.tau() << ") e tau orientamento (" << qdmp.tau()
-                  << ") non coincidono - controlla i timestamp della demo originale.\n";
+        std::cout << "WARNING: position tau (" << dmp.tau() << ") and orientation tau (" << qdmp.tau()
+                  << ") do not match - check original demo timestamps.\n";
     }
 
     const double dt = 0.001;
@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
     }
 
     writeCsv("data/replay_from_yaml.csv", rt, rp, rq);
-    std::cout << "Salvato data/replay_from_yaml.csv (" << rt.size() << " campioni, durata " << duration << "s)\n";
+    std::cout << "Saved data/replay_from_yaml.csv (" << rt.size() << " samples, duration " << duration << "s)\n";
 
     return 0;
 }

@@ -7,7 +7,7 @@ PKG_DIR="../../src/haptic_dmp_learning"
 
 mkdir -p build data weights plots
 
-echo "Compilazione dmp_offline_test con sorgenti ufficiali ($PKG_DIR)..."
+echo "Compiling dmp_offline_test with official sources ($PKG_DIR)..."
 g++ -std=c++17 -O2 \
     -I "$PKG_DIR/include" \
     -I. \
@@ -24,9 +24,9 @@ g++ -std=c++17 -O2 \
 ./build/dmp_offline_test
 
 echo ""
-echo "Fatto."
-echo "  - File CSV generati in:    data/"
-echo "  - File YAML pesi in:       weights/"
-echo "  - Riassunto metriche in:   data/metrics_summary.csv"
-echo "Per il grafico di una traiettoria: python3 plot_dmp_test.py <nome_traiettoria>"
-echo "Traiettorie disponibili: reach_semplice, reach_lift_pitch, rotazione_pura, reach_complesso_gradino"
+echo "Done."
+echo "  - Generated CSV files in:   data/"
+echo "  - Weight YAML files in:     weights/"
+echo "  - Metrics summary in:       data/metrics_summary.csv"
+echo "To plot a trajectory: python3 plot_dmp_test.py <trajectory_name>"
+echo "Available trajectories: reach_semplice, reach_lift_pitch, rotazione_pura, reach_complesso_gradino"

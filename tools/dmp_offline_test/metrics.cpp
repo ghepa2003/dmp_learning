@@ -15,7 +15,7 @@ TrajectoryFidelity computeTrajectoryFidelity(const std::vector<Eigen::Vector3d>&
     Eigen::Vector3d sq_sum = Eigen::Vector3d::Zero();
     double max_err = 0.0;
     for (size_t k = 0; k < N; ++k) {
-        Eigen::Vector3d diff = replay[k] - reference[k];
+        Eigen::Vector3d diff = (replay[k] - reference[k]) * 1000.0;
         sq_sum += diff.cwiseProduct(diff);
         max_err = std::max(max_err, diff.norm());
     }
@@ -45,7 +45,7 @@ OrientationFidelity computeOrientationFidelity(const std::vector<Eigen::Quaterni
 }
 
 double computeEndpointError(const Eigen::Vector3d& final_point, const Eigen::Vector3d& expected_goal) {
-    return (final_point - expected_goal).norm();
+    return (final_point - expected_goal).norm() * 1000.0;
 }
 
 double computeAngularEndpointError(const Eigen::Quaterniond& final_q, const Eigen::Quaterniond& expected_goal) {
@@ -55,18 +55,18 @@ double computeAngularEndpointError(const Eigen::Quaterniond& final_q, const Eige
 }
 
 void printReport(const std::string& label, const TrajectoryFidelity& tf) {
-    std::cout << "  [Posizione] RMSE x/y/z: " << tf.rmse_x << " / " << tf.rmse_y << " / " << tf.rmse_z
-              << " m | RMSE totale: " << tf.rmse_overall << " m | Errore max: " << tf.max_error << " m\n";
+    std::cout << "  [Position] RMSE x/y/z: " << tf.rmse_x << " / " << tf.rmse_y << " / " << tf.rmse_z
+              << " mm | Total RMSE: " << tf.rmse_overall << " mm | Max error: " << tf.max_error << " mm\n";
 }
 
 void printReport(const std::string& label, const OrientationFidelity& of) {
-    std::cout << "  [Orientamento] Errore angolare medio: " << of.mean_angular_error_deg
-              << " deg | massimo: " << of.max_angular_error_deg << " deg\n";
+    std::cout << "  [Orientation] Mean angular error: " << of.mean_angular_error_deg
+              << " deg | max: " << of.max_angular_error_deg << " deg\n";
 }
 
-void printEndpointError(const std::string& label, double position_error_m, double orientation_error_deg) {
-    std::cout << "  [" << label << "] Errore finale - posizione: " << position_error_m
-              << " m | orientamento: " << orientation_error_deg << " deg\n";
+void printEndpointError(const std::string& label, double position_error_mm, double orientation_error_deg) {
+    std::cout << "  [" << label << "] Final error - position: " << position_error_mm
+              << " mm | orientation: " << orientation_error_deg << " deg\n";
 }
 
 void appendToSummaryCsv(const std::string& csv_path, const std::string& trial_label,
@@ -79,9 +79,9 @@ void appendToSummaryCsv(const std::string& csv_path, const std::string& trial_la
 
     std::ofstream f(csv_path, std::ios::app);
     if (!exists) {
-        f << "trial,rmse_x,rmse_y,rmse_z,rmse_overall,max_pos_error,"
+        f << "trial,rmse_x_mm,rmse_y_mm,rmse_z_mm,rmse_overall_mm,max_pos_error_mm,"
             "mean_angular_error_deg,max_angular_error_deg,"
-            "endpoint_pos_error,endpoint_orient_error_deg,"
+            "endpoint_pos_error_mm,endpoint_orient_error_deg,"
             "scale_reliable_x,scale_reliable_y,scale_reliable_z\n";
     }
     f << trial_label << "," << tf.rmse_x << "," << tf.rmse_y << "," << tf.rmse_z << ","

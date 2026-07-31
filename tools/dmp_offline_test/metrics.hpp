@@ -34,7 +34,7 @@ double computeAngularEndpointError(const Eigen::Quaterniond& final_q, const Eige
 
 void printReport(const std::string& label, const TrajectoryFidelity& tf);
 void printReport(const std::string& label, const OrientationFidelity& of);
-void printEndpointError(const std::string& label, double position_error_m, double orientation_error_deg);
+void printEndpointError(const std::string& label, double position_error_mm, double orientation_error_deg);
 
 // Aggiunge una riga a un CSV riassuntivo (crea l'header se il file non esiste
 // ancora) - accumula i risultati di piu' traiettorie/trial nel tempo.

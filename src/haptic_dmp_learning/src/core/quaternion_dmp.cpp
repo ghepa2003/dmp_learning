@@ -65,12 +65,12 @@ Eigen::Quaterniond QuaternionDMP::expMap(const Eigen::Vector3d& r) {
 // The learnFromDemonstration method computes the weights for the forcing term based on the provided demonstration samples.
 void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     if (demo.size() < 5) {
-        throw std::runtime_error("QuaternionDMP::learnFromDemonstration: demo troppo corta.");
+        throw std::runtime_error("QuaternionDMP::learnFromDemonstration: demonstration too short.");
     }
     const size_t N = demo.size();
     tau_ = demo.back().t - demo.front().t;
     if (tau_ <= 0.0) {
-        throw std::runtime_error("QuaternionDMP::learnFromDemonstration: timestamp non crescenti.");
+        throw std::runtime_error("QuaternionDMP::learnFromDemonstration: non-increasing timestamps.");
     }
     q0_ = demo.front().orientation.normalized();
     goal_ = demo.back().orientation.normalized();

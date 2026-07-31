@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Confronta la demo REALE registrata dal Geomagic Touch con il replay della
-DMP (posizione + orientamento) appresa da essa.
+"""Compares REAL demo recorded from Geomagic Touch with DMP replay
+(position + orientation) learned from it.
 
-Uso:
-    python3 plot_real_demo.py <percorso_dmp_demo_recorded.csv>
+Usage:
+    python3 plot_real_demo.py <path_to_dmp_demo_recorded.csv>
 
-Si aspetta che 'replay_from_yaml.csv' sia gia' stato generato nella stessa
-cartella (con replay_build_and_run.sh).
-Richiede: matplotlib, numpy
+Expects 'replay_from_yaml.csv' to already be generated in the same folder
+(via replay_build_and_run.sh).
+Requires: matplotlib, numpy
 
-NOTA (allineamento temporale): il confronto qui sotto avviene per indice di
-campione k (replay[k] vs demo[k]), non per timestamp interpolato. Questo e'
-corretto solo se demo e replay sono campionati a intervalli regolari e
-sincronizzati a t=0. Il Geomagic Touch pubblica a ~1000Hz con jitter reale,
-quindi su demo lunghe un piccolo disallineamento puo' accumularsi - da tenere
-presente se l'istante di errore massimo individuato qui sotto non corrisponde
-visivamente a un'inversione nel grafico dei quaternioni.
+NOTE (time alignment): the comparison below occurs per sample index k
+(replay[k] vs demo[k]), not by interpolated timestamp. This is accurate only
+if demo and replay are sampled at regular intervals and synchronized at t=0.
+Geomagic Touch publishes at ~1000Hz with real jitter, so on long demos a small
+misalignment can accumulate - keep this in mind if peak max error does not
+visually match a flip in the quaternion plot.
 """
 import sys
 import os
@@ -46,9 +45,8 @@ def load_csv(path):
     return t, x, y, z, qw, qx, qy, qz, has_quat
 
 def slerp_arrays(t_src, qw, qx, qy, qz, t_query):
-    """Interpola i quaternioni su una nuova base temporale, con correzione di
-    continuità di emisfero (nlerp + rinormalizzazione) per evitare che un
-    'nearest' cada dal lato sbagliato del segno durante un flip veloce."""
+    """Interpolates quaternions onto a new time base with hemisphere continuity
+    correction (nlerp + renormalization) to prevent sign flips."""
     qw2, qx2, qy2, qz2 = list(qw), list(qx), list(qy), list(qz)
     for k in range(1, len(qw2)):
         dot = qw2[k]*qw2[k-1] + qx2[k]*qx2[k-1] + qy2[k]*qy2[k-1] + qz2[k]*qz2[k-1]
@@ -67,9 +65,8 @@ def slerp_arrays(t_src, qw, qx, qy, qz, t_query):
 
 
 def resample_to_common_time(demo, replay):
-    """Ricampiona replay sulla base temporale di demo (che ha risoluzione
-    comparabile, ~1kHz) cosi' il confronto punto-a-punto avviene a parita' di
-    istante temporale, non di indice di campione."""
+    """Resamples replay onto demo's time base (~1kHz) so point-by-point
+    comparison occurs at equal time instants rather than sample indices."""
     import numpy as np
     t_common = demo[0]
     rx = list(np.interp(t_common, replay[0], replay[1]))
@@ -86,14 +83,13 @@ def resample_to_common_time(demo, replay):
 def print_endpoint_metrics(demo, replay):
     if not demo[1] or not replay[1]:
         return
-    # Ultimo campione della demo reale = goal (sul sistema reale non c'e'
-    # variazione di goal a runtime, quindi il goal coincide col punto finale demo).
+    # Last sample of real demo = goal
     dgx, dgy, dgz = demo[1][-1], demo[2][-1], demo[3][-1]
     rgx, rgy, rgz = replay[1][-1], replay[2][-1], replay[3][-1]
-    dx, dy, dz = rgx - dgx, rgy - dgy, rgz - dgz
+    dx, dy, dz = (rgx - dgx) * 1000.0, (rgy - dgy) * 1000.0, (rgz - dgz) * 1000.0
     pos_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-    print(f"  [Errore finale - Posizione] dx={dx:.5f} dy={dy:.5f} dz={dz:.5f} m "
-          f"| distanza dal goal: {pos_dist:.5f} m")
+    print(f"  [Final Error - Position] dx={dx:.4f} dy={dy:.4f} dz={dz:.4f} mm "
+          f"| distance to goal: {pos_dist:.4f} mm")
 
     if demo[8] and replay[8]:
         dqw = replay[4][-1] - demo[4][-1]
@@ -104,24 +100,22 @@ def print_endpoint_metrics(demo, replay):
                   demo[6][-1] * replay[6][-1] + demo[7][-1] * replay[7][-1])
         dot = max(-1.0, min(1.0, dot))
         ang_dist = 2.0 * math.acos(dot) * 180.0 / math.pi
-        print(f"  [Errore finale - Orientamento] dqw={dqw:.5f} dqx={dqx:.5f} "
-              f"dqy={dqy:.5f} dqz={dqz:.5f} | distanza angolare dal goal: {ang_dist:.4f} deg")
+        print(f"  [Final Error - Orientation] dqw={dqw:.5f} dqx={dqx:.5f} "
+              f"dqy={dqy:.5f} dqz={dqz:.5f} | angular distance to goal: {ang_dist:.4f} deg")
 
 
 def print_metrics(demo, replay):
-    """Calcola RMSE posizionale ed errore angolare, stampa il report e
-    restituisce (angular_errors, t_common) per la diagnostica Step 1
-    (localizzazione temporale dell'errore massimo). Se non ci sono dati di
-    orientamento restituisce (None, None)."""
+    """Calculates positional RMSE and angular error, prints report and
+    returns (angular_errors, t_common)."""
     n = min(len(demo[0]), len(replay[0]))
     if n == 0:
         return None, None
     sq = [0.0, 0.0, 0.0]
     max_err = 0.0
     for k in range(n):
-        dx = replay[1][k] - demo[1][k]
-        dy = replay[2][k] - demo[2][k]
-        dz = replay[3][k] - demo[3][k]
+        dx = (replay[1][k] - demo[1][k]) * 1000.0
+        dy = (replay[2][k] - demo[2][k]) * 1000.0
+        dz = (replay[3][k] - demo[3][k]) * 1000.0
         sq[0] += dx * dx
         sq[1] += dy * dy
         sq[2] += dz * dz
@@ -129,8 +123,8 @@ def print_metrics(demo, replay):
         max_err = max(max_err, err)
     rmse = [math.sqrt(s / n) for s in sq]
     rmse_overall = math.sqrt(sum(r * r for r in rmse))
-    print(f"  [Posizione] RMSE x/y/z: {rmse[0]:.5f} / {rmse[1]:.5f} / {rmse[2]:.5f} m "
-          f"| RMSE totale: {rmse_overall:.5f} m | Errore max: {max_err:.5f} m")
+    print(f"  [Position] RMSE x/y/z: {rmse[0]:.4f} / {rmse[1]:.4f} / {rmse[2]:.4f} mm "
+          f"| Total RMSE: {rmse_overall:.4f} mm | Max error: {max_err:.4f} mm")
 
     angular_errors = None
     t_common = None
@@ -149,8 +143,8 @@ def print_metrics(demo, replay):
                 max_ang = angle_deg
                 idx_max_ang = k
         t_common = demo[0][:n]
-        print(f"  [Orientamento] Errore angolare medio: {sum_ang / n:.4f} deg | massimo: {max_ang:.4f} deg "
-              f"al tempo t={t_common[idx_max_ang]:.3f}s (campione {idx_max_ang}/{n})")
+        print(f"  [Orientation] Mean angular error: {sum_ang / n:.4f} deg | max: {max_ang:.4f} deg "
+              f"at time t={t_common[idx_max_ang]:.3f}s (sample {idx_max_ang}/{n})")
 
     return angular_errors, t_common
 
@@ -166,7 +160,7 @@ else:
     ]
     demo_path = next((c for c in candidates if os.path.exists(c)), None)
     if demo_path is None:
-        print("Uso: python3 plot_real_demo.py <percorso_dmp_demo_recorded.csv>")
+        print("Usage: python3 plot_real_demo.py <path_to_dmp_demo_recorded.csv>")
         sys.exit(1)
 
 demo = load_csv(demo_path)
@@ -185,17 +179,17 @@ print_endpoint_metrics(demo, replay)
 
 fig = plt.figure(figsize=(20, 6))
 
-# --- Traiettoria 3D ---
+# --- 3D Trajectory ---
 ax3d = fig.add_subplot(1, 3, 1, projection="3d")
-ax3d.plot(demo[1], demo[2], demo[3], label="Demo registrata (reale)", linewidth=2)
-ax3d.plot(replay[1], replay[2], replay[3], "--", label="Replay DMP")
+ax3d.plot(demo[1], demo[2], demo[3], label="Recorded Demo (real)", linewidth=2)
+ax3d.plot(replay[1], replay[2], replay[3], "--", label="DMP Replay")
 ax3d.set_xlabel("x [m]")
 ax3d.set_ylabel("y [m]")
 ax3d.set_zlabel("z [m]")
-ax3d.set_title("Traiettoria 3D: reale vs replay")
+ax3d.set_title("3D Trajectory: real vs replay")
 ax3d.legend()
 
-# --- Serie temporali per asse ---
+# --- Axis Time Series ---
 ax_t = fig.add_subplot(1, 3, 2)
 axes_labels = ["x", "y", "z"]
 colors = ["tab:blue", "tab:orange", "tab:green"]
@@ -204,11 +198,11 @@ for i, (label, color) in enumerate(zip(axes_labels, colors)):
     ax_t.plot(replay[0], replay[i + 1], color=color, linestyle="--", alpha=0.7)
 
 ax_t.set_xlabel("t [s]")
-ax_t.set_ylabel("posizione [m]")
-ax_t.set_title("Demo reale (continua) vs Replay (tratteggiata)")
+ax_t.set_ylabel("position [m]")
+ax_t.set_title("Real Demo (solid) vs Replay (dashed)")
 ax_t.legend()
 
-# --- Orientamento: componenti quaternione nel tempo ---
+# --- Orientation: Quaternion Components over Time ---
 ax_q = fig.add_subplot(1, 3, 3)
 if demo[8] and replay[8]:
     quat_labels = ["qw", "qx", "qy", "qz"]
@@ -217,20 +211,20 @@ if demo[8] and replay[8]:
         ax_q.plot(demo[0], demo[i + 4], color=color, linestyle="-", label=f"demo {label}")
         ax_q.plot(replay[0], replay[i + 4], color=color, linestyle="--", alpha=0.7)
     ax_q.set_xlabel("t [s]")
-    ax_q.set_ylabel("componenti quaternione")
-    ax_q.set_title("Orientamento: Demo (continua) vs Replay (tratteggiata)")
+    ax_q.set_ylabel("quaternion components")
+    ax_q.set_title("Orientation: Demo (solid) vs Replay (dashed)")
     ax_q.legend()
 else:
-    ax_q.text(0.5, 0.5, "Nessun dato di orientamento nel CSV", ha="center", va="center")
+    ax_q.text(0.5, 0.5, "No orientation data in CSV", ha="center", va="center")
     ax_q.set_axis_off()
 
 os.makedirs("plots", exist_ok=True)
 plt.tight_layout()
 out_plot1 = os.path.join("plots", "real_demo_plot.png")
 plt.savefig(out_plot1, dpi=150)
-print(f"Salvato {out_plot1}")
+print(f"Saved {out_plot1}")
 
-# --- Errore angolare nel tempo (diagnostica Step 1: localizzazione del picco) ---
+# --- Angular Error over Time ---
 if angular_errors is not None:
     fig2, ax_err = plt.subplots(figsize=(10, 5))
     ax_err.plot(t_common, angular_errors, color="tab:red")
@@ -238,12 +232,12 @@ if angular_errors is not None:
     ax_err.axvline(t_common[idx_max], color="k", linestyle="--",
                     label=f"max = {angular_errors[idx_max]:.2f}\u00b0 @ t={t_common[idx_max]:.2f}s")
     ax_err.set_xlabel("t [s]")
-    ax_err.set_ylabel("errore angolare [deg]")
-    ax_err.set_title("Errore angolare nel tempo")
+    ax_err.set_ylabel("angular error [deg]")
+    ax_err.set_title("Angular Error over Time")
     ax_err.legend()
     fig2.tight_layout()
     out_plot2 = os.path.join("plots", "angular_error_over_time.png")
     fig2.savefig(out_plot2, dpi=150)
-    print(f"Salvato {out_plot2}")
+    print(f"Saved {out_plot2}")
 
 plt.show()
