@@ -174,7 +174,7 @@ void DMP::reset() {
 
 void DMP::setGoal(const Eigen::Vector3d& goal) {
     // Check if the new goal is too far from the original goal, in which case we might not want to scale the forcing term.
-    constexpr double kAmplitudeRatioThreshold = 2.0;  // Same threshold of DMP::learnFromDemonstration for the amplitude ratio check
+    constexpr double kAmplitudeRatioThreshold = 2.0;  
     constexpr double kMinDG = 1e-6;  
     for (int d = 0; d < 3; ++d) {
         double new_dG = goal(d) - y0_(d);
@@ -188,6 +188,7 @@ void DMP::setGoal(const Eigen::Vector3d& goal) {
         double ratio = A_(d) / std::abs(dG_(d));
         if (ratio > kAmplitudeRatioThreshold) {
             scale_reliable_[d] = false;
+            scale_(d) = 1.0;
         } else {
             scale_(d) = new_dG / dG_(d);
             scale_reliable_[d] = true;

@@ -218,9 +218,10 @@ else:
     ax_q.text(0.5, 0.5, "No orientation data in CSV", ha="center", va="center")
     ax_q.set_axis_off()
 
-os.makedirs("plots", exist_ok=True)
+out_dir = os.path.join("plots", "02_real_data")
+os.makedirs(out_dir, exist_ok=True)
 plt.tight_layout()
-out_plot1 = os.path.join("plots", "real_demo_plot.png")
+out_plot1 = os.path.join(out_dir, "real_demo_plot.png")
 plt.savefig(out_plot1, dpi=150)
 print(f"Saved {out_plot1}")
 
@@ -236,7 +237,7 @@ if angular_errors is not None:
     ax_err.set_title("Angular Error over Time")
     ax_err.legend()
     fig2.tight_layout()
-    out_plot2 = os.path.join("plots", "angular_error_over_time.png")
+    out_plot2 = os.path.join(out_dir, "angular_error_over_time.png")
     fig2.savefig(out_plot2, dpi=150)
     print(f"Saved {out_plot2}")
 

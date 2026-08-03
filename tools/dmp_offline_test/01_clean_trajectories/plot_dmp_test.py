@@ -118,8 +118,9 @@ if demo[8]:
     ax_q.legend()
 
 plt.tight_layout()
-os.makedirs("plots", exist_ok=True)
-out_path = os.path.join("plots", f"dmp_test_plot_{traj_name}.png")
+out_dir = os.path.join("plots", "01_clean_trajectories")
+os.makedirs(out_dir, exist_ok=True)
+out_path = os.path.join(out_dir, f"dmp_test_plot_{traj_name}.png")
 plt.savefig(out_path, dpi=150)
 print(f"Saved {out_path}")
 plt.show()

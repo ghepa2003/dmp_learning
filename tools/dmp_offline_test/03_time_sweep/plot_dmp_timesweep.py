@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Genera i grafici PER SINGOLA PROVA (traiettoria 3D/2D, errore angolare nel
+tempo) confrontando una demo con il suo replay.
+
+Le metriche numeriche (RMSE, errore angolare medio/massimo, scale_reliable)
+NON vengono piu' ricalcolate qui: arrivano da metrics.cpp/hpp tramite
+learn_and_test_dmp, che scrive gia' il summary CSV cumulativo. Questo script
+si occupa solo della parte visiva.
+
+Uso tipico (da build_and_run.sh):
+    python3 plot_dmp_test.py \
+        --demo data/demo_synth_45s_goalA_main.csv \
+        --replay data/replay_demo_synth_45s_goalA_main.csv \
+        --plot-dir plot \
+        --label demo_synth_45s_goalA_main
+"""
+import argparse
+import csv
+import math
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+
+def load_csv(path):
+    t, x, y, z = [], [], [], []
+    qw, qx, qy, qz = [], [], [], []
+    has_quat = False
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+        has_quat = "qw" in fieldnames
+        for row in reader:
+            t.append(float(row["t"]))
+            x.append(float(row["x"]))
+            y.append(float(row["y"]))
+            z.append(float(row["z"]))
+            if has_quat:
+                qw.append(float(row["qw"]))
+                qx.append(float(row["qx"]))
+                qy.append(float(row["qy"]))
+                qz.append(float(row["qz"]))
+    return t, x, y, z, qw, qx, qy, qz, has_quat
+
+
+def angular_error_series(demo, replay):
+    """Solo per il grafico errore-vs-tempo (le metriche 'ufficiali' restano
+    quelle di metrics.cpp). Qui demo e replay sono gia' allineati per indice
+    (stessa base temporale, prodotta da learn_and_test_dmp)."""
+    if not (demo[8] and replay[8]):
+        return None, None
+    n = min(len(demo[0]), len(replay[0]))
+    angular_errors = []
+    for k in range(n):
+        dot = abs(demo[4][k] * replay[4][k] + demo[5][k] * replay[5][k] +
+                  demo[6][k] * replay[6][k] + demo[7][k] * replay[7][k])
+        dot = max(-1.0, min(1.0, dot))
+        angular_errors.append(2.0 * math.acos(dot) * 180.0 / math.pi)
+    return angular_errors, demo[0][:n]
+
+
+def make_plots(demo, replay, label, plot_dir):
+    os.makedirs(plot_dir, exist_ok=True)
+
+    fig = plt.figure(figsize=(20, 6))
+
+    ax3d = fig.add_subplot(1, 3, 1, projection="3d")
+    ax3d.plot(demo[1], demo[2], demo[3], label="Demo", linewidth=2)
+    ax3d.plot(replay[1], replay[2], replay[3], "--", label="Replay DMP")
+    ax3d.set_xlabel("x [m]"); ax3d.set_ylabel("y [m]"); ax3d.set_zlabel("z [m]")
+    ax3d.set_title(f"Traiettoria 3D: {label}")
+    ax3d.legend()
+
+    ax_t = fig.add_subplot(1, 3, 2)
+    for i, (lbl, color) in enumerate(zip(["x", "y", "z"], ["tab:blue", "tab:orange", "tab:green"])):
+        ax_t.plot(demo[0], demo[i + 1], color=color, linestyle="-", label=f"demo {lbl}")
+        ax_t.plot(replay[0], replay[i + 1], color=color, linestyle="--", alpha=0.7)
+    ax_t.set_xlabel("t [s]"); ax_t.set_ylabel("posizione [m]")
+    ax_t.set_title("Demo (continua) vs Replay (tratteggiata)")
+    ax_t.legend()
+
+    ax_q = fig.add_subplot(1, 3, 3)
+    angular_errors, t_common = angular_error_series(demo, replay)
+    if demo[8] and replay[8]:
+        for i, (lbl, color) in enumerate(zip(["qw", "qx", "qy", "qz"],
+                                              ["tab:purple", "tab:blue", "tab:orange", "tab:green"])):
+            ax_q.plot(demo[0], demo[i + 4], color=color, linestyle="-", label=f"demo {lbl}")
+            ax_q.plot(replay[0], replay[i + 4], color=color, linestyle="--", alpha=0.7)
+        ax_q.set_xlabel("t [s]"); ax_q.set_ylabel("componenti quaternione")
+        ax_q.set_title("Orientamento: Demo (continua) vs Replay (tratteggiata)")
+        ax_q.legend()
+    else:
+        ax_q.text(0.5, 0.5, "Nessun dato di orientamento", ha="center", va="center")
+        ax_q.set_axis_off()
+
+    plt.tight_layout()
+    traj_path = os.path.join(plot_dir, f"{label}_trajectory.png")
+    plt.savefig(traj_path, dpi=150)
+    plt.close(fig)
+
+    err_path = None
+    if angular_errors is not None:
+        fig2, ax_err = plt.subplots(figsize=(10, 5))
+        ax_err.plot(t_common, angular_errors, color="tab:red")
+        idx_max = angular_errors.index(max(angular_errors))
+        ax_err.axvline(t_common[idx_max], color="k", linestyle="--",
+                        label=f"max = {angular_errors[idx_max]:.2f}\u00b0 @ t={t_common[idx_max]:.2f}s")
+        ax_err.set_xlabel("t [s]"); ax_err.set_ylabel("errore angolare [deg]")
+        ax_err.set_title(f"Errore angolare nel tempo: {label}")
+        ax_err.legend()
+        fig2.tight_layout()
+        err_path = os.path.join(plot_dir, f"{label}_angular_error.png")
+        fig2.savefig(err_path, dpi=150)
+        plt.close(fig2)
+
+    return traj_path, err_path
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--demo", required=True, help="CSV della demo (sintetica o reale)")
+    p.add_argument("--replay", required=True, help="CSV del replay (scritto da learn_and_test_dmp)")
+    p.add_argument("--plot-dir", default="plot", help="cartella di output per i plot")
+    p.add_argument("--label", default=None,
+                    help="etichetta usata nei nomi dei file (default: nome del file demo)")
+    args = p.parse_args()
+
+    label = args.label or os.path.splitext(os.path.basename(args.demo))[0]
+
+    demo = load_csv(args.demo)
+    replay = load_csv(args.replay)
+
+    traj_path, err_path = make_plots(demo, replay, label, args.plot_dir)
+    print(f"[{label}] Salvati: {traj_path}" + (f", {err_path}" if err_path else ""))
+
+
+if __name__ == "__main__":
+    main()
