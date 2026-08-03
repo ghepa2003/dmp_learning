@@ -183,6 +183,31 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights, qeta0);
 }
 
+void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
+    YAML::Node root;
+    try {
+        root = YAML::LoadFile(filepath);
+    } catch (const YAML::BadFile&) {
+        // File assente: nessuna modifica, i due oggetti restano ai default
+        // correnti (LWR indipendente) - attivazione delle feature e' opt-in.
+        return;
+    }
+
+    if (root["regression"]) {
+        YAML::Node reg = root["regression"];
+        bool use_ridge = false;
+        double lambda = 1e-6;
+        if (reg["method"]) {
+            use_ridge = (reg["method"].as<std::string>() == "ridge");
+        }
+        if (reg["ridge_lambda"]) {
+            lambda = reg["ridge_lambda"].as<double>();
+        }
+        dmp.setRidgeRegression(use_ridge, lambda);
+        qdmp.setRidgeRegression(use_ridge, lambda);
+    }
+}
+
 }  // namespace dmp_io
 }  // namespace core
 }  // namespace haptic_dmp_learning

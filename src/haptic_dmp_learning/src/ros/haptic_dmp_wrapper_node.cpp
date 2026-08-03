@@ -29,8 +29,17 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", default_yaml_path);
     output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", default_csv_path);
 
+    std::string default_features_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml";
+    feature_flags_path_ = this->declare_parameter<std::string>("feature_flags_path", default_features_path);
+
     // Initialize the DMP with the specified parameters
     dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_, second_order_canonical_);
+
+    // Applica i feature flag (es. ridge regression) da YAML separato dai
+    // pesi. File assente = nessuna modifica, restano i default (LWR
+    // indipendente) - attivazione opt-in, non richiede questo file per
+    // funzionare come prima.
+    core::dmp_io::applyFeatureConfig(feature_flags_path_, dmp_, quat_dmp_);
 
     // Initialize the subscriptions to the Geomagic Touch topics
     // NOTE: /touch0/pose is published at ~1000 Hz -> best-effort sensor QoS,

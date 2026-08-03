@@ -124,27 +124,61 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         acc[k] = (vel[kp1] - vel[km1]) / dt;
     }
 
-    // Locally weighted regression, independently per dimension and per basis
-    // function - standard closed-form DMP weight fitting.
-    for (int d = 0; d < 3; ++d) {
-        Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
-        Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
+    // Precompute the per-sample forcing-term target for all three dimensions
+    // (shared between the independent-LWR and ridge paths below).
+    std::vector<Eigen::Vector3d> f_target(N);
+    for (size_t k = 0; k < N; ++k) {
+        for (int d = 0; d < 3; ++d) {
+            f_target[k](d) = tau_ * tau_ * acc[k](d) -
+                              alpha_z_ * (beta_z_ * (goal_(d) - demo[k].position(d)) - tau_ * vel[k](d));
+        }
+    }
 
+    if (use_ridge_regression_) {
+        // Joint ridge regression per dimension: Phi(k,i) = psi_i(x_k) * x_k,
+        // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d. A differenza della LWR
+        // indipendente sotto, questa tiene conto dei termini incrociati tra
+        // basi sovrapposte (il Gram off-diagonal non e' assunto nullo).
+        Eigen::MatrixXd Phi(N, n_basis_);
+        Eigen::VectorXd psi_row(n_basis_);
         for (size_t k = 0; k < N; ++k) {
-            double f_target = tau_ * tau_ * acc[k](d) -
-                               alpha_z_ * (beta_z_ * (goal_(d) - demo[k].position(d)) - tau_ * vel[k](d));
-            double s = x_t[k];
-
+            double psi_sum = 0.0;
             for (int i = 0; i < n_basis_; ++i) {
-                double psi = basisFunction(i, x_t[k]);
-                num(i) += psi * s * f_target;
-                den(i) += psi * s * s;
+                psi_row(i) = basisFunction(i, x_t[k]);
+                psi_sum += psi_row(i);
+            }
+            if (psi_sum < 1e-8) psi_sum = 1e-8;
+            for (int i = 0; i < n_basis_; ++i) {
+                Phi(static_cast<int>(k), i) = (psi_row(i) / psi_sum) * x_t[k];
             }
         }
+        Eigen::MatrixXd Gram = Phi.transpose() * Phi;
+        Gram.diagonal().array() += ridge_lambda_;
+        Eigen::LDLT<Eigen::MatrixXd> solver(Gram);
 
-        // Compute weights for this dimension, with a guard against division by zero.
-        for (int i = 0; i < n_basis_; ++i) {
-            weights_[d](i) = (den(i) > 1e-8) ? num(i) / den(i) : 0.0;
+        for (int d = 0; d < 3; ++d) {
+            Eigen::VectorXd f_d(N);
+            for (size_t k = 0; k < N; ++k) f_d(static_cast<int>(k)) = f_target[k](d);
+            weights_[d] = solver.solve(Phi.transpose() * f_d);
+        }
+    } else {
+        // Locally weighted regression, independently per dimension and per basis
+        // function - standard closed-form DMP weight fitting (original behavior).
+        for (int d = 0; d < 3; ++d) {
+            Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
+            Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
+
+            for (size_t k = 0; k < N; ++k) {
+                double s = x_t[k];
+                for (int i = 0; i < n_basis_; ++i) {
+                    double psi = basisFunction(i, x_t[k]);
+                    num(i) += psi * s * f_target[k](d);
+                    den(i) += psi * s * s;
+                }
+            }
+            for (int i = 0; i < n_basis_; ++i) {
+                weights_[d](i) = (den(i) > 1e-8) ? num(i) / den(i) : 0.0;
+            }
         }
     }
 

@@ -41,6 +41,20 @@ ORIENT_NOISE_STD_DEG=0.1
 # campione di rumore -- ciascuno produce un CSV distinto (vedi nota cache).
 NOISE_SEEDS=(42 43 44 45 46)
 
+# Metodi di regressione da confrontare, oltre a pulito/rumoroso gia'
+# esistente. Formato "etichetta:percorso_yaml".
+#
+# Il percorso "ridge" e' lo STESSO file che legge haptic_dmp_wrapper_node.cpp
+# in produzione (parametro ROS2 feature_flags_path, default sotto) -- non una
+# copia per i test. Per testare davvero la ridge regression qui, apri quel
+# file e verifica che contenga "method: \"ridge\"" PRIMA di lanciare lo
+# sweep: essendo lo stesso file, questo script non puo' forzarlo per te.
+REAL_FEATURE_FLAGS_PATH="${HOME}/thesis_ws/dmp_features.yaml"
+REGRESSION_VARIANTS=(
+    "lwr:"
+    "ridge:${REAL_FEATURE_FLAGS_PATH}"
+)
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
@@ -50,7 +64,11 @@ mkdir -p build data "${PLOT_DIR}" weights
 
 PKG_DIR="../../src/haptic_dmp_learning"
 
-if [ ! -x build/learn_and_test_dmp ]; then
+if [ ! -x build/learn_and_test_dmp ] || \
+   [ "${PKG_DIR}/src/core/dmp.cpp" -nt build/learn_and_test_dmp ] || \
+   [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
+   [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
+   [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
     echo "== Compilazione learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
@@ -66,6 +84,10 @@ if [ ! -x build/learn_and_test_dmp ]; then
         -lyaml-cpp
 fi
 
+# Varianti di regolarizzazione da testare (formato "label" oppure "label:path/to/flags.yaml").
+DEFAULT_FEATURES_PATH="../../src/haptic_dmp_learning/config/dmp_features.yaml"
+REG_VARIANTS=("dmp_features:${DEFAULT_FEATURES_PATH}")
+
 run_sweep_variant () {
     local variant_name="$1"   # "clean" o "noisy"
     local demo_csv="$2"
@@ -74,13 +96,30 @@ run_sweep_variant () {
 
     echo "" >&2
     echo "== Variante: ${variant_name} (demo: ${demo_csv}) ==" >&2
-    for n_basis in "${N_BASIS_LIST[@]}"; do
-        label="nbasis_$(printf '%04d' "$n_basis")"
-        yaml_out="weights/${variant_name}_${label}.yaml"
-        replay_out="data/replay_${variant_name}_${label}.csv"
+    for rv in "${REG_VARIANTS[@]}"; do
+        rv_label="${rv%%:*}"
+        rv_flags="${rv#*:}"
+        if [ "$rv_flags" = "$rv_label" ]; then
+            rv_flags=""
+        fi
 
-        echo "---- ${variant_name} / ${label} ----" >&2
-        build/learn_and_test_dmp "$demo_csv" "$yaml_out" "$replay_out" "$summary_csv" "$label" "$n_basis" >&2
+        if [ -n "$rv_flags" ] && [ ! -f "$rv_flags" ]; then
+            echo "[ATTENZIONE] '${rv_flags}' non esiste -- la variante '${rv_label}' userà i default (probabilmente NON ridge)." >&2
+            echo "             Crea quel file con 'method: \"ridge\"' prima di continuare se vuoi testare ridge davvero." >&2
+        fi
+
+        for n_basis in "${N_BASIS_LIST[@]}"; do
+            label="nbasis_$(printf '%04d' "$n_basis")"
+            if [ -n "$rv_label" ] && [ "$rv_label" != "standard" ]; then
+                label="${label}_${rv_label}"
+            fi
+            yaml_out="weights/${variant_name}_${label}.yaml"
+            replay_out="data/replay_${variant_name}_${label}.csv"
+
+            echo "---- ${variant_name} / ${label} ----" >&2
+            build/learn_and_test_dmp "$demo_csv" "$yaml_out" "$replay_out" "$summary_csv" "$label" \
+                "$n_basis" - - - "${rv_flags:-}" >&2
+        done
     done
     echo "$summary_csv"
 }

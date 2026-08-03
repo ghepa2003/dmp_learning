@@ -88,7 +88,9 @@ int main(int argc, char** argv) {
         std::cerr << "Uso: " << argv[0]
                   << " <input_demo.csv> <output_weights.yaml> <output_replay.csv>"
                   << " <summary.csv> <label>"
-                  << " [n_basis=20] [alpha_x=4.6] [alpha_z=25] [beta_z=6.25]\n";
+                  << " [n_basis|-] [alpha_x|-] [alpha_z|-] [beta_z|-]"
+                  << " [feature_flags_path='']\n"
+                  << "  '-' o argomento omesso = usa il default reale della classe DMP\n";
         return 1;
     }
 
@@ -97,10 +99,37 @@ int main(int argc, char** argv) {
     const std::string output_replay = argv[3];
     const std::string summary_csv  = argv[4];
     const std::string label        = argv[5];
-    const int n_basis     = (argc >= 7)  ? std::stoi(argv[6]) : 20;
-    const double alpha_x  = (argc >= 8)  ? std::stod(argv[7]) : 4.6;
-    const double alpha_z  = (argc >= 9)  ? std::stod(argv[8]) : 25.0;
-    const double beta_z   = (argc >= 10) ? std::stod(argv[9]) : 6.25;
+    // Sonde di default: leggono i valori REALMENTE compilati in DMP/QuaternionDMP
+    // (dmp.hpp/quaternion_dmp.hpp) invece di riscriverli qui come costanti --
+    // se cambi un default nel core, questo tool lo segue senza modifiche.
+    const DMP dmp_defaults;
+
+    // Sentinella "-" (o argomento assente) = "usa il default reale", non un
+    // numero duplicato scritto a mano.
+    auto parseOrDefault = [](const char* arg, double fallback) -> double {
+        std::string s = arg ? arg : "-";
+        return (s == "-") ? fallback : std::stod(s);
+    };
+    auto parseOrDefaultInt = [](const char* arg, int fallback) -> int {
+        std::string s = arg ? arg : "-";
+        return (s == "-") ? fallback : std::stoi(s);
+    };
+
+    const int n_basis     = parseOrDefaultInt((argc >= 7)  ? argv[6] : nullptr, dmp_defaults.nBasis());
+    const double alpha_x  = parseOrDefault((argc >= 8)  ? argv[7] : nullptr, dmp_defaults.alphaX());
+    const double alpha_z  = parseOrDefault((argc >= 9)  ? argv[8] : nullptr, dmp_defaults.alphaZ());
+    const double beta_z   = parseOrDefault((argc >= 10) ? argv[9] : nullptr, dmp_defaults.betaZ());
+    // Vuoto (default) = nessun feature flag applicato, comportamento
+    // invariato (LWR indipendente). Se fornito, deve puntare allo STESSO file
+    // che legge haptic_dmp_wrapper_node.cpp in produzione -- non una copia.
+    std::string feature_flags_path = (argc >= 11) ? argv[10] : "";
+    if (feature_flags_path.empty()) {
+        const std::string default_path = "../../src/haptic_dmp_learning/config/dmp_features.yaml";
+        std::ifstream check_f(default_path);
+        if (check_f.good()) {
+            feature_flags_path = default_path;
+        }
+    }
 
     try {
         std::cout << "[" << label << "] Carico demo da " << input_csv << "...\n";
@@ -110,6 +139,15 @@ int main(int argc, char** argv) {
 
         DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
         QuaternionDMP qdmp(n_basis, alpha_x, alpha_z, beta_z);
+
+        if (!feature_flags_path.empty()) {
+            haptic_dmp_learning::core::dmp_io::applyFeatureConfig(feature_flags_path, dmp, qdmp);
+            std::cout << "  [Config YAML] Caricato " << feature_flags_path
+                      << " -> Metodo di regressione: " << (dmp.ridgeRegressionEnabled() ? "RIDGE" : "INDEPENDENT_LWR")
+                      << "\n";
+        } else {
+            std::cout << "  [Config YAML] Nessun file di configurazione -> Metodo di regressione: INDEPENDENT_LWR (default)\n";
+        }
 
         std::cout << "  Apprendimento (n_basis=" << n_basis << ")...\n";
         dmp.learnFromDemonstration(demo);

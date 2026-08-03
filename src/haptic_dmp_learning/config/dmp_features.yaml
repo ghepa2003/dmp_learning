@@ -1,0 +1,3 @@
+regression:
+  method: "independent_lwr"   # "independent_lwr" (default, comportamento originale) | "ridge"
+  ridge_lambda: 1.0e-6        # usato solo se method == "ridge"

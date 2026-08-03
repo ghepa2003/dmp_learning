@@ -45,6 +45,13 @@ public:
     // unstable (high movement amplitude wrt the original g-y0)
     bool isScaleReliable(int dim) const { return scale_reliable_[dim]; }
 
+    // Optionally enable ridge regression (L2 regularization) for the weight fitting.
+    void setRidgeRegression(bool enabled, double lambda = 1e-6) {
+        use_ridge_regression_ = enabled;
+        ridge_lambda_ = lambda;
+    }
+    bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
+
     // Integrates one step of duration dt (seconds). Returns the new position.
     // Call reset() once before the first call.
     Eigen::Vector3d step(double dt, const Eigen::Vector3d& ct = Eigen::Vector3d::Zero(), double cc = 0.0);
@@ -89,6 +96,8 @@ private:
     double alpha_z_;
     double beta_z_;
     bool second_order_canonical_;
+    bool use_ridge_regression_ = false;
+    double ridge_lambda_ = 1e-6;
 
     double tau_;
     Eigen::Vector3d y0_;

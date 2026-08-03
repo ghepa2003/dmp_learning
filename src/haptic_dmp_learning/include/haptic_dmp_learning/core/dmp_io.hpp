@@ -13,6 +13,7 @@ DMP loadFromYaml(const std::string& filepath);
 
 void saveToYaml(const DMP& dmp, const QuaternionDMP& qdmp, const std::string& filepath);
 void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp);
+void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp);
 
 }  // namespace dmp_io
 }  // namespace core

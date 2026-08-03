@@ -22,10 +22,19 @@ public:
     const Eigen::Quaterniond& goal() const { return goal_; }
     const Eigen::Vector3d& eta0() const { return eta0_; }
 
+    // 
+    void setRidgeRegression(bool enabled, double lambda = 1e-6) {
+        use_ridge_regression_ = enabled;
+        ridge_lambda_ = lambda;
+    }
+    bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
+
     // Step integration; it returns the normalized current orientation
     Eigen::Quaterniond step(double dt);
 
     bool isLearned() const { return learned_; }
+
+
     double tau() const { return tau_; }  // for controlling the coherence with the positional DMP
 
     int nBasis() const { return n_basis_; }
@@ -61,6 +70,8 @@ private:
     Eigen::Vector3d eta0_;
 
     bool learned_;
+    bool use_ridge_regression_ = false;
+    double ridge_lambda_ = 1e-6;
 };
 
 }  // namespace core

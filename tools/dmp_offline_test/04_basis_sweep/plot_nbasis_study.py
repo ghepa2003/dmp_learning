@@ -33,7 +33,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-LABEL_RE = re.compile(r"^nbasis_(\d+)$")
+LABEL_RE = re.compile(r"^nbasis_(\d+)(?:_.*)?$")
 
 METRICS_TO_PLOT = [
     ("rmse_overall_mm", "RMSE posizione totale [mm]"),
