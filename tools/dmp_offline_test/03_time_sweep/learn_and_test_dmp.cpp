@@ -144,9 +144,11 @@ int main(int argc, char** argv) {
             haptic_dmp_learning::core::dmp_io::applyFeatureConfig(feature_flags_path, dmp, qdmp);
             std::cout << "  [Config YAML] Caricato " << feature_flags_path
                       << " -> Metodo di regressione: " << (dmp.ridgeRegressionEnabled() ? "RIDGE" : "INDEPENDENT_LWR")
+                      << " | Sistema canonico: " << (dmp.secondOrderCanonical() ? "2ND_ORDER" : "1ST_ORDER")
+                      << " | filtro=" << (dmp.velocityFilterEnabled() ? "on" : "off")
                       << "\n";
         } else {
-            std::cout << "  [Config YAML] Nessun file di configurazione -> Metodo di regressione: INDEPENDENT_LWR (default)\n";
+            std::cout << "  [Config YAML] Nessun file di configurazione -> Metodo di regressione: INDEPENDENT_LWR (default) | Sistema canonico: 1ST_ORDER (default) | Filtro: unabled (default) \n";
         }
 
         std::cout << "  Apprendimento (n_basis=" << n_basis << ")...\n";

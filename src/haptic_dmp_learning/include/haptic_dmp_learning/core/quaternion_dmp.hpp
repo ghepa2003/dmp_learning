@@ -22,12 +22,20 @@ public:
     const Eigen::Quaterniond& goal() const { return goal_; }
     const Eigen::Vector3d& eta0() const { return eta0_; }
 
-    // 
+    // Optionally enable ridge regression (L2 regularization) for the weight fitting.
     void setRidgeRegression(bool enabled, double lambda = 1e-6) {
         use_ridge_regression_ = enabled;
         ridge_lambda_ = lambda;
     }
     bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
+
+    // Optionally enable a velocity filter on the input demonstration before fitting the weights.
+    void setVelocityFilter(bool enabled, double window_sec_1 = 0.05, double window_sec_2 = 0.05) {
+        use_velocity_filter_ = enabled;
+        filter_window_sec_1_ = window_sec_1;
+        filter_window_sec_2_ = window_sec_2;
+    }
+    bool velocityFilterEnabled() const { return use_velocity_filter_; }
 
     // Step integration; it returns the normalized current orientation
     Eigen::Quaterniond step(double dt);
@@ -56,6 +64,14 @@ public:
 private:
     void initBasisFunctions();
     double basisFunction(int i, double x) const;
+    // Costruisce una traiettoria CONTINUA in R^3 integrando cumulativamente
+    // gli incrementi di rotazione locali tra campioni consecutivi -- a
+    // differenza di logMap(q(t)*q0^-1), resta valida anche se l'asse di
+    // rotazione cambia nel tempo (percorso non vincolato a un'unica
+    // geodetica), perche' ogni incremento e' piccolo per costruzione.
+    std::vector<Eigen::Vector3d> unwrapRotationVector(const std::vector<Sample>& demo) const;
+    std::vector<Eigen::Vector3d> movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
+                                                       const std::vector<double>& t, double window_sec) const;
 
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
@@ -72,6 +88,9 @@ private:
     bool learned_;
     bool use_ridge_regression_ = false;
     double ridge_lambda_ = 1e-6;
+    bool use_velocity_filter_ = false;
+    double filter_window_sec_1_ = 0.05;
+    double filter_window_sec_2_ = 0.05;
 };
 
 }  // namespace core

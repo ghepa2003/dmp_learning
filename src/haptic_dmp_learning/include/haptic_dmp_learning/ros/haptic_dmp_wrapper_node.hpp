@@ -47,7 +47,6 @@ private:
     std::string output_demo_csv_path_; 
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
-    bool second_order_canonical_;
     std::string feature_flags_path_;
 };
 

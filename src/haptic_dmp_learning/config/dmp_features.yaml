@@ -1,3 +1,10 @@
 regression:
   method: "independent_lwr"   # "independent_lwr" (default, comportamento originale) | "ridge"
   ridge_lambda: 1.0e-6        # usato solo se method == "ridge"
+
+second_order_canonical_system: false
+
+velocity_filter:
+  enabled: false
+  window_sec_1: 0.05
+  window_sec_2: 0.05

@@ -52,6 +52,21 @@ public:
     }
     bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
 
+    // Optionally enable a velocity filter on the input demonstration before fitting the weights.
+    void setVelocityFilter(bool enabled, double window_sec_1 = 0.05, double window_sec_2 = 0.05) {
+        use_velocity_filter_ = enabled;
+        filter_window_sec_1_ = window_sec_1;
+        filter_window_sec_2_ = window_sec_2;
+    }
+    bool velocityFilterEnabled() const { return use_velocity_filter_; }
+
+    // Set whether to use a second-order canonical system (recomputes basis functions).
+    void setSecondOrderCanonical(bool enabled) {
+        second_order_canonical_ = enabled;
+        initBasisFunctions();
+    }
+    bool secondOrderCanonical() const { return second_order_canonical_; }
+
     // Integrates one step of duration dt (seconds). Returns the new position.
     // Call reset() once before the first call.
     Eigen::Vector3d step(double dt, const Eigen::Vector3d& ct = Eigen::Vector3d::Zero(), double cc = 0.0);
@@ -90,6 +105,8 @@ public:
 private:
     void initBasisFunctions();
     double basisFunction(int i, double x) const;
+    std::vector<Eigen::Vector3d> movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
+                                                       const std::vector<double>& t, double window_sec) const;
 
     int n_basis_;
     double alpha_x_;
@@ -98,6 +115,10 @@ private:
     bool second_order_canonical_;
     bool use_ridge_regression_ = false;
     double ridge_lambda_ = 1e-6;
+    bool use_velocity_filter_ = false;
+    double filter_window_sec_1_ = 0.05;
+    double filter_window_sec_2_ = 0.05;
+
 
     double tau_;
     Eigen::Vector3d y0_;

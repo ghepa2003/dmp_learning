@@ -4,6 +4,5 @@ haptic_dmp_wrapper_node:
     alpha_x: 4.6
     alpha_z: 25.0
     beta_z: 6.25
-    second_order_canonical_system: false
     output_yaml_path: "/root/thesis_ws/dmp_weights.yaml"
     output_demo_csv_path: "/root/thesis_ws/demo_raw.csv"

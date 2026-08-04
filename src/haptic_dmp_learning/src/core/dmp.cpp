@@ -2,6 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <iostream>
+#include <algorithm>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -65,6 +66,27 @@ double DMP::basisFunction(int i, double x) const {
     return std::exp(-widths_(i) * d * d);
 }
 
+std::vector<Eigen::Vector3d> DMP::movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
+                                                        const std::vector<double>& t, double window_sec) const {
+    const size_t N = signal.size();
+    if (window_sec <= 0.0 || N < 2) return signal;
+    double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
+    if (dt_est <= 0.0) return signal;
+    int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
+    int half = window_samples / 2;
+    std::vector<Eigen::Vector3d> out(N);
+    for (size_t k = 0; k < N; ++k) {
+        int lo = std::max(0, static_cast<int>(k) - half);
+        int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
+        Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+        int count = 0;
+        for (int j = lo; j <= hi; ++j) { sum += signal[j]; ++count; }
+        out[k] = sum / static_cast<double>(count);
+    }
+    return out;
+}
+
+
 void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 
     // Exception for dealing with too-short demonstrations or non-increasing timestamps.
@@ -100,13 +122,32 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 }
 
     // Estimate velocity and acceleration via central finite differences.
+    // Se il filtro e' attivo, la media mobile viene applicata PRIMA di
+    // ciascuno dei due stadi di derivazione (non solo sul segnale grezzo in
+    // ingresso) -- uno smoothing singolo migliorerebbe solo la velocita',
+    // lasciando l'accelerazione esposta al rumore introdotto dalla prima
+    // derivazione stessa.
+    std::vector<double> t_all(N);
+    std::vector<Eigen::Vector3d> pos_all(N);
+    for (size_t k = 0; k < N; ++k) {
+        t_all[k] = demo[k].t;
+        pos_all[k] = demo[k].position;
+    }
+    std::vector<Eigen::Vector3d> pos_for_diff = use_velocity_filter_
+        ? movingAverageSmooth(pos_all, t_all, filter_window_sec_1_)
+        : pos_all;
+
     std::vector<Eigen::Vector3d> vel(N), acc(N);
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
         size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
-        double dt = demo[kp1].t - demo[km1].t;
+        double dt = t_all[kp1] - t_all[km1];
         if (dt <= 0.0) dt = 1e-6;
-        vel[k] = (demo[kp1].position - demo[km1].position) / dt;
+        vel[k] = (pos_for_diff[kp1] - pos_for_diff[km1]) / dt;
+    }
+
+    if (use_velocity_filter_) {
+        vel = movingAverageSmooth(vel, t_all, filter_window_sec_2_);
     }
 
     std::cerr << "[DMP diag] |vel(0)| = " << vel.front().norm()
@@ -119,7 +160,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
         size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
-        double dt = demo[kp1].t - demo[km1].t;
+        double dt = t_all[kp1] - t_all[km1];
         if (dt <= 0.0) dt = 1e-6;
         acc[k] = (vel[kp1] - vel[km1]) / dt;
     }

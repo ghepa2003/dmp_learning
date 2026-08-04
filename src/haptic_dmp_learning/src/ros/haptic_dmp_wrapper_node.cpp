@@ -20,7 +20,6 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     alpha_x_ = this->declare_parameter<double>("alpha_x", 4.6);
     alpha_z_ = this->declare_parameter<double>("alpha_z", 25.0);
     beta_z_ = this->declare_parameter<double>("beta_z", 6.25);
-    second_order_canonical_ = this->declare_parameter<bool>("second_order_canonical", false);
 
     // Default output paths: allow override via ROS2 parameter.
     const char* home = std::getenv("HOME");
@@ -33,7 +32,7 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     feature_flags_path_ = this->declare_parameter<std::string>("feature_flags_path", default_features_path);
 
     // Initialize the DMP with the specified parameters
-    dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_, second_order_canonical_);
+    dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
 
     // Applica i feature flag (es. ridge regression) da YAML separato dai
     // pesi. File assente = nessuna modifica, restano i default (LWR

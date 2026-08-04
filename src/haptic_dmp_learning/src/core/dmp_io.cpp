@@ -41,6 +41,7 @@ YAML::Node dmpToNode(const DMP& dmp) {
     node["alpha_x"] = dmp.alphaX();
     node["alpha_z"] = dmp.alphaZ();
     node["beta_z"] = dmp.betaZ();
+    node["second_order_canonical_system"] = dmp.secondOrderCanonical();
     node["tau"] = dmp.tau();
     node["y0"] = vec3ToYaml(dmp.y0());
     node["goal"] = vec3ToYaml(dmp.goal());
@@ -116,6 +117,12 @@ DMP loadFromYaml(const std::string& filepath) {
     double alpha_x = root["alpha_x"].as<double>();
     double alpha_z = root["alpha_z"].as<double>();
     double beta_z = root["beta_z"].as<double>();
+    bool second_order = false;
+    if (root["second_order_canonical_system"]) {
+        second_order = root["second_order_canonical_system"].as<bool>();
+    } else if (root["second_order_canonical"]) {
+        second_order = root["second_order_canonical"].as<bool>();
+    }
     double tau = root["tau"].as<double>();
 
     Eigen::Vector3d y0 = yamlToVec3(root["y0"]);
@@ -133,7 +140,7 @@ DMP loadFromYaml(const std::string& filepath) {
         weights[idx] = yamlToVector(wd["values"]);
     }
 
-    DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
+    DMP dmp(n_basis, alpha_x, alpha_z, beta_z, second_order);
     dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights, z0);
     return dmp;
 }
@@ -165,7 +172,13 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
         weights[idx] = yamlToVector(wd["values"]);
     }
     Eigen::Vector3d z0 = p["z0"] ? yamlToVec3(p["z0"]) : Eigen::Vector3d::Zero();
-    dmp = DMP(p["n_basis"].as<int>(), p["alpha_x"].as<double>(), p["alpha_z"].as<double>(), p["beta_z"].as<double>());
+    bool second_order = false;
+    if (p["second_order_canonical_system"]) {
+        second_order = p["second_order_canonical_system"].as<bool>();
+    } else if (p["second_order_canonical"]) {
+        second_order = p["second_order_canonical"].as<bool>();
+    }
+    dmp = DMP(p["n_basis"].as<int>(), p["alpha_x"].as<double>(), p["alpha_z"].as<double>(), p["beta_z"].as<double>(), second_order);
     dmp.setLearnedParameters(p["tau"].as<double>(), y0, goal, dG, A, centers, widths, weights, z0);
 
     // --- orientation ---
@@ -189,7 +202,7 @@ void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qd
         root = YAML::LoadFile(filepath);
     } catch (const YAML::BadFile&) {
         // File assente: nessuna modifica, i due oggetti restano ai default
-        // correnti (LWR indipendente) - attivazione delle feature e' opt-in.
+        // correnti - attivazione delle feature e' opt-in.
         return;
     }
 
@@ -205,6 +218,25 @@ void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qd
         }
         dmp.setRidgeRegression(use_ridge, lambda);
         qdmp.setRidgeRegression(use_ridge, lambda);
+    }
+
+    if (root["second_order_canonical_system"]) {
+        bool second_order = root["second_order_canonical_system"].as<bool>();
+        dmp.setSecondOrderCanonical(second_order);
+    } else if (root["second_order_canonical"]) {
+        bool second_order = root["second_order_canonical"].as<bool>();
+        dmp.setSecondOrderCanonical(second_order);
+    }
+
+    if (root["velocity_filter"]) {
+        YAML::Node vf = root["velocity_filter"];
+        bool use_filter = false;
+        double w1 = 0.05, w2 = 0.05;
+        if (vf["enabled"]) use_filter = vf["enabled"].as<bool>();
+        if (vf["window_sec_1"]) w1 = vf["window_sec_1"].as<double>();
+        if (vf["window_sec_2"]) w2 = vf["window_sec_2"].as<double>();
+        dmp.setVelocityFilter(use_filter, w1, w2);
+        qdmp.setVelocityFilter(use_filter, w1, w2);
     }
 }
 

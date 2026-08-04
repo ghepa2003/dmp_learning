@@ -51,8 +51,8 @@ NOISE_SEEDS=(42 43 44 45 46)
 # sweep: essendo lo stesso file, questo script non puo' forzarlo per te.
 REAL_FEATURE_FLAGS_PATH="${HOME}/thesis_ws/dmp_features.yaml"
 REGRESSION_VARIANTS=(
-    "lwr:"
-    "ridge:${REAL_FEATURE_FLAGS_PATH}"
+    "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
+    "ridge_filter:04_basis_sweep/test_configs/ridge_filter.yaml"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,42 +84,37 @@ if [ ! -x build/learn_and_test_dmp ] || \
         -lyaml-cpp
 fi
 
-# Varianti di regolarizzazione da testare (formato "label" oppure "label:path/to/flags.yaml").
-DEFAULT_FEATURES_PATH="../../src/haptic_dmp_learning/config/dmp_features.yaml"
-REG_VARIANTS=("dmp_features:${DEFAULT_FEATURES_PATH}")
+# Varianti di configurazione (regressione e filtri) da testare.
+REG_VARIANTS=(
+    "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
+    "lwr_filter:04_basis_sweep/test_configs/lwr_filter.yaml"
+    "ridge_nofilter:04_basis_sweep/test_configs/ridge_nofilter.yaml"
+    "ridge_filter:04_basis_sweep/test_configs/ridge_filter.yaml"
+)
 
 run_sweep_variant () {
-    local variant_name="$1"   # "clean" o "noisy"
+    local variant_name="$1"   # "clean", "noisy_seed42", "real", etc.
     local demo_csv="$2"
-    local summary_csv="${PLOT_DIR}/nbasis_sweep_results_${variant_name}.csv"
+    local rv_label="$3"       # "lwr_nofilter", "lwr_filter", etc.
+    local rv_flags="$4"       # path allo yaml di configurazione
+
+    local summary_csv="${PLOT_DIR}/nbasis_sweep_results_${variant_name}_${rv_label}.csv"
     rm -f "$summary_csv"
 
     echo "" >&2
-    echo "== Variante: ${variant_name} (demo: ${demo_csv}) ==" >&2
-    for rv in "${REG_VARIANTS[@]}"; do
-        rv_label="${rv%%:*}"
-        rv_flags="${rv#*:}"
-        if [ "$rv_flags" = "$rv_label" ]; then
-            rv_flags=""
-        fi
+    echo "== Variante: ${variant_name} | Config: ${rv_label} (demo: ${demo_csv}) ==" >&2
+    if [ -n "$rv_flags" ] && [ ! -f "$rv_flags" ]; then
+        echo "[ATTENZIONE] '${rv_flags}' non esiste -- usera' i default." >&2
+    fi
 
-        if [ -n "$rv_flags" ] && [ ! -f "$rv_flags" ]; then
-            echo "[ATTENZIONE] '${rv_flags}' non esiste -- la variante '${rv_label}' userà i default (probabilmente NON ridge)." >&2
-            echo "             Crea quel file con 'method: \"ridge\"' prima di continuare se vuoi testare ridge davvero." >&2
-        fi
+    for n_basis in "${N_BASIS_LIST[@]}"; do
+        label="nbasis_$(printf '%04d' "$n_basis")_${rv_label}"
+        yaml_out="weights/${variant_name}_${label}.yaml"
+        replay_out="data/replay_${variant_name}_${label}.csv"
 
-        for n_basis in "${N_BASIS_LIST[@]}"; do
-            label="nbasis_$(printf '%04d' "$n_basis")"
-            if [ -n "$rv_label" ] && [ "$rv_label" != "standard" ]; then
-                label="${label}_${rv_label}"
-            fi
-            yaml_out="weights/${variant_name}_${label}.yaml"
-            replay_out="data/replay_${variant_name}_${label}.csv"
-
-            echo "---- ${variant_name} / ${label} ----" >&2
-            build/learn_and_test_dmp "$demo_csv" "$yaml_out" "$replay_out" "$summary_csv" "$label" \
-                "$n_basis" - - - "${rv_flags:-}" >&2
-        done
+        echo "---- ${variant_name} / ${label} ----" >&2
+        build/learn_and_test_dmp "$demo_csv" "$yaml_out" "$replay_out" "$summary_csv" "$label" \
+            "$n_basis" - - - "${rv_flags:-}" >&2
     done
     echo "$summary_csv"
 }
@@ -136,8 +131,6 @@ if [ -z "$REAL_DEMO" ] && [ ! -f "$CLEAN_CSV" ]; then
 fi
 
 # --- Demo con rumore sintetico: una per ciascun seed in NOISE_SEEDS.
-# Il nome del file include il seed apposta -- con un nome fisso, cambiare
-# NOISE_SEED senza cancellare data/ riuserebbe silenziosamente il CSV vecchio.
 NOISY_CSVS=()
 if [ -z "$REAL_DEMO" ]; then
     for seed in "${NOISE_SEEDS[@]}"; do
@@ -162,31 +155,58 @@ if [ -n "$REAL_DEMO" ]; then
         exit 1
     fi
     echo "== Modalita' demo reale: ${REAL_DEMO} (nessuna generazione sintetica) =="
-    REAL_SUMMARY=$(run_sweep_variant "real" "$REAL_DEMO")
+    REAL_PLOT_ARGS=()
+    for rv in "${REG_VARIANTS[@]}"; do
+        rv_label="${rv%%:*}"
+        rv_flags="${rv#*:}"
+        summary_csv=$(run_sweep_variant "real" "$REAL_DEMO" "$rv_label" "$rv_flags")
+        REAL_PLOT_ARGS+=(--summary-csv "$summary_csv" --series-label "$rv_label")
+    done
 
     echo ""
-    echo "== Sweep completato. Genero i grafici (demo reale) =="
-    python3 04_basis_sweep/plot_nbasis_study.py \
-        --summary-csv "$REAL_SUMMARY" --series-label "reale" \
-        --plot-dir "${PLOT_DIR}"
+    echo "== Sweep completato. Genero i grafici comparativi (demo reale) =="
+    python3 04_basis_sweep/plot_nbasis_study.py "${REAL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}"
 
     echo ""
-    echo "== Fatto. Riepilogo in ${REAL_SUMMARY}, grafici in ${PLOT_DIR}/ =="
+    echo "== Fatto. Grafici in ${PLOT_DIR}/ =="
     exit 0
 fi
 
-CLEAN_SUMMARY=$(run_sweep_variant "clean" "$CLEAN_CSV")
-
-PLOT_ARGS=(--summary-csv "$CLEAN_SUMMARY" --series-label "pulito")
-for i in "${!NOISE_SEEDS[@]}"; do
-    seed="${NOISE_SEEDS[$i]}"
-    noisy_summary=$(run_sweep_variant "noisy_seed${seed}" "${NOISY_CSVS[$i]}")
-    PLOT_ARGS+=(--summary-csv "$noisy_summary" --series-label "rumoroso (seed ${seed})")
+# --- 1) Sweep su demo pulita per tutte le configurazioni ---
+CLEAN_PLOT_ARGS=()
+for rv in "${REG_VARIANTS[@]}"; do
+    rv_label="${rv%%:*}"
+    rv_flags="${rv#*:}"
+    clean_summary=$(run_sweep_variant "clean" "$CLEAN_CSV" "$rv_label" "$rv_flags")
+    CLEAN_PLOT_ARGS+=(--summary-csv "$clean_summary" --series-label "$rv_label")
 done
 
 echo ""
-echo "== Sweep completato. Genero i grafici (pulito vs rumoroso x ${#NOISE_SEEDS[@]} seed) =="
-python3 04_basis_sweep/plot_nbasis_study.py "${PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}"
+echo "== Genero i grafici comparativi per demo pulita =="
+python3 04_basis_sweep/plot_nbasis_study.py "${CLEAN_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/clean"
+
+# --- 2) Sweep su demo rumorosa per tutte le configurazioni e tutti i seed ---
+NOISY_PLOT_ARGS=()
+for rv in "${REG_VARIANTS[@]}"; do
+    rv_label="${rv%%:*}"
+    rv_flags="${rv#*:}"
+    for i in "${!NOISE_SEEDS[@]}"; do
+        seed="${NOISE_SEEDS[$i]}"
+        noisy_csv="${NOISY_CSVS[$i]}"
+        noisy_summary=$(run_sweep_variant "noisy_seed${seed}" "$noisy_csv" "$rv_label" "$rv_flags")
+        NOISY_PLOT_ARGS+=(--summary-csv "$noisy_summary" --series-label "${rv_label} (seed ${seed})")
+    done
+done
 
 echo ""
-echo "== Fatto. Riepiloghi in ${PLOT_DIR}/nbasis_sweep_results_{clean,noisy_seed*}.csv, grafici in ${PLOT_DIR}/ =="
+echo "== Genero i grafici grezzi (tutti i seed per le 4 configurazioni) =="
+python3 04_basis_sweep/plot_nbasis_study.py "${NOISY_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/noisy"
+
+echo ""
+echo "== Aggrego i seed in media +/- std e genero i grafici comparativi == "
+python3 04_basis_sweep/aggregate_nbasis_seeds.py \
+    --combined-csv "${PLOT_DIR}/noisy/nbasis_all_metrics.csv" \
+    --plot-dir "${PLOT_DIR}"
+
+echo ""
+echo "== Fatto. Grafici comparativi aggregati in ${PLOT_DIR}/, grafici puliti in ${PLOT_DIR}/clean/, grafici rumorosi grezzi in ${PLOT_DIR}/noisy/ =="

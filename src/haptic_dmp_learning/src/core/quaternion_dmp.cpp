@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <Eigen/Dense>
+#include <algorithm>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -63,6 +64,39 @@ Eigen::Quaterniond QuaternionDMP::expMap(const Eigen::Vector3d& r) {
     return Eigen::Quaterniond(std::cos(theta), axis.x() * s, axis.y() * s, axis.z() * s);
 }
 
+std::vector<Eigen::Vector3d> QuaternionDMP::unwrapRotationVector(const std::vector<Sample>& demo) const {
+    const size_t N = demo.size();
+    std::vector<Eigen::Vector3d> r(N, Eigen::Vector3d::Zero());
+    for (size_t k = 1; k < N; ++k) {
+        Eigen::Quaterniond qk = demo[k].orientation.normalized();
+        Eigen::Quaterniond qkm1 = demo[k - 1].orientation.normalized();
+        Eigen::Quaterniond dq = qk * qkm1.conjugate();
+        Eigen::Vector3d incr = 2.0 * logMap(dq);
+        r[k] = r[k - 1] + incr;
+    }
+    return r;
+}
+
+std::vector<Eigen::Vector3d> QuaternionDMP::movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
+                                                                  const std::vector<double>& t, double window_sec) const {
+    const size_t N = signal.size();
+    if (window_sec <= 0.0 || N < 2) return signal;
+    double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
+    if (dt_est <= 0.0) return signal;
+    int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
+    int half = window_samples / 2;
+    std::vector<Eigen::Vector3d> out(N);
+    for (size_t k = 0; k < N; ++k) {
+        int lo = std::max(0, static_cast<int>(k) - half);
+        int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
+        Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+        int count = 0;
+        for (int j = lo; j <= hi; ++j) { sum += signal[j]; ++count; }
+        out[k] = sum / static_cast<double>(count);
+    }
+    return out;
+}
+
 // The learnFromDemonstration method computes the weights for the forcing term based on the provided demonstration samples.
 void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     if (demo.size() < 5) {
@@ -82,18 +116,56 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         x_t[k] = std::exp(-alpha_x_ / tau_ * t_rel);
     }
 
-    // Compute angular velocity (eta) and its derivative (eta_dot) using central finite differences.
-    std::vector<Eigen::Vector3d> eta(N);
-    for (size_t k = 0; k < N; ++k) {
-        size_t km1 = (k == 0) ? 0 : k - 1;
-        size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
-        double dt = demo[kp1].t - demo[km1].t;
-        if (dt <= 0.0) dt = 1e-6;
-        Eigen::Quaterniond qk1 = demo[kp1].orientation.normalized();
-        Eigen::Quaterniond qk0 = demo[km1].orientation.normalized();
-        Eigen::Quaterniond dq = qk1 * qk0.conjugate();
-        Eigen::Vector3d omega = 2.0 * logMap(dq) / dt;
-        eta[k] = tau_ * omega;
+
+    // Compute angular velocity (eta) and its derivative (eta_dot).
+    std::vector<Eigen::Vector3d> eta(N), eta_dot(N);
+
+    if (use_velocity_filter_) {
+        // Percorso filtrato: traiettoria unwrapped -> smoothing -> derivata,
+        // ripetuto per ciascuno dei due stadi (eta, poi eta_dot), stessa
+        // logica gia' validata per la posizione in DMP::learnFromDemonstration.
+        std::vector<double> t_all(N);
+        for (size_t k = 0; k < N; ++k) t_all[k] = demo[k].t;
+
+        std::vector<Eigen::Vector3d> r = unwrapRotationVector(demo);
+        r = movingAverageSmooth(r, t_all, filter_window_sec_1_);
+
+        for (size_t k = 0; k < N; ++k) {
+            size_t km1 = (k == 0) ? 0 : k - 1;
+            size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
+            double dt = t_all[kp1] - t_all[km1];
+            if (dt <= 0.0) dt = 1e-6;
+            eta[k] = tau_ * (r[kp1] - r[km1]) / dt;
+        }
+        eta = movingAverageSmooth(eta, t_all, filter_window_sec_2_);
+
+        for (size_t k = 0; k < N; ++k) {
+            size_t km1 = (k == 0) ? 0 : k - 1;
+            size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
+            double dt = t_all[kp1] - t_all[km1];
+            if (dt <= 0.0) dt = 1e-6;
+            eta_dot[k] = (eta[kp1] - eta[km1]) / dt;
+        }
+    } else {
+        // Comportamento originale, invariato.
+        for (size_t k = 0; k < N; ++k) {
+            size_t km1 = (k == 0) ? 0 : k - 1;
+            size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
+            double dt = demo[kp1].t - demo[km1].t;
+            if (dt <= 0.0) dt = 1e-6;
+            Eigen::Quaterniond qk1 = demo[kp1].orientation.normalized();
+            Eigen::Quaterniond qk0 = demo[km1].orientation.normalized();
+            Eigen::Quaterniond dq = qk1 * qk0.conjugate();
+            Eigen::Vector3d omega = 2.0 * logMap(dq) / dt;
+            eta[k] = tau_ * omega;
+        }
+        for (size_t k = 0; k < N; ++k) {
+            size_t km1 = (k == 0) ? 0 : k - 1;
+            size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
+            double dt = demo[kp1].t - demo[km1].t;
+            if (dt <= 0.0) dt = 1e-6;
+            eta_dot[k] = (eta[kp1] - eta[km1]) / dt;
+        }
     }
 
     eta0_ = eta.front();
@@ -101,16 +173,6 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     std::cerr << "[QuaternionDMP diag] |eta(0)| = " << eta.front().norm()
               << " rad/s (scaled by tau), |eta(N-1)| = " << eta.back().norm()
               << " rad/s (scaled by tau)\n";
-
-    // Compute the derivative of eta (angular acceleration) using central finite differences.
-    std::vector<Eigen::Vector3d> eta_dot(N);
-    for (size_t k = 0; k < N; ++k) {
-        size_t km1 = (k == 0) ? 0 : k - 1;
-        size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
-        double dt = demo[kp1].t - demo[km1].t;
-        if (dt <= 0.0) dt = 1e-6;
-        eta_dot[k] = (eta[kp1] - eta[km1]) / dt;
-    }
 
     // Precompute per-sample forcing-term target for all three dimensions
     // (shared between the independent-LWR and ridge paths below).

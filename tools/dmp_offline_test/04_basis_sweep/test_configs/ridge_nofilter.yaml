@@ -1,0 +1,5 @@
+regression:
+  method: "ridge"
+  ridge_lambda: 1e-6
+velocity_filter:
+  enabled: false

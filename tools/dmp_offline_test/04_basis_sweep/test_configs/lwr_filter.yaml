@@ -1,0 +1,6 @@
+regression:
+  method: "independent_lwr"
+velocity_filter:
+  enabled: true
+  window_sec_1: 0.05
+  window_sec_2: 0.05

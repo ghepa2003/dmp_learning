@@ -13,6 +13,11 @@ if [ ! -f "$DEFAULT_YAML" ] && [ -f "weights/dmp_weights_reach_lift_pitch.yaml" 
     DEFAULT_YAML="weights/dmp_weights_reach_lift_pitch.yaml"
 fi
 YAML_PATH="${1:-$DEFAULT_YAML}"
+if [ ! -f "$YAML_PATH" ]; then
+    echo "[ERRORE] Il file YAML specificato non esiste: '$YAML_PATH'" >&2
+    echo "Suggerimento: usa '~/thesis_ws/dmp_weights_trajA.yaml' oppure '../../dmp_weights_trajA.yaml' (non dimenticare il tilde ~ o /home/lorenzo/)." >&2
+    exit 1
+fi
 
 g++ -std=c++17 -O2 \
     -I "$PKG_DIR/include" \

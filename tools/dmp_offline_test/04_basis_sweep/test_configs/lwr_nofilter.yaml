@@ -1,0 +1,4 @@
+regression:
+  method: "independent_lwr"
+velocity_filter:
+  enabled: false
