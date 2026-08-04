@@ -1,6 +1,6 @@
 haptic_dmp_wrapper_node:
   ros__parameters:
-    n_basis: 20
+    n_basis: 100
     alpha_x: 4.6
     alpha_z: 25.0
     beta_z: 6.25
