@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Sweep e analisi comparativa sulle tre traiettorie reali (Traj A, Traj B, Traj C).
+# Sweep and comparative analysis on the three real trajectories (Traj A, Traj B, Traj C).
 #
-# Esegue l'apprendimento e il replay per ciascuna traiettoria reale sui 2 metodi
-# di regressione specificati in REGRESSION_VARIANTS (es. LWR vs Ridge).
-# Genera sia i grafici per-singola-prova (3D, posizione e errore angolare) sia
-# i grafici comparativi aggregati sulle metriche (RMSE, errore max, errore finale).
+# Runs learning and replay for each real trajectory on the 2 regression methods
+# specified in REGRESSION_VARIANTS (e.g. LWR vs Ridge).
+# Generates per-trial plots (3D, position, angular error) and comparative plots on metrics.
 
 set -euo pipefail
 
@@ -18,7 +17,7 @@ PLOT_DIR="plots/02_real_data"
 mkdir -p build data "${PLOT_DIR}" weights
 
 # --------------------------------------------------------------------------
-# Compilazione learn_and_test_dmp
+# Build learn_and_test_dmp
 # --------------------------------------------------------------------------
 PKG_DIR="../../src/haptic_dmp_learning"
 if [ ! -x build/learn_and_test_dmp ] || \
@@ -26,7 +25,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
    [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
-    echo "== Compilazione learn_and_test_dmp =="
+    echo "== Building learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
         -I 03_time_sweep \
@@ -42,7 +41,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
 fi
 
 # --------------------------------------------------------------------------
-# Individuazione delle 3 traiettorie reali (trajA, trajB, trajC)
+# Locate the 3 real trajectories (trajA, trajB, trajC)
 # --------------------------------------------------------------------------
 TRAJ_FILES=()
 for name in "demo_raw_trajA.csv" "demo_raw_trajB.csv" "demo_raw_trajC.csv"; do
@@ -56,12 +55,12 @@ for name in "demo_raw_trajA.csv" "demo_raw_trajB.csv" "demo_raw_trajC.csv"; do
 done
 
 if [ ${#TRAJ_FILES[@]} -eq 0 ]; then
-    echo "[ERRORE] Nessun file demo_raw_traj*.csv trovato!" >&2
+    echo "[ERROR] No demo_raw_traj*.csv files found!" >&2
     exit 1
 fi
 
 # --------------------------------------------------------------------------
-# I 2 metodi in REGRESSION_VARIANTS (es. LWR e Ridge)
+# Regression methods in REGRESSION_VARIANTS (e.g. LWR and Ridge)
 # --------------------------------------------------------------------------
 REGRESSION_VARIANTS=(
     "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
@@ -71,11 +70,10 @@ REGRESSION_VARIANTS=(
 SUMMARY_CSV="${PLOT_DIR}/real_trajectories_summary.csv"
 rm -f "$SUMMARY_CSV"
 
-echo "== Avvio analisi su ${#TRAJ_FILES[@]} traiettorie reali x ${#REGRESSION_VARIANTS[@]} varianti (n_basis=${N_BASIS}) =="
+echo "== Starting analysis on ${#TRAJ_FILES[@]} real trajectories x ${#REGRESSION_VARIANTS[@]} variants (n_basis=${N_BASIS}) =="
 
 for demo_csv in "${TRAJ_FILES[@]}"; do
     filename="$(basename "$demo_csv")"
-    # Estrae trajA, trajB, trajC dal nome del file
     if [[ "$filename" =~ (traj[A-Z0-9]+) ]]; then
         traj_id="${BASH_REMATCH[1]}"
     else
@@ -93,11 +91,10 @@ for demo_csv in "${TRAJ_FILES[@]}"; do
         yaml_out="weights/${label}.yaml"
         replay_out="data/replay_${label}.csv"
 
-        echo "---- Traiettoria Reale ${traj_id} / Variante ${rv_label} ----"
+        echo "---- Real Trajectory ${traj_id} / Variant ${rv_label} ----"
         build/learn_and_test_dmp "$demo_csv" "$yaml_out" "$replay_out" "$SUMMARY_CSV" "$label" \
             "$N_BASIS" - - - "${rv_flags:-}"
 
-        # Grafici per-singola-prova (3D, posizioni nel tempo, errore angolare)
         python3 03_time_sweep/plot_dmp_timesweep.py \
             --demo "$demo_csv" \
             --replay "$replay_out" \
@@ -107,10 +104,11 @@ for demo_csv in "${TRAJ_FILES[@]}"; do
 done
 
 echo ""
-echo "== Genero i grafici comparativi sulle metriche tra le 3 traiettorie =="
+echo "== Generating comparative metric plots across the 3 trajectories =="
 python3 02_real_data/plot_real_trajectories_study.py \
     --summary-csv "$SUMMARY_CSV" \
     --plot-dir "${PLOT_DIR}"
 
 echo ""
-echo "== Analisi completata. Riepilogo numerico in ${SUMMARY_CSV}, grafici in ${PLOT_DIR}/ =="
+echo "== Analysis completed. Numerical summary in ${SUMMARY_CSV}, plots in ${PLOT_DIR}/ =="
+

@@ -1,9 +1,8 @@
-// Carica un dmp_weights.yaml gia' salvato (formato combinato posizione +
-// orientamento) e genera il replay, in un CSV pronto da confrontare con la
-// demo grezza registrata. Nessun ROS2 richiesto: gira sull'host, con solo
-// Eigen3 + yaml-cpp.
+// Loads a saved dmp_weights.yaml (combined position + orientation format)
+// and generates replay CSV ready for comparison with raw demo.
+// No ROS2 required: host-only with Eigen3 + yaml-cpp.
 //
-// Uso: ./replay_saved_dmp [percorso_dmp_weights.yaml] [durata_extra_secondi]
+// Usage: ./replay_saved_dmp [path_to_dmp_weights.yaml] [extra_duration_sec]
 
 #include <fstream>
 #include <iostream>

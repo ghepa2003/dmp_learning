@@ -1,7 +1,7 @@
 // Standalone test: no ROS2, no Docker, no device needed.
-// Esercita il codice REALE del pacchetto (core::DMP, core::QuaternionDMP,
-// core::dmp_io), su PIU' traiettorie sintetiche diverse, calcolando metriche
-// di fedelta' per ciascuna invece di un solo giudizio visivo.
+// Exercises the package code (core::DMP, core::QuaternionDMP,
+// core::dmp_io) on MULTIPLE synthetic trajectories, computing fidelity
+// metrics for each instead of a single visual assessment.
 
 #include <fstream>
 #include <iostream>
@@ -38,15 +38,15 @@ static void writeCsv(const std::string& path, const std::vector<double>& t,
     }
 }
 
-// Definizione di una traiettoria sintetica: nome, durata, e funzioni
-// posizione/orientamento parametrizzate dal tempo normalizzato s in [0,1].
+// Synthetic trajectory definition: name, duration, and position/orientation
+// functions parameterized by normalized time s in [0,1].
 struct TrajectoryDef {
     std::string name;
     double duration;
     std::function<Eigen::Vector3d(double)> position;
     std::function<Eigen::Quaterniond(double)> orientation;
-    // Offset di goal usato per il test di generalizzazione (posizione, e
-    // angolo/asse per l'orientamento) - applicato SOPRA il goal della demo.
+    // Goal offset used for generalization test (position and orientation)
+    // applied ON TOP of the demo goal.
     Eigen::Vector3d new_goal_offset;
     double new_goal_yaw_deg;
 };

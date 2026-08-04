@@ -1,58 +1,58 @@
 # dmp_offline_test
 
-Test offline (no ROS2, no Docker, no device fisico) per `core::DMP` e
-`core::QuaternionDMP` — punta direttamente ai sorgenti ufficiali del
-pacchetto (`../../src/haptic_dmp_learning`), nessuna copia duplicata.
+Offline test harness (no ROS2, no Docker, no physical device) for `core::DMP` and
+`core::QuaternionDMP` — points directly to the official package source files (`../../src/haptic_dmp_learning`), no duplicate code copies.
 
-## Struttura
+## Structure
 
 ```
 tools/dmp_offline_test/
-├── build/                          # Eseguibili compilati
-├── data/                           # File CSV generati (demo sintetiche, replay, metriche)
-├── weights/                        # File YAML con i pesi DMP generati
-├── plots/                          # Grafici PNG generati
-├── metrics.hpp / metrics.cpp       # metriche di valutazione, LOCALI a tools
-├── test_core_offline.cpp            # test multi-traiettoria sintetico
+├── build/                          # Compiled executables
+├── data/                           # Generated CSV files (synthetic demos, replay, metrics)
+├── weights/                        # Generated YAML files with DMP weights
+├── plots/                          # Generated PNG plots
+├── metrics.hpp / metrics.cpp       # Evaluation metrics, LOCAL to tools
+├── test_core_offline.cpp           # Multi-trajectory synthetic test
 ├── build_and_run.sh
-├── replay_saved_dmp.cpp             # carica un dmp_weights.yaml reale e rigenera il replay
+├── replay_saved_dmp.cpp            # Loads real dmp_weights.yaml and regenerates replay
 ├── replay_build_and_run.sh
-├── plot_dmp_test.py                # grafico demo sintetica vs replay, per traiettoria
-└── plot_real_demo.py               # grafico demo REALE (Geomagic) vs replay + metriche
+├── plot_dmp_test.py                # Plot synthetic demo vs replay, per trajectory
+└── plot_real_demo.py               # Plot REAL demo (Geomagic) vs replay + metrics
 ```
 
-## Test multi-traiettoria sintetico
+## Synthetic Multi-Trajectory Test
 
 ```bash
 chmod +x build_and_run.sh
 ./build_and_run.sh
 ```
 
-Prova **4 traiettorie diverse** in sequenza, ciascuna con motivazione specifica:
+Tests **4 different trajectories** in sequence, each with a specific rationale:
 
-| Traiettoria | Cosa verifica |
+| Trajectory | Purpose |
 |---|---|
-| `reach_semplice` | Caso facile, baseline — fedeltà attesa molto alta |
-| `reach_lift_pitch` | Caso misto (traslazione + gobba + rotazione) — quello usato nei test precedenti |
-| `rotazione_pura` | Spostamento posizionale minimo, rotazione ampia — isola la Quaternion DMP; con lo spostamento di goal previsto innesca il guardrail A |
-| `reach_complesso_gradino` | Profilo quasi a gradino — riproduce (in piccolo) il limite osservato su hardware reale con traiettorie multi-segmento |
+| `reach_semplice` | Simple case, baseline — expected high fidelity |
+| `reach_lift_pitch` | Mixed case (translation + bump + rotation) — used in previous tests |
+| `rotazione_pura` | Minimal positional displacement, wide rotation — isolates Quaternion DMP; triggers guardrail A under new goal |
+| `reach_complesso_gradino` | Step-like profile — reproduces multi-segment trajectory limits observed on real hardware |
 
-Per ciascuna, genera:
-- `data/demo_original_<nome>.csv`, `data/replay_same_goal_<nome>.csv`, `data/replay_new_goal_<nome>.csv`
-- `weights/dmp_weights_<nome>.yaml` (formato combinato posizione + orientamento)
-- Una riga in `data/metrics_summary.csv` per `_same_goal` (RMSE, errore max) e una per `_new_goal` (solo errore finale)
-- Stampa a console eventuali avvisi del guardrail A (`isScaleReliable`)
+For each trajectory, it generates:
+- `data/demo_original_<name>.csv`, `data/replay_same_goal_<name>.csv`, `data/replay_new_goal_<name>.csv`
+- `weights/dmp_weights_<name>.yaml` (combined position + orientation format)
+- A row in `data/metrics_summary.csv` for `_same_goal` (RMSE, max error) and `_new_goal` (final endpoint error)
+- Console warnings for guardrail A (`isScaleReliable`)
 
-## Grafico di una traiettoria specifica
+## Plotting a Specific Trajectory
 
 ```bash
 python3 plot_dmp_test.py reach_lift_pitch
 ```
-Senza argomento, prova `reach_lift_pitch` di default e altrimenti elenca le traiettorie trovate.
 
-## Test con demo REALE dal Geomagic Touch
+Without arguments, defaults to `reach_lift_pitch` or lists available trajectories.
 
-Una volta registrata una demo vera (bottone 0 → muovi il device → bottone 1), il wrapper produce `dmp_weights.yaml` e `dmp_demo_recorded.csv` dentro `~/thesis_ws/`.
+## Test with REAL Demo from Geomagic Touch
+
+Once a real demo is recorded (button 0 → move device → button 1), the wrapper outputs `dmp_weights.yaml` and `dmp_demo_recorded.csv` in `~/thesis_ws/`.
 
 ```bash
 chmod +x replay_build_and_run.sh
@@ -60,8 +60,8 @@ chmod +x replay_build_and_run.sh
 python3 plot_real_demo.py ~/thesis_ws/dmp_demo_recorded.csv
 ```
 
-`plot_real_demo.py` ora stampa anche le metriche (RMSE posizione, errore angolare) direttamente in console, oltre al grafico — stesso identico calcolo di `metrics.cpp`, solo scritto in Python per evitare di dover ricompilare per un confronto singolo.
+`plot_real_demo.py` prints metrics (position RMSE, angular error) directly to console alongside the plot using the exact same formulas as `metrics.cpp`.
 
-## Nota su `metrics.hpp/.cpp`
+## Note on `metrics.hpp/.cpp`
 
-Vivono **solo qui**, non nel pacchetto ROS2 (`src/haptic_dmp_learning`) — sono uno strumento di validazione/test, non qualcosa che il wrapper node usa a runtime. Namespace `dmp_tools::metrics`, distinto da `haptic_dmp_learning::core` per rendere esplicito che non fanno parte del codice "di produzione".
+Located **only here**, not in the ROS2 package (`src/haptic_dmp_learning`) — validation/testing tools only. Uses namespace `dmp_tools::metrics`, separated from `haptic_dmp_learning::core`.

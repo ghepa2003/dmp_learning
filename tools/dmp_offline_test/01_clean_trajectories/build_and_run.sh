@@ -32,3 +32,4 @@ echo "  - Weight YAML files in:     weights/"
 echo "  - Metrics summary in:       data/metrics_summary.csv"
 echo "To plot a trajectory: python3 01_clean_trajectories/plot_dmp_test.py <trajectory_name>"
 echo "Available trajectories: reach_semplice, reach_lift_pitch, rotazione_pura, reach_complesso_gradino"
+

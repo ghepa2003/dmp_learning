@@ -1,7 +1,7 @@
 #pragma once
-// Metriche di valutazione, tenute LOCALI a tools/dmp_offline_test - non fanno
-// parte del pacchetto ROS2 (il wrapper node a runtime non ne ha bisogno,
-// sono uno strumento di validazione/test, non di produzione).
+// Evaluation metrics, kept LOCAL to tools/dmp_offline_test - not part of
+// the ROS2 package (the wrapper node at runtime does not need them,
+// they are a validation/testing tool, not for production).
 #include <vector>
 #include <string>
 #include <Eigen/Core>
@@ -20,15 +20,15 @@ struct OrientationFidelity {
     double max_angular_error_deg = 0.0;
 };
 
-// Ha senso SOLO quando esiste una vera traiettoria di riferimento (replay a
-// parita' di goal) - non per un replay su goal diverso.
+// Only meaningful when a true reference trajectory exists (replay with same goal)
+// - not for replay with a shifted goal.
 TrajectoryFidelity computeTrajectoryFidelity(const std::vector<Eigen::Vector3d>& reference,
                                               const std::vector<Eigen::Vector3d>& replay);
 
 OrientationFidelity computeOrientationFidelity(const std::vector<Eigen::Quaterniond>& reference,
                                                 const std::vector<Eigen::Quaterniond>& replay);
 
-// Uniche metriche sensate quando replay e riferimento hanno goal diversi.
+// Metrics when replay and reference have different goals.
 double computeEndpointError(const Eigen::Vector3d& final_point, const Eigen::Vector3d& expected_goal);
 double computeAngularEndpointError(const Eigen::Quaterniond& final_q, const Eigen::Quaterniond& expected_goal);
 
@@ -36,8 +36,8 @@ void printReport(const std::string& label, const TrajectoryFidelity& tf);
 void printReport(const std::string& label, const OrientationFidelity& of);
 void printEndpointError(const std::string& label, double position_error_mm, double orientation_error_deg);
 
-// Aggiunge una riga a un CSV riassuntivo (crea l'header se il file non esiste
-// ancora) - accumula i risultati di piu' traiettorie/trial nel tempo.
+// Appends a row to summary CSV (creates header if file does not exist yet)
+// - accumulates results of multiple trajectories/trials over time.
 void appendToSummaryCsv(const std::string& csv_path, const std::string& trial_label,
                          const TrajectoryFidelity& tf, const OrientationFidelity& of,
                          double endpoint_pos_error, double endpoint_orient_error_deg,
@@ -45,3 +45,4 @@ void appendToSummaryCsv(const std::string& csv_path, const std::string& trial_la
 
 }  // namespace metrics
 }  // namespace dmp_tools
+

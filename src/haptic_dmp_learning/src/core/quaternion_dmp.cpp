@@ -121,9 +121,9 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     std::vector<Eigen::Vector3d> eta(N), eta_dot(N);
 
     if (use_velocity_filter_) {
-        // Percorso filtrato: traiettoria unwrapped -> smoothing -> derivata,
-        // ripetuto per ciascuno dei due stadi (eta, poi eta_dot), stessa
-        // logica gia' validata per la posizione in DMP::learnFromDemonstration.
+        // Filtered path: unwrapped trajectory -> smoothing -> derivative,
+        // repeated for each of the two stages (eta, then eta_dot), same
+        // logic validated for position in DMP::learnFromDemonstration.
         std::vector<double> t_all(N);
         for (size_t k = 0; k < N; ++k) t_all[k] = demo[k].t;
 
@@ -147,7 +147,7 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             eta_dot[k] = (eta[kp1] - eta[km1]) / dt;
         }
     } else {
-        // Comportamento originale, invariato.
+        // Original behavior, unchanged.
         for (size_t k = 0; k < N; ++k) {
             size_t km1 = (k == 0) ? 0 : k - 1;
             size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
@@ -186,7 +186,7 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     }
 
     if (use_ridge_regression_) {
-        // Joint ridge regression per dimension (stessa logica di
+        // Joint ridge regression per dimension (same logic as
         // DMP::learnFromDemonstration): Phi(k,i) = psi_i(x_k) * x_k,
         // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d.
         Eigen::MatrixXd Phi(N, n_basis_);

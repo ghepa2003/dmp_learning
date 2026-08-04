@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Grafico comparativo del filtro a media mobile a due stadi (test 05_vel_filt_test).
+"""Comparative plot of the two-stage moving average filter (test 05_vel_filt_test).
 
-SPIEGAZIONE DELLA SCALA DEI SEGNALI:
-Le differenze centrali dirette sui dati rumorosi (grezzo) introducono picchi di rumore
-enormi dopo la seconda derivazione:
-  - Accelerazione grezza: da -1400 m/s² a +1200 m/s² (a causa di dt ~ 1ms)
-  - Accelerazione angolare (eta_dot) grezza: da -74.000 rad/s² a +72.000 rad/s²
+SIGNAL SCALE EXPLANATION:
+Direct central differences on noisy data (raw) introduce massive noise spikes
+after the second derivative:
+  - Raw acceleration: from -1400 m/s² to +1200 m/s² (due to dt ~ 1ms)
+  - Raw angular acceleration (eta_dot): from -74,000 rad/s² to +72,000 rad/s²
 
-Per evitare che la scala enorme del rumore grezzo schiacci visivamente a zero il segnale
-filtrato e la verita' ground truth, lo script genera due colonne per ciascun grafico:
-  - Colonna Sinistra (Scala Ampia): Grezzo vs Filtrato (mostra l'abbattimento del rumore)
-  - Colonna Destra (Zoom Dettagliato): Filtrato vs Ground Truth (mostra la fedelta' al vero segnale)
+To prevent raw noise scale from crushing the filtered signal and ground truth
+visually to zero, the script generates two columns for each plot:
+  - Left Column (Wide Scale): Raw vs Filtered (shows noise reduction)
+  - Right Column (Detailed Zoom): Filtered vs Ground Truth (shows signal fidelity)
 """
 
 import argparse
@@ -158,44 +158,43 @@ def compute_filtered_signals(t, pos, quat, tau, dt, w1_sec, w2_sec):
 
 
 def plot_dual_scale_comparison(t, raw_data, filt_data, true_data, title, y_label, output_filename):
-    """Crea un grafico a 2 colonne x 4 righe:
-    - Colonna Sinistra: Grezzo vs Filtrato (Scala globale per il rumore)
-    - Colonna Destra: Zoom Filtrato vs Ground Truth (Scala di dettaglio)
+    """Creates a 2-column x 4-row plot:
+    - Left Column: Raw vs Filtered (Global Scale for noise)
+    - Right Column: Filtered vs Ground Truth (Detailed Zoom Scale)
     """
     raw_norm = np.linalg.norm(raw_data, axis=1)
     filt_norm = np.linalg.norm(filt_data, axis=1)
     true_norm = np.linalg.norm(true_data, axis=1)
 
     signals = [
-        ("Modulo (Norma)", raw_norm, filt_norm, true_norm),
-        ("Componente X", raw_data[:, 0], filt_data[:, 0], true_data[:, 0]),
-        ("Componente Y", raw_data[:, 1], filt_data[:, 1], true_data[:, 1]),
-        ("Componente Z", raw_data[:, 2], filt_data[:, 2], true_data[:, 2]),
+        ("Magnitude (Norm)", raw_norm, filt_norm, true_norm),
+        ("X Component", raw_data[:, 0], filt_data[:, 0], true_data[:, 0]),
+        ("Y Component", raw_data[:, 1], filt_data[:, 1], true_data[:, 1]),
+        ("Z Component", raw_data[:, 2], filt_data[:, 2], true_data[:, 2]),
     ]
 
     fig, axes = plt.subplots(4, 2, figsize=(15, 11), sharex=True)
 
     for idx, (sub_title, raw_s, filt_s, true_s) in enumerate(signals):
-        # Colonna 0: Grezzo vs Filtrato vs True (scala completa)
+        # Column 0: Raw vs Filtered vs True (full scale)
         ax_left = axes[idx, 0]
-        ax_left.plot(t, raw_s, color="crimson", alpha=0.4, linewidth=0.7, label="Grezzo (Rumoroso)")
-        ax_left.plot(t, filt_s, color="dodgerblue", linewidth=1.5, label="Filtrato (Media mobile)")
+        ax_left.plot(t, raw_s, color="crimson", alpha=0.4, linewidth=0.7, label="Raw (Noisy)")
+        ax_left.plot(t, filt_s, color="dodgerblue", linewidth=1.5, label="Filtered (Moving average)")
         ax_left.plot(t, true_s, color="black", linestyle="--", linewidth=1.2, label="Ground Truth")
         ax_left.set_ylabel(y_label)
-        ax_left.set_title(f"{sub_title} - Vista Globale (Abbattimento Rumore)", fontsize=9.5, fontweight="bold")
+        ax_left.set_title(f"{sub_title} - Global View (Noise Reduction)", fontsize=9.5, fontweight="bold")
         ax_left.grid(True, alpha=0.3)
         if idx == 0:
             ax_left.legend(loc="upper right", fontsize=8)
 
-        # Colonna 1: ZOOM solo Filtrato vs Ground Truth (scala scalata sul vero segnale)
+        # Column 1: Detailed ZOOM Filtered vs Ground Truth
         ax_right = axes[idx, 1]
-        ax_right.plot(t, filt_s, color="dodgerblue", linewidth=1.8, label="Filtrato (Media mobile)")
+        ax_right.plot(t, filt_s, color="dodgerblue", linewidth=1.8, label="Filtered (Moving average)")
         ax_right.plot(t, true_s, color="black", linestyle="--", linewidth=1.5, label="Ground Truth")
         ax_right.set_ylabel(y_label)
-        ax_right.set_title(f"{sub_title} - ZOOM DETTAGLIATO (Filtrato vs Truth)", fontsize=9.5, fontweight="bold")
+        ax_right.set_title(f"{sub_title} - DETAILED ZOOM (Filtered vs Truth)", fontsize=9.5, fontweight="bold")
         ax_right.grid(True, alpha=0.3)
 
-        # Autoscale del limite Y basato su filtrato e truth (escludendo i primi/ultimi campioni di bordo se presenti)
         margin_idx = max(1, len(t) // 50)
         v_min = min(np.min(filt_s[margin_idx:-margin_idx]), np.min(true_s[margin_idx:-margin_idx]))
         v_max = max(np.max(filt_s[margin_idx:-margin_idx]), np.max(true_s[margin_idx:-margin_idx]))
@@ -205,71 +204,71 @@ def plot_dual_scale_comparison(t, raw_data, filt_data, true_data, title, y_label
         if idx == 0:
             ax_right.legend(loc="upper right", fontsize=8)
 
-    axes[-1, 0].set_xlabel("Tempo t [s]")
-    axes[-1, 1].set_xlabel("Tempo t [s]")
+    axes[-1, 0].set_xlabel("Time t [s]")
+    axes[-1, 1].set_xlabel("Time t [s]")
 
     fig.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
     fig.tight_layout()
     fig.savefig(output_filename, dpi=150)
     plt.close(fig)
-    print(f"Grafico salvato in: {output_filename}")
+    print(f"Plot saved in: {output_filename}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--demo", default="demo.csv", help="CSV demo rumoroso (default: demo.csv)")
-    parser.add_argument("--truth", default="truth.csv", help="CSV verità ground truth (default: truth.csv)")
-    parser.add_argument("--w1", type=float, default=0.05, help="Finestra 1° stadio in secondi (default: 0.05)")
-    parser.add_argument("--w2", type=float, default=0.05, help="Finestra 2° stadio in secondi (default: 0.05)")
-    parser.add_argument("--output-dir", default="plots", help="Cartella di output per i grafici")
+    parser.add_argument("--demo", default="demo.csv", help="Noisy demo CSV (default: demo.csv)")
+    parser.add_argument("--truth", default="truth.csv", help="Ground truth CSV (default: truth.csv)")
+    parser.add_argument("--w1", type=float, default=0.05, help="Stage 1 window in seconds (default: 0.05)")
+    parser.add_argument("--w2", type=float, default=0.05, help="Stage 2 window in seconds (default: 0.05)")
+    parser.add_argument("--output-dir", default="plots", help="Output directory for plots")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    print(f"Carico {args.demo} e {args.truth}...")
+    print(f"Loading {args.demo} and {args.truth}...")
     t, pos, quat = load_demo(args.demo)
     t_truth, vel_true, acc_true, eta_true, eta_dot_true = load_truth(args.truth)
-    assert np.allclose(t, t_truth), "Mismatch nelle griglie temporali tra demo e truth"
+    assert np.allclose(t, t_truth), "Mismatch in time grids between demo and truth"
 
     tau = t[-1] - t[0]
     dt = t[1] - t[0]
 
-    print(f"Calcolo segnali grezzi vs filtrati (w1={args.w1}s, w2={args.w2}s)...")
+    print(f"Computing raw vs filtered signals (w1={args.w1}s, w2={args.w2}s)...")
     vel_raw, acc_raw, eta_raw, eta_dot_raw = compute_raw_signals(t, pos, quat, tau)
     vel_filt, acc_filt, eta_filt, eta_dot_filt = compute_filtered_signals(t, pos, quat, tau, dt, args.w1, args.w2)
 
-    print("Generazione grafici comparativi a doppia scala (Vista Globale + Zoom Dettagliato)...")
+    print("Generating dual-scale comparative plots (Global View + Detailed Zoom)...")
     plot_dual_scale_comparison(t, vel_raw, vel_filt, vel_true,
-                               f"Confronto Velocita' v(t) [m/s] (w1={args.w1}s, w2={args.w2}s)",
+                               f"Velocity Comparison v(t) [m/s] (w1={args.w1}s, w2={args.w2}s)",
                                "v [m/s]", os.path.join(args.output_dir, "filter_comp_velocity.png"))
 
     plot_dual_scale_comparison(t, acc_raw, acc_filt, acc_true,
-                               f"Confronto Accelerazione a(t) [m/s^2] (w1={args.w1}s, w2={args.w2}s)",
+                               f"Acceleration Comparison a(t) [m/s^2] (w1={args.w1}s, w2={args.w2}s)",
                                "a [m/s^2]", os.path.join(args.output_dir, "filter_comp_acceleration.png"))
 
     plot_dual_scale_comparison(t, eta_raw, eta_filt, eta_true,
-                               f"Confronto Velocita' Angolare eta(t) [rad/s] (w1={args.w1}s, w2={args.w2}s)",
+                               f"Angular Velocity Comparison eta(t) [rad/s] (w1={args.w1}s, w2={args.w2}s)",
                                "eta [rad/s]", os.path.join(args.output_dir, "filter_comp_eta.png"))
 
     plot_dual_scale_comparison(t, eta_dot_raw, eta_dot_filt, eta_dot_true,
-                               f"Confronto Accelerazione Angolare eta_dot(t) [rad/s^2] (w1={args.w1}s, w2={args.w2}s)",
+                               f"Angular Acceleration Comparison eta_dot(t) [rad/s^2] (w1={args.w1}s, w2={args.w2}s)",
                                "eta_dot [rad/s^2]", os.path.join(args.output_dir, "filter_comp_eta_dot.png"))
 
-    # Dashboard 2x2: solo Zoom Filtrato vs Ground Truth per tutti e 4 i moduli
+    # Dashboard 2x2: Detailed Zoom Filtered vs Ground Truth for all 4 norms
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
 
     pairs = [
-        (axes[0, 0], "Velocità |v(t)| [m/s]", np.linalg.norm(vel_filt, axis=1), np.linalg.norm(vel_true, axis=1)),
-        (axes[0, 1], "Accelerazione |a(t)| [m/s²]", np.linalg.norm(acc_filt, axis=1), np.linalg.norm(acc_true, axis=1)),
-        (axes[1, 0], "Velocità Angolare |η(t)| [rad/s]", np.linalg.norm(eta_filt, axis=1), np.linalg.norm(eta_true, axis=1)),
-        (axes[1, 1], "Accelerazione Angolare |η_dot(t)| [rad/s²]", np.linalg.norm(eta_dot_filt, axis=1), np.linalg.norm(eta_dot_true, axis=1)),
+        (axes[0, 0], "Velocity |v(t)| [m/s]", np.linalg.norm(vel_filt, axis=1), np.linalg.norm(vel_true, axis=1)),
+        (axes[0, 1], "Acceleration |a(t)| [m/s²]", np.linalg.norm(acc_filt, axis=1), np.linalg.norm(acc_true, axis=1)),
+        (axes[1, 0], "Angular Velocity |η(t)| [rad/s]", np.linalg.norm(eta_filt, axis=1), np.linalg.norm(eta_true, axis=1)),
+        (axes[1, 1], "Angular Acceleration |η_dot(t)| [rad/s²]", np.linalg.norm(eta_dot_filt, axis=1), np.linalg.norm(eta_dot_true, axis=1)),
     ]
 
     for ax, title, f_s, t_s in pairs:
-        ax.plot(t, f_s, color="dodgerblue", linewidth=1.8, label="Filtrato (Media mobile 2 stadi)")
-        ax.plot(t, t_s, color="black", linestyle="--", linewidth=1.5, label="Ground Truth (Verità)")
+        ax.plot(t, f_s, color="dodgerblue", linewidth=1.8, label="Filtered (2-stage moving average)")
+        ax.plot(t, t_s, color="black", linestyle="--", linewidth=1.5, label="Ground Truth")
         ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Tempo t [s]")
+        ax.set_xlabel("Time t [s]")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="upper right")
 
@@ -279,13 +278,14 @@ def main():
         span = max(1e-5, v_max - v_min)
         ax.set_ylim(v_min - 0.15 * span, v_max + 0.15 * span)
 
-    fig.suptitle(f"Dashboard Zoom Dettagliato: Filtrato vs Ground Truth (w1={args.w1}s, w2={args.w2}s)", fontsize=15, fontweight="bold")
+    fig.suptitle(f"Detailed Zoom Dashboard: Filtered vs Ground Truth (w1={args.w1}s, w2={args.w2}s)", fontsize=15, fontweight="bold")
     fig.tight_layout()
     dash_path = os.path.join(args.output_dir, "filter_comp_dashboard.png")
     fig.savefig(dash_path, dpi=150)
     plt.close(fig)
-    print(f"Dashboard zoom salvato in: {dash_path}")
+    print(f"Zoom dashboard saved in: {dash_path}")
 
 
 if __name__ == "__main__":
     main()
+

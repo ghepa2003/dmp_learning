@@ -1,20 +1,11 @@
-// Impara DMP + QuaternionDMP UNA SOLA VOLTA da una demo "base", poi verifica
-// come si comporta quando le si assegna un goal DIVERSO (posizione E
-// orientamento) tramite setGoal(), SENZA MAI richiamare
-// learnFromDemonstration una seconda volta.
+// Learns DMP + QuaternionDMP ONCE from a base demo, then tests behavior
+// when assigned a DIFFERENT goal (position AND orientation) via setGoal(),
+// WITHOUT calling learnFromDemonstration a second time.
 //
-// Il goal target e l'orientamento target vengono letti dal punto finale di
-// un secondo CSV (target_demo.csv), usato SOLO come riferimento per il
-// nuovo goal e come traiettoria di confronto (dato che le nostre demo
-// sintetiche condividono la stessa forma relativa per costruzione, cfr.
-// generate_picking_trajectory.py) -- target_demo.csv NON viene mai passato
-// a learnFromDemonstration.
+// Target goal is read from the end point of a second CSV (target_demo.csv),
+// used ONLY as a reference for the new goal and comparison trajectory.
 //
-// A differenza di learn_and_test_dmp, qui scale_reliable() e' effettivamente
-// informativo: viene popolato da setGoal() in base al rapporto tra
-// l'ampiezza originale e quella del nuovo goal.
-//
-// Uso:
+// Usage:
 //   ./generalize_test_dmp <base_demo.csv> <target_demo.csv>
 //       <output_replay.csv> <summary.csv> <label>
 //       [n_basis=20] [alpha_x=4.6] [alpha_z=25] [beta_z=6.25]
@@ -37,17 +28,15 @@ using haptic_dmp_learning::core::DMP;
 using haptic_dmp_learning::core::QuaternionDMP;
 using haptic_dmp_learning::core::Sample;
 
-// NOTA: stesse assunzioni su Sample di learn_and_test_dmp.cpp (.t, .position,
-// .orientation). Adattare solo qui se types.hpp usa nomi diversi.
 static std::vector<Sample> loadDemoCsv(const std::string& path) {
     std::ifstream f(path);
     if (!f.good()) {
-        throw std::runtime_error("generalize_test_dmp: impossibile aprire " + path);
+        throw std::runtime_error("generalize_test_dmp: cannot open " + path);
     }
 
     std::vector<Sample> demo;
     std::string line;
-    std::getline(f, line);  // salta l'header
+    std::getline(f, line);  // skip header
 
     while (std::getline(f, line)) {
         if (line.empty()) continue;
@@ -59,7 +48,7 @@ static std::vector<Sample> loadDemoCsv(const std::string& path) {
         }
         if (vals.size() < 8) {
             throw std::runtime_error(
-                "generalize_test_dmp: riga malformata (attesi 8 campi, trovati " +
+                "generalize_test_dmp: malformed line (expected 8 fields, found " +
                 std::to_string(vals.size()) + "): " + line);
         }
 
@@ -71,8 +60,8 @@ static std::vector<Sample> loadDemoCsv(const std::string& path) {
     }
 
     if (demo.size() < 5) {
-        throw std::runtime_error("generalize_test_dmp: demo troppo corta (" +
-                                  std::to_string(demo.size()) + " campioni)");
+        throw std::runtime_error("generalize_test_dmp: demo too short (" +
+                                  std::to_string(demo.size()) + " samples)");
     }
     return demo;
 }
@@ -90,7 +79,7 @@ static void writeReplayCsv(const std::string& path, const std::vector<double>& t
 
 int main(int argc, char** argv) {
     if (argc < 6) {
-        std::cerr << "Uso: " << argv[0]
+        std::cerr << "Usage: " << argv[0]
                   << " <base_demo.csv> <target_demo.csv> <output_replay.csv>"
                   << " <summary.csv> <label>"
                   << " [n_basis=20] [alpha_x=4.6] [alpha_z=25] [beta_z=6.25]\n";
@@ -108,7 +97,7 @@ int main(int argc, char** argv) {
     const double beta_z   = (argc >= 10) ? std::stod(argv[9]) : 6.25;
 
     try {
-        std::cout << "[" << label << "] Apprendo da " << base_csv << " (una sola volta)...\n";
+        std::cout << "[" << label << "] Learning from " << base_csv << " (once)...\n";
         std::vector<Sample> base_demo = loadDemoCsv(base_csv);
 
         DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
@@ -116,15 +105,14 @@ int main(int argc, char** argv) {
         dmp.learnFromDemonstration(base_demo);
         qdmp.learnFromDemonstration(base_demo);
 
-        std::cout << "  Carico target (solo come nuovo goal + riferimento) da "
+        std::cout << "  Loading target (as new goal + reference) from "
                   << target_csv << "...\n";
         std::vector<Sample> target_demo = loadDemoCsv(target_csv);
 
-        // --- Generalizzazione: NIENTE learnFromDemonstration qui ---
         dmp.setGoal(target_demo.back().position);
         qdmp.setGoal(target_demo.back().orientation);
 
-        std::cout << "  scale_reliable dopo setGoal(): x=" << dmp.isScaleReliable(0)
+        std::cout << "  scale_reliable after setGoal(): x=" << dmp.isScaleReliable(0)
                   << " y=" << dmp.isScaleReliable(1)
                   << " z=" << dmp.isScaleReliable(2) << "\n";
 
@@ -170,13 +158,14 @@ int main(int argc, char** argv) {
                            endpoint_pos_error, endpoint_orient_error,
                            dmp.scaleReliable());
 
-        std::cout << "  Salvati: " << output_replay << "\n";
-        std::cout << "  Riepilogo aggiunto a " << summary_csv << "\n";
+        std::cout << "  Saved: " << output_replay << "\n";
+        std::cout << "  Summary appended to " << summary_csv << "\n";
 
     } catch (const std::exception& e) {
-        std::cerr << "ERRORE [" << label << "]: " << e.what() << "\n";
+        std::cerr << "ERROR [" << label << "]: " << e.what() << "\n";
         return 1;
     }
 
     return 0;
 }
+

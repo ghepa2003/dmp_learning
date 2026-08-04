@@ -14,8 +14,8 @@ if [ ! -f "$DEFAULT_YAML" ] && [ -f "weights/dmp_weights_reach_lift_pitch.yaml" 
 fi
 YAML_PATH="${1:-$DEFAULT_YAML}"
 if [ ! -f "$YAML_PATH" ]; then
-    echo "[ERRORE] Il file YAML specificato non esiste: '$YAML_PATH'" >&2
-    echo "Suggerimento: usa '~/thesis_ws/dmp_weights_trajA.yaml' oppure '../../dmp_weights_trajA.yaml' (non dimenticare il tilde ~ o /home/lorenzo/)." >&2
+    echo "[ERROR] The specified YAML file does not exist: '$YAML_PATH'" >&2
+    echo "Hint: use '~/thesis_ws/dmp_weights_trajA.yaml' or '../../dmp_weights_trajA.yaml'" >&2
     exit 1
 fi
 
@@ -38,3 +38,4 @@ fi
 echo ""
 echo "Done. Replay generated in data/replay_from_yaml.csv"
 echo "To plot: python3 02_real_data/plot_real_demo.py"
+

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sweep sul numero di basi (n_basis) per le tre traiettorie reali (Traj A, B, C)
-# confrontando i due metodi di regressione in REG_VARIANTS (es. LWR vs Ridge).
+# Sweep on the number of basis functions (n_basis) for real trajectories (Traj A, B, C)
+# comparing the regression methods in REG_VARIANTS (e.g. LWR vs Ridge).
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ PLOT_DIR="plots/04_basis_sweep/real"
 mkdir -p build data "${PLOT_DIR}" weights
 
 # --------------------------------------------------------------------------
-# Compilazione learn_and_test_dmp
+# Build learn_and_test_dmp
 # --------------------------------------------------------------------------
 PKG_DIR="../../src/haptic_dmp_learning"
 if [ ! -x build/learn_and_test_dmp ] || \
@@ -22,7 +22,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
    [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
-    echo "== Compilazione learn_and_test_dmp =="
+    echo "== Building learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
         -I 03_time_sweep \
@@ -38,7 +38,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
 fi
 
 # --------------------------------------------------------------------------
-# Trova i file demo reali (Traj A, B, C)
+# Find real demo files (Traj A, B, C)
 # --------------------------------------------------------------------------
 TRAJ_ENTRIES=()
 for name in "demo_raw_trajA.csv" "demo_raw_trajB.csv" "demo_raw_trajC.csv"; do
@@ -62,7 +62,7 @@ for name in "demo_raw_trajA.csv" "demo_raw_trajB.csv" "demo_raw_trajC.csv"; do
 done
 
 if [ ${#TRAJ_ENTRIES[@]} -eq 0 ]; then
-    echo "[ERRORE] Nessun file demo_raw_traj*.csv trovato!" >&2
+    echo "[ERROR] No demo_raw_traj*.csv files found!" >&2
     exit 1
 fi
 
@@ -81,7 +81,7 @@ run_single_sweep () {
     rm -f "$summary_csv"
 
     echo "" >&2
-    echo "== Sweep n_basis su ${traj_id} / ${rv_label} (demo: ${demo_csv}) ==" >&2
+    echo "== n_basis sweep on ${traj_id} / ${rv_label} (demo: ${demo_csv}) ==" >&2
     for n_basis in "${N_BASIS_LIST[@]}"; do
         label="nbasis_$(printf '%04d' "$n_basis")_${traj_id}_${rv_label}"
         yaml_out="weights/real_${label}.yaml"
@@ -110,13 +110,13 @@ for entry in "${TRAJ_ENTRIES[@]}"; do
         TRAJ_PLOT_ARGS+=(--summary-csv "$sum_csv" --series-label "${rv_label}")
     done
 
-    # Grafici per la singola traiettoria (LWR vs Ridge per quell'id)
     python3 04_basis_sweep/plot_nbasis_study.py "${TRAJ_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/${t_id}"
 done
 
 echo ""
-echo "== Sweep n_basis completato su tutte le traiettorie reali. Genero i grafici comparativi generali =="
+echo "== n_basis sweep completed on all real trajectories. Generating general comparative plots =="
 python3 04_basis_sweep/plot_nbasis_study.py "${ALL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/all"
 
 echo ""
-echo "== Fatto. Grafici per singola traiettoria in ${PLOT_DIR}/traj*/, grafici generali con le 6 serie in ${PLOT_DIR}/all/ =="
+echo "== Done. Per-trajectory plots in ${PLOT_DIR}/traj*/, overall plots with 6 series in ${PLOT_DIR}/all/ =="
+

@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Legge il CSV cumulativo prodotto da learn_and_test_dmp (via
-appendToSummaryCsv, formato di metrics.cpp/hpp) e produce i grafici di
-studio richiesti:
+"""Reads the cumulative CSV produced by learn_and_test_dmp (via
+appendToSummaryCsv, format from metrics.cpp/hpp) and produces study plots:
 
-  1. metrica vs durata di apprendimento, una linea per ciascun goal
-     (risponde a: "come cambia la traiettoria rispetto a diversi tempi")
-  2. metrica vs goal, a una durata rappresentativa fissata
-     (risponde a: "come cambia la traiettoria dando una serie di goal diversi")
+  1. Metric vs learning duration, one line per goal.
+  2. Metric vs goal, at a fixed representative duration.
 
-Si aspetta che l'etichetta (colonna 'trial') segua il formato prodotto da
-generate_sweep_matrix.py: demo_synth_<durata>s_<nome_goal>
-(es. demo_synth_45s_goalA_main). Se usi un altro schema di nomi, adatta la
-funzione parse_label() qui sotto.
+Expects trial labels to follow format produced by generate_sweep_matrix.py:
+demo_synth_<duration>s_<goal_name> (e.g. demo_synth_45s_goalA_main).
 
-Uso:
+Usage:
     python3 plot_sweep_study.py --summary-csv plot/sweep_results.csv \
         --plot-dir plot --representative-duration 60
 """
@@ -28,14 +23,13 @@ import matplotlib.pyplot as plt
 
 LABEL_RE = re.compile(r"^demo_synth_(\d+(?:\.\d+)?)s_(.+)$")
 
-# Metriche da plottare nello studio vs durata / vs goal, con etichetta leggibile.
 METRICS_TO_PLOT = [
-    ("rmse_overall_mm", "RMSE posizione totale [mm]"),
-    ("max_pos_error_mm", "Errore posizione massimo [mm]"),
-    ("endpoint_pos_error_mm", "Errore posizione finale [mm]"),
-    ("mean_angular_error_deg", "Errore angolare medio [deg]"),
-    ("max_angular_error_deg", "Errore angolare massimo [deg]"),
-    ("endpoint_orient_error_deg", "Errore angolare finale [deg]"),
+    ("rmse_overall_mm", "Total Position RMSE [mm]"),
+    ("max_pos_error_mm", "Max Position Error [mm]"),
+    ("endpoint_pos_error_mm", "Final Position Error [mm]"),
+    ("mean_angular_error_deg", "Mean Angular Error [deg]"),
+    ("max_angular_error_deg", "Max Angular Error [deg]"),
+    ("endpoint_orient_error_deg", "Final Angular Error [deg]"),
 ]
 
 
@@ -55,7 +49,7 @@ def load_summary(path):
         for row in reader:
             duration, goal_name = parse_label(row["trial"])
             if duration is None:
-                print(f"  [attenzione] etichetta non riconosciuta, salto: {row['trial']}")
+                print(f"  [warning] Unrecognized label, skipping: {row['trial']}")
                 continue
             row["_duration"] = duration
             row["_goal"] = goal_name
@@ -73,9 +67,9 @@ def plot_metric_vs_duration(rows, metric_key, metric_label, plot_dir):
             continue
         durations, values = zip(*pts)
         ax.plot(durations, values, marker="o", label=goal)
-    ax.set_xlabel("Durata di apprendimento [s]")
+    ax.set_xlabel("Learning duration [s]")
     ax.set_ylabel(metric_label)
-    ax.set_title(f"{metric_label} vs durata (per goal)")
+    ax.set_title(f"{metric_label} vs Duration (by goal)")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -86,7 +80,6 @@ def plot_metric_vs_duration(rows, metric_key, metric_label, plot_dir):
 
 
 def plot_metric_vs_goal(rows, metric_key, metric_label, duration, plot_dir):
-    # prende la durata disponibile piu' vicina a quella richiesta
     available_durations = sorted(set(r["_duration"] for r in rows))
     if not available_durations:
         return None
@@ -100,7 +93,7 @@ def plot_metric_vs_goal(rows, metric_key, metric_label, duration, plot_dir):
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.bar(goals, values, color="tab:red", alpha=0.8)
     ax.set_ylabel(metric_label)
-    ax.set_title(f"{metric_label} vs goal (durata = {closest:.0f}s)")
+    ax.set_title(f"{metric_label} vs Goal (duration = {closest:.0f}s)")
     ax.tick_params(axis="x", rotation=20)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -113,37 +106,37 @@ def plot_metric_vs_goal(rows, metric_key, metric_label, duration, plot_dir):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--summary-csv", required=True, help="CSV cumulativo prodotto da learn_and_test_dmp")
-    p.add_argument("--plot-dir", default="plot", help="cartella di output per i grafici di studio")
+    p.add_argument("--summary-csv", required=True, help="Cumulative CSV produced by learn_and_test_dmp")
+    p.add_argument("--plot-dir", default="plot", help="output directory for study plots")
     p.add_argument("--representative-duration", type=float, default=60.0,
-                    help="durata (in s) usata per il confronto tra goal diversi; "
-                         "verra' usata la durata disponibile piu' vicina")
+                    help="duration (in s) used for goal comparison; closest available duration will be used")
     args = p.parse_args()
 
     rows = load_summary(args.summary_csv)
     if not rows:
-        print("Nessuna riga valida trovata nel summary CSV.")
+        print("No valid rows found in summary CSV.")
         return
 
     os.makedirs(args.plot_dir, exist_ok=True)
 
     n_goals = len(set(r["_goal"] for r in rows))
     n_durations = len(set(r["_duration"] for r in rows))
-    print(f"Caricate {len(rows)} prove: {n_durations} durate x {n_goals} goal.")
+    print(f"Loaded {len(rows)} trials: {n_durations} durations x {n_goals} goals.")
 
-    print("\n== Grafici metrica vs durata (per goal) ==")
+    print("\n== Metric vs duration plots (per goal) ==")
     for metric_key, metric_label in METRICS_TO_PLOT:
         out_path = plot_metric_vs_duration(rows, metric_key, metric_label, args.plot_dir)
         print(f"  {out_path}")
 
-    print(f"\n== Grafici metrica vs goal (durata rappresentativa richiesta: {args.representative_duration}s) ==")
+    print(f"\n== Metric vs goal plots (requested representative duration: {args.representative_duration}s) ==")
     for metric_key, metric_label in METRICS_TO_PLOT:
         result = plot_metric_vs_goal(rows, metric_key, metric_label,
                                       args.representative_duration, args.plot_dir)
         if result:
             out_path, used_duration = result
-            print(f"  {out_path}  (durata usata: {used_duration:.0f}s)")
+            print(f"  {out_path}  (duration used: {used_duration:.0f}s)")
 
 
 if __name__ == "__main__":
     main()
+

@@ -201,8 +201,8 @@ void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qd
     try {
         root = YAML::LoadFile(filepath);
     } catch (const YAML::BadFile&) {
-        // File assente: nessuna modifica, i due oggetti restano ai default
-        // correnti - attivazione delle feature e' opt-in.
+        // Missing file: no modification, objects remain at current defaults
+        // - feature activation is opt-in.
         return;
     }
 

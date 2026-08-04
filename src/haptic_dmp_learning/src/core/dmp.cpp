@@ -122,11 +122,10 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 }
 
     // Estimate velocity and acceleration via central finite differences.
-    // Se il filtro e' attivo, la media mobile viene applicata PRIMA di
-    // ciascuno dei due stadi di derivazione (non solo sul segnale grezzo in
-    // ingresso) -- uno smoothing singolo migliorerebbe solo la velocita',
-    // lasciando l'accelerazione esposta al rumore introdotto dalla prima
-    // derivazione stessa.
+    // If velocity filter is enabled, moving average smoothing is applied BEFORE
+    // each of the two differentiation stages (not just on raw input signal)
+    // -- a single stage of smoothing would only improve velocity, leaving
+    // acceleration exposed to noise introduced by the first derivative.
     std::vector<double> t_all(N);
     std::vector<Eigen::Vector3d> pos_all(N);
     for (size_t k = 0; k < N; ++k) {
@@ -177,9 +176,9 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
 
     if (use_ridge_regression_) {
         // Joint ridge regression per dimension: Phi(k,i) = psi_i(x_k) * x_k,
-        // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d. A differenza della LWR
-        // indipendente sotto, questa tiene conto dei termini incrociati tra
-        // basi sovrapposte (il Gram off-diagonal non e' assunto nullo).
+        // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d. Unlike independent LWR
+        // below, this accounts for cross-terms between overlapping basis
+        // functions (off-diagonal Gram is not assumed zero).
         Eigen::MatrixXd Phi(N, n_basis_);
         Eigen::VectorXd psi_row(n_basis_);
         for (size_t k = 0; k < N; ++k) {

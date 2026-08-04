@@ -1,54 +1,39 @@
 #!/usr/bin/env bash
-# Sweep sul numero di basi (n_basis). Due modalita':
+# Sweep on the number of basis functions (n_basis). Two modes:
 #
-#   1) Sintetica (default): genera e usa una coppia di demo sintetiche
-#      (pulita + con rumore) sulla stessa forma di traiettoria.
+#   1) Synthetic (default): generates and uses a pair of synthetic demos
+#      (clean + noisy) for the same trajectory shape.
 #        ./run_nbasis_sweep.sh [duration=60] [goal_name=goalA_main]
 #
-#   2) Demo reale: salta la generazione sintetica, fa lo sweep solo sul
-#      file reale fornito.
+#   2) Real demo: skips synthetic generation, runs sweep only on
+#      the provided real CSV file.
 #        ./run_nbasis_sweep.sh --real-demo path/to/demo_raw.csv
 #
-# Modifica N_BASIS_LIST e i parametri di rumore qui sotto per cambiare il
-# range/l'intensita' testati (validi solo in modalita' sintetica).
+# Modify N_BASIS_LIST and noise parameters below to change range/intensity.
 
 set -euo pipefail
 
 REAL_DEMO=""
 if [ "${1:-}" = "--real-demo" ]; then
-    REAL_DEMO="${2:?Uso: $0 --real-demo <path_al_csv>}"
+    REAL_DEMO="${2:?Usage: $0 --real-demo <path_to_csv>}"
     shift 2
 fi
 
 DURATION="${1:-60}"
 GOAL_NAME="${2:-goalA_main}"
 
-# Range di n_basis da testare -- esteso rispetto al primo giro, per vedere
-# se/dove compare comunque un limite (ill-conditioning) anche su dati puliti.
 N_BASIS_LIST=(5 10 15 20 25 30 40 50 60 80 100 150 200 300 500)
 
-# Parametri della traiettoria (stessi usati finora per goalA_main + rotazione).
 DX=0.15
 DY=0.0
 DZ=-0.10
 ROT_AXIS="0,0,1"
 ROT_ANGLE_DEG=15.0
 
-# Parametri del rumore sintetico (imita quantizzazione/jitter reale).
 POS_NOISE_STD=0.0005        # 0.5 mm
 ORIENT_NOISE_STD_DEG=0.1
-# Piu' seed per stimare la variabilita' della serie rumorosa, non un solo
-# campione di rumore -- ciascuno produce un CSV distinto (vedi nota cache).
 NOISE_SEEDS=(42 43 44 45 46)
 
-# Metodi di regressione da confrontare, oltre a pulito/rumoroso gia'
-# esistente. Formato "etichetta:percorso_yaml".
-#
-# Il percorso "ridge" e' lo STESSO file che legge haptic_dmp_wrapper_node.cpp
-# in produzione (parametro ROS2 feature_flags_path, default sotto) -- non una
-# copia per i test. Per testare davvero la ridge regression qui, apri quel
-# file e verifica che contenga "method: \"ridge\"" PRIMA di lanciare lo
-# sweep: essendo lo stesso file, questo script non puo' forzarlo per te.
 REAL_FEATURE_FLAGS_PATH="${HOME}/thesis_ws/dmp_features.yaml"
 REGRESSION_VARIANTS=(
     "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
@@ -69,7 +54,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
    [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
-    echo "== Compilazione learn_and_test_dmp =="
+    echo "== Building learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
         -I 03_time_sweep \
@@ -84,7 +69,7 @@ if [ ! -x build/learn_and_test_dmp ] || \
         -lyaml-cpp
 fi
 
-# Varianti di configurazione (regressione e filtri) da testare.
+# Configuration variants (regression and filtering) to test.
 REG_VARIANTS=(
     "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
     "lwr_filter:04_basis_sweep/test_configs/lwr_filter.yaml"
@@ -96,15 +81,15 @@ run_sweep_variant () {
     local variant_name="$1"   # "clean", "noisy_seed42", "real", etc.
     local demo_csv="$2"
     local rv_label="$3"       # "lwr_nofilter", "lwr_filter", etc.
-    local rv_flags="$4"       # path allo yaml di configurazione
+    local rv_flags="$4"       # path to config yaml
 
     local summary_csv="${PLOT_DIR}/nbasis_sweep_results_${variant_name}_${rv_label}.csv"
     rm -f "$summary_csv"
 
     echo "" >&2
-    echo "== Variante: ${variant_name} | Config: ${rv_label} (demo: ${demo_csv}) ==" >&2
+    echo "== Variant: ${variant_name} | Config: ${rv_label} (demo: ${demo_csv}) ==" >&2
     if [ -n "$rv_flags" ] && [ ! -f "$rv_flags" ]; then
-        echo "[ATTENZIONE] '${rv_flags}' non esiste -- usera' i default." >&2
+        echo "[WARNING] '${rv_flags}' does not exist -- using defaults." >&2
     fi
 
     for n_basis in "${N_BASIS_LIST[@]}"; do
@@ -119,10 +104,10 @@ run_sweep_variant () {
     echo "$summary_csv"
 }
 
-# --- Demo pulita ---
+# --- Clean demo ---
 CLEAN_CSV="data/demo_nbasis_sweep_${DURATION}s_${GOAL_NAME}_clean.csv"
 if [ -z "$REAL_DEMO" ] && [ ! -f "$CLEAN_CSV" ]; then
-    echo "== Genero la demo pulita (${DURATION}s, transizione = durata, nessuna tenuta) =="
+    echo "== Generating clean demo (duration ${DURATION}s) =="
     python3 04_basis_sweep/generate_picking_trajectory.py \
         --duration "$DURATION" --transition-duration "$DURATION" \
         --dx "$DX" --dy "$DY" --dz "$DZ" \
@@ -130,13 +115,13 @@ if [ -z "$REAL_DEMO" ] && [ ! -f "$CLEAN_CSV" ]; then
         --output "$CLEAN_CSV"
 fi
 
-# --- Demo con rumore sintetico: una per ciascun seed in NOISE_SEEDS.
+# --- Synthetic noisy demo: one per seed in NOISE_SEEDS ---
 NOISY_CSVS=()
 if [ -z "$REAL_DEMO" ]; then
     for seed in "${NOISE_SEEDS[@]}"; do
         noisy_csv="data/demo_nbasis_sweep_${DURATION}s_${GOAL_NAME}_noisy_seed${seed}.csv"
         if [ ! -f "$noisy_csv" ]; then
-            echo "== Genero la demo con rumore sintetico, seed=${seed} (pos_std=${POS_NOISE_STD}m, orient_std=${ORIENT_NOISE_STD_DEG}deg) =="
+            echo "== Generating synthetic noisy demo, seed=${seed} (pos_std=${POS_NOISE_STD}m, orient_std=${ORIENT_NOISE_STD_DEG}deg) =="
             python3 04_basis_sweep/generate_picking_trajectory.py \
                 --duration "$DURATION" --transition-duration "$DURATION" \
                 --dx "$DX" --dy "$DY" --dz "$DZ" \
@@ -151,10 +136,10 @@ fi
 
 if [ -n "$REAL_DEMO" ]; then
     if [ ! -f "$REAL_DEMO" ]; then
-        echo "Non trovo il file demo reale: ${REAL_DEMO}"
+        echo "Real demo file not found: ${REAL_DEMO}"
         exit 1
     fi
-    echo "== Modalita' demo reale: ${REAL_DEMO} (nessuna generazione sintetica) =="
+    echo "== Real demo mode: ${REAL_DEMO} (no synthetic generation) =="
     REAL_PLOT_ARGS=()
     for rv in "${REG_VARIANTS[@]}"; do
         rv_label="${rv%%:*}"
@@ -164,15 +149,15 @@ if [ -n "$REAL_DEMO" ]; then
     done
 
     echo ""
-    echo "== Sweep completato. Genero i grafici comparativi (demo reale) =="
+    echo "== Sweep completed. Generating comparative plots (real demo) =="
     python3 04_basis_sweep/plot_nbasis_study.py "${REAL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}"
 
     echo ""
-    echo "== Fatto. Grafici in ${PLOT_DIR}/ =="
+    echo "== Done. Plots in ${PLOT_DIR}/ =="
     exit 0
 fi
 
-# --- 1) Sweep su demo pulita per tutte le configurazioni ---
+# --- 1) Sweep on clean demo for all configurations ---
 CLEAN_PLOT_ARGS=()
 for rv in "${REG_VARIANTS[@]}"; do
     rv_label="${rv%%:*}"
@@ -182,10 +167,10 @@ for rv in "${REG_VARIANTS[@]}"; do
 done
 
 echo ""
-echo "== Genero i grafici comparativi per demo pulita =="
+echo "== Generating comparative plots for clean demo =="
 python3 04_basis_sweep/plot_nbasis_study.py "${CLEAN_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/clean"
 
-# --- 2) Sweep su demo rumorosa per tutte le configurazioni e tutti i seed ---
+# --- 2) Sweep on noisy demo for all configurations and seeds ---
 NOISY_PLOT_ARGS=()
 for rv in "${REG_VARIANTS[@]}"; do
     rv_label="${rv%%:*}"
@@ -199,14 +184,15 @@ for rv in "${REG_VARIANTS[@]}"; do
 done
 
 echo ""
-echo "== Genero i grafici grezzi (tutti i seed per le 4 configurazioni) =="
+echo "== Generating raw plots (all seeds for 4 configurations) =="
 python3 04_basis_sweep/plot_nbasis_study.py "${NOISY_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/noisy"
 
 echo ""
-echo "== Aggrego i seed in media +/- std e genero i grafici comparativi == "
+echo "== Aggregating seeds into mean +/- std and generating comparative plots == "
 python3 04_basis_sweep/aggregate_nbasis_seeds.py \
     --combined-csv "${PLOT_DIR}/noisy/nbasis_all_metrics.csv" \
     --plot-dir "${PLOT_DIR}"
 
 echo ""
-echo "== Fatto. Grafici comparativi aggregati in ${PLOT_DIR}/, grafici puliti in ${PLOT_DIR}/clean/, grafici rumorosi grezzi in ${PLOT_DIR}/noisy/ =="
+echo "== Done. Aggregated comparative plots in ${PLOT_DIR}/, clean plots in ${PLOT_DIR}/clean/, raw noisy plots in ${PLOT_DIR}/noisy/ =="
+

@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Impara la DMP UNA SOLA VOLTA sulla demo "base" (default: goalA_main alla
-# durata scelta), poi la testa su tutti gli altri goal disponibili in data/
-# tramite setGoal(), senza mai reimparare. Scrive un summary CSV separato da
-# quello dello sweep n_basis/durata, perche' la semantica delle metriche e' diversa qui.
+# Learns DMP ONCE on base demo (default: goalA_main at chosen duration),
+# then tests it on all other available goals in data/ via setGoal(), without re-learning.
 
 set -euo pipefail
 
-DURATION="${1:?Uso: $0 <duration_s> [base_goal_name] [n_basis]}"
+DURATION="${1:?Usage: $0 <duration_s> [base_goal_name] [n_basis]}"
 BASE_GOAL="${2:-goalA_main}"
 N_BASIS="${3:-20}"
 
@@ -19,7 +17,7 @@ mkdir -p build data "${PLOT_DIR}" weights
 
 PKG_DIR="../../src/haptic_dmp_learning"
 if [ ! -x build/generalize_test_dmp ]; then
-    echo "== Compilazione generalize_test_dmp =="
+    echo "== Building generalize_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
         -I 03_time_sweep \
@@ -36,7 +34,7 @@ fi
 
 BASE_CSV="data/demo_synth_${DURATION}s_${BASE_GOAL}.csv"
 if [ ! -f "$BASE_CSV" ]; then
-    echo "Non trovo $BASE_CSV -- controlla durata/nome goal o rigenera con: python3 03_time_sweep/generate_sweep_matrix.py --outdir data"
+    echo "Cannot find $BASE_CSV -- check duration/goal name or regenerate with: python3 03_time_sweep/generate_sweep_matrix.py --outdir data"
     exit 1
 fi
 
@@ -47,8 +45,8 @@ shopt -s nullglob
 target_files=(data/demo_synth_${DURATION}s_*.csv)
 shopt -u nullglob
 
-echo "== Base: ${BASE_CSV} (appresa una sola volta) =="
-echo "== Target: ${#target_files[@]} goal alla durata ${DURATION}s =="
+echo "== Base: ${BASE_CSV} (learned once) =="
+echo "== Target: ${#target_files[@]} goals at duration ${DURATION}s =="
 
 for target_csv in "${target_files[@]}"; do
     target_base="$(basename "${target_csv%.csv}")"
@@ -70,6 +68,6 @@ for target_csv in "${target_files[@]}"; do
 done
 
 echo ""
-echo "== Test di generalizzazione completato. Riepilogo in ${SUMMARY_CSV} =="
-echo "   (la riga 'gen_from_${BASE_GOAL}_to_${BASE_GOAL}' e' il caso di controllo:"
-echo "    stesso goal della demo base, dovrebbe avere errore quasi nullo)"
+echo "== Generalization test completed. Summary in ${SUMMARY_CSV} =="
+echo "   ('gen_from_${BASE_GOAL}_to_${BASE_GOAL}' is control case: same goal as base demo)"
+

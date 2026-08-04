@@ -34,10 +34,9 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     // Initialize the DMP with the specified parameters
     dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
 
-    // Applica i feature flag (es. ridge regression) da YAML separato dai
-    // pesi. File assente = nessuna modifica, restano i default (LWR
-    // indipendente) - attivazione opt-in, non richiede questo file per
-    // funzionare come prima.
+    // Applies feature flags (e.g. ridge regression) from separate YAML file
+    // from weights. Missing file = no changes, defaults remain (independent LWR)
+    // - opt-in activation, does not require this file to work as before.
     core::dmp_io::applyFeatureConfig(feature_flags_path_, dmp_, quat_dmp_);
 
     // Initialize the subscriptions to the Geomagic Touch topics

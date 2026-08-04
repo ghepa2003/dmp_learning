@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Valuta il filtro a MEDIA MOBILE A DUE STADI per la stima di velocita'/
-accelerazione (posizione) ed eta/eta_dot (orientamento), confrontandolo con
-lo stimatore grezzo attuale (differenze centrali dirette sui dati) contro
-una verita' nota in forma chiusa.
+"""Evaluates the TWO-STAGE MOVING AVERAGE FILTER for estimating velocity/
+acceleration (position) and eta/eta_dot (orientation), comparing it with
+the raw central difference estimator against closed-form ground truth.
 
-Perche' "a due stadi": la pipeline attuale deriva due volte in cascata
-(posizione -> velocita' -> accelerazione; log-map -> eta -> eta_dot). Uno
-smoothing applicato una sola volta sul segnale grezzo migliora bene il primo
-stadio ma lascia rumore residuo (introdotto dalla prima derivazione stessa)
-nel secondo. Questo script applica la stessa media mobile PRIMA di ciascuno
-dei due stadi, senza toccare la formula di differenza centrale gia' presente
-nel core -- solo un pre-filtraggio in due punti.
+Why "two-stage": the pipeline differentiates twice in cascade (position ->
+velocity -> acceleration; log-map -> eta -> eta_dot). Smoothing applied only
+once on the raw signal improves the first derivative but leaves residual noise
+in the second derivative. This script applies moving average smoothing BEFORE
+each of the two differentiation stages.
 
-Nessuna dipendenza da scipy (solo numpy), coerente con l'ambiente del
-progetto.
-
-Uso:
+Usage:
     python3 evaluate_moving_average_filter.py \
         --demo demo_noisy.csv --truth demo_truth.csv \
         --window-sec-1 0.1 0.2 0.5 --window-sec-2 0.1 0.2 0.5 \
@@ -29,7 +23,7 @@ import numpy as np
 
 
 # --------------------------------------------------------------------------
-# Caricamento CSV
+# CSV Loading
 # --------------------------------------------------------------------------
 
 def load_demo(path):
@@ -57,7 +51,7 @@ def load_truth(path):
 
 
 # --------------------------------------------------------------------------
-# Quaternioni (w,x,y,z), stessa convenzione di Eigen::Quaterniond
+# Quaternions (w,x,y,z), matching Eigen::Quaterniond convention
 # --------------------------------------------------------------------------
 
 def quat_normalize(q):
@@ -80,7 +74,7 @@ def quat_multiply(q1, q2):
 
 
 def log_map(q):
-    """Replica esatta di QuaternionDMP::logMap."""
+    """Exact replica of QuaternionDMP::logMap."""
     v = q[1:4]
     vnorm = np.linalg.norm(v)
     if vnorm < 1e-8:
@@ -91,8 +85,7 @@ def log_map(q):
 
 
 def central_diff(t, signal):
-    """Replica ESATTA delle differenze centrali gia' presenti in
-    dmp.cpp/quaternion_dmp.cpp, incluso il clamping degli indici ai bordi."""
+    """EXACT replica of central differences in dmp.cpp / quaternion_dmp.cpp."""
     N = len(t)
     out = np.zeros_like(signal)
     for k in range(N):
@@ -106,7 +99,7 @@ def central_diff(t, signal):
 
 
 # --------------------------------------------------------------------------
-# Stimatore GREZZO (baseline attuale, nessun filtro)
+# RAW Estimator (baseline, no filtering)
 # --------------------------------------------------------------------------
 
 def raw_position_derivatives(t, pos):
@@ -116,10 +109,7 @@ def raw_position_derivatives(t, pos):
 
 
 def raw_orientation_derivatives(t, quat, tau):
-    """Replica ESATTA di QuaternionDMP::learnFromDemonstration: omega stimata
-    da rotazione INCREMENTALE tra campioni k-1/k+1 (non rispetto a un
-    riferimento fisso) -- valida per qualunque percorso, non solo rotazioni
-    ad asse fisso."""
+    """EXACT replica of QuaternionDMP::learnFromDemonstration."""
     N = len(t)
     eta = np.zeros((N, 3))
     for k in range(N):
@@ -138,12 +128,8 @@ def raw_orientation_derivatives(t, quat, tau):
 
 
 def unwrap_rotation_vector(t, quat):
-    """Costruisce una traiettoria CONTINUA in R^3 (coordinate tangenti)
-    integrando cumulativamente gli incrementi di rotazione LOCALI tra
-    campioni consecutivi -- a differenza di logMap(q(t)*q0^-1), questo resta
-    valido anche se l'asse di rotazione cambia nel tempo (percorso non
-    vincolato a un'unica geodetica), perche' ogni incremento e' piccolo per
-    costruzione (campioni adiacenti nel tempo)."""
+    """Constructs a CONTINUOUS trajectory in R^3 (tangent coordinates)
+    integrating LOCAL rotation increments between consecutive samples."""
     N = len(t)
     r = np.zeros((N, 3))
     for k in range(1, N):
@@ -153,14 +139,13 @@ def unwrap_rotation_vector(t, quat):
         qk = quat_normalize(quat[k])
         qkm1 = quat_normalize(quat[k - 1])
         dq = quat_multiply(qk, quat_conjugate(qkm1))
-        incr = 2.0 * log_map(dq)  # incremento di rotazione (rad) tra k-1 e k
+        incr = 2.0 * log_map(dq)
         r[k] = r[k - 1] + incr
     return r
 
 
 # --------------------------------------------------------------------------
-# Filtro: media mobile centrata, finestra ridotta simmetricamente vicino ai
-# bordi veri (nessun padding, nessun dato inventato oltre gli estremi).
+# Filter: centered moving average
 # --------------------------------------------------------------------------
 
 def moving_average_smooth(signal, window_samples):
@@ -175,8 +160,7 @@ def moving_average_smooth(signal, window_samples):
 
 
 def filtered_position_derivatives(t, pos, dt, window_sec_1, window_sec_2):
-    """Media mobile PRIMA di ciascuno dei due stadi di derivazione, non solo
-    sul segnale grezzo in ingresso."""
+    """Moving average BEFORE each of the two differentiation stages."""
     w1 = max(1, int(round(window_sec_1 / dt)))
     w2 = max(1, int(round(window_sec_2 / dt)))
     pos_s = moving_average_smooth(pos, w1)
@@ -187,9 +171,7 @@ def filtered_position_derivatives(t, pos, dt, window_sec_1, window_sec_2):
 
 
 def filtered_orientation_derivatives(t, quat, tau, dt, window_sec_1, window_sec_2):
-    """Come filtered_position_derivatives, ma sulla traiettoria unwrapped
-    (coordinate tangenti costruite per accumulo di incrementi locali, valida
-    per percorsi di rotazione generali)."""
+    """Same as filtered_position_derivatives for unwrapped rotation vector."""
     w1 = max(1, int(round(window_sec_1 / dt)))
     w2 = max(1, int(round(window_sec_2 / dt)))
     r = unwrap_rotation_vector(t, quat)
@@ -201,7 +183,7 @@ def filtered_orientation_derivatives(t, quat, tau, dt, window_sec_1, window_sec_
 
 
 # --------------------------------------------------------------------------
-# Metriche
+# Metrics
 # --------------------------------------------------------------------------
 
 def rmse(est, truth):
@@ -211,22 +193,22 @@ def rmse(est, truth):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--demo", required=True, help="CSV rumoroso (t,x,y,z,qw,qx,qy,qz)")
-    p.add_argument("--truth", required=True, help="CSV verita' nota (da generate_truth)")
+    p.add_argument("--demo", required=True, help="Noisy CSV (t,x,y,z,qw,qx,qy,qz)")
+    p.add_argument("--truth", required=True, help="Ground truth CSV (from generate_truth)")
     p.add_argument("--window-sec-1", type=float, nargs="+", default=[0.1, 0.2, 0.5],
-                    help="finestre (s) per il PRIMO stadio (posizione->velocita', logmap->eta)")
+                    help="windows (s) for FIRST stage (position->velocity, logmap->eta)")
     p.add_argument("--window-sec-2", type=float, nargs="+", default=[0.1, 0.2, 0.5],
-                    help="finestre (s) per il SECONDO stadio (velocita'->accelerazione, eta->eta_dot)")
+                    help="windows (s) for SECOND stage (velocity->acceleration, eta->eta_dot)")
     p.add_argument("--output-csv", default="ma_eval_results.csv")
     args = p.parse_args()
 
     t, pos, quat = load_demo(args.demo)
     t_truth, vel_true, acc_true, eta_true, eta_dot_true = load_truth(args.truth)
-    assert np.allclose(t, t_truth), "griglia temporale demo/truth non allineata"
+    assert np.allclose(t, t_truth), "time grid demo/truth mismatch"
     tau = t[-1] - t[0]
     dt = t[1] - t[0]
 
-    print(f"Caricati {len(t)} campioni, tau={tau:.3f}s, dt={dt:.4f}s\n")
+    print(f"Loaded {len(t)} samples, tau={tau:.3f}s, dt={dt:.4f}s\n")
 
     rows = []
 
@@ -235,7 +217,7 @@ def main():
     rmse_vel_raw, rmse_acc_raw = rmse(vel_raw, vel_true), rmse(acc_raw, acc_true)
     rmse_eta_raw, rmse_eta_dot_raw = rmse(eta_raw, eta_true), rmse(eta_dot_raw, eta_dot_true)
     rows.append(["raw", "-", "-", rmse_vel_raw, rmse_acc_raw, rmse_eta_raw, rmse_eta_dot_raw])
-    print(f"[grezzo]                     vel={rmse_vel_raw:.6f}  acc={rmse_acc_raw:.6f}  "
+    print(f"[raw]                        vel={rmse_vel_raw:.6f}  acc={rmse_acc_raw:.6f}  "
           f"eta={rmse_eta_raw:.6f}  eta_dot={rmse_eta_dot_raw:.6f}")
 
     for w1 in args.window_sec_1:
@@ -245,7 +227,7 @@ def main():
             rv, ra = rmse(vel_f, vel_true), rmse(acc_f, acc_true)
             re, red = rmse(eta_f, eta_true), rmse(eta_dot_f, eta_dot_true)
             rows.append(["filtered", w1, w2, rv, ra, re, red])
-            print(f"[media w1={w1:>4}s w2={w2:>4}s]     vel={rv:.6f}  acc={ra:.6f}  "
+            print(f"[moving avg w1={w1:>4}s w2={w2:>4}s] vel={rv:.6f}  acc={ra:.6f}  "
                   f"eta={re:.6f}  eta_dot={red:.6f}")
 
     with open(args.output_csv, "w", newline="") as f:
@@ -253,8 +235,9 @@ def main():
         writer.writerow(["method", "window_sec_1", "window_sec_2",
                           "rmse_vel", "rmse_acc", "rmse_eta", "rmse_eta_dot"])
         writer.writerows(rows)
-    print(f"\nRisultati scritti in {args.output_csv}")
+    print(f"\nResults written to {args.output_csv}")
 
 
 if __name__ == "__main__":
     main()
+

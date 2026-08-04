@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Compila learn_and_test_dmp e lancia l'intero sweep su tutte le demo
-# sintetiche presenti in data/. Per ciascuna prova: impara + replay in-process
-# + metriche (via metrics.cpp/hpp) + plot per-singola-prova. Alla fine genera
-# anche il grafico di studio aggregato (metrica vs durata, metrica vs goal).
+# Builds learn_and_test_dmp and runs full sweep on all synthetic demos
+# present in data/. For each trial: learn + replay in-process + metrics
+# (via metrics.cpp/hpp) + per-trial plot. Finally generates aggregated study plots.
 
 set -euo pipefail
 
@@ -16,10 +15,10 @@ cd "$ROOT_DIR"
 PLOT_DIR="plots/03_time_sweep"
 mkdir -p build data "${PLOT_DIR}" weights
 
-# --- Compilazione -----------------------------------------------------
+# --- Build -----------------------------------------------------
 PKG_DIR="../../src/haptic_dmp_learning"
 
-echo "== Compilazione learn_and_test_dmp =="
+echo "== Building learn_and_test_dmp =="
 g++ -std=c++17 -O2 \
     -I "${PKG_DIR}/include" \
     -I 03_time_sweep \
@@ -42,11 +41,11 @@ demo_files=(data/demo_synth_*.csv)
 shopt -u nullglob
 
 if [ ${#demo_files[@]} -eq 0 ]; then
-    echo "Nessun file demo_synth_*.csv trovato in data/. Genera prima la matrice con: python3 03_time_sweep/generate_sweep_matrix.py --outdir data"
+    echo "No demo_synth_*.csv files found in data/. Generate matrix first with: python3 03_time_sweep/generate_sweep_matrix.py --outdir data"
     exit 1
 fi
 
-echo "== Trovate ${#demo_files[@]} demo, n_basis=${N_BASIS} =="
+echo "== Found ${#demo_files[@]} demos, n_basis=${N_BASIS} =="
 
 for demo_csv in "${demo_files[@]}"; do
     base="$(basename "${demo_csv%.csv}")"
@@ -69,11 +68,12 @@ for demo_csv in "${demo_files[@]}"; do
 done
 
 echo ""
-echo "== Sweep completato. Genero i grafici di studio aggregati =="
+echo "== Sweep completed. Generating aggregated study plots =="
 python3 03_time_sweep/plot_sweep_study.py \
     --summary-csv "$SUMMARY_CSV" \
     --plot-dir "${PLOT_DIR}" \
     --representative-duration "$REPRESENTATIVE_DURATION"
 
 echo ""
-echo "== Fatto. Riepilogo numerico in ${SUMMARY_CSV}, grafici in ${PLOT_DIR}/ =="
+echo "== Done. Numerical summary in ${SUMMARY_CSV}, plots in ${PLOT_DIR}/ =="
+

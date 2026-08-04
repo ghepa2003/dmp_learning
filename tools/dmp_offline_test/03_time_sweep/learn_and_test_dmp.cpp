@@ -1,14 +1,9 @@
-// Impara una DMP + QuaternionDMP da un CSV di demo, fa il replay IN-PROCESS
-// (senza passare da un giro di salvataggio/ricarica YAML intermedio, per non
-// perdere lo stato di scale_reliable_), e calcola le metriche di fedelta'
-// riusando le funzioni gia' esistenti in metrics.cpp/hpp -- niente logica di
-// metriche duplicata altrove.
+// Learns a DMP + QuaternionDMP from a demo CSV, replays IN-PROCESS,
+// and computes fidelity metrics reusing metrics.cpp/hpp.
 //
-// Scrive comunque il YAML dei pesi (utile per ispezione/riuso) e il CSV del
-// replay (usato poi da plot_dmp_test.py solo per i grafici per-singola-prova,
-// non per ricalcolare le metriche).
+// Writes the weights YAML and replay CSV.
 //
-// Uso:
+// Usage:
 //   ./learn_and_test_dmp <input_demo.csv> <output_weights.yaml>
 //       <output_replay.csv> <summary.csv> <label>
 //       [n_basis=20] [alpha_x=4.6] [alpha_z=25] [beta_z=6.25]
@@ -31,18 +26,15 @@ using haptic_dmp_learning::core::DMP;
 using haptic_dmp_learning::core::QuaternionDMP;
 using haptic_dmp_learning::core::Sample;
 
-// NOTA: assume che Sample abbia i campi .t (double), .position (Eigen::Vector3d),
-// .orientation (Eigen::Quaterniond) -- stesso pattern gia' visto in
-// dmp.cpp/quaternion_dmp.cpp. Adattare solo qui se types.hpp usa nomi diversi.
 static std::vector<Sample> loadDemoCsv(const std::string& path) {
     std::ifstream f(path);
     if (!f.good()) {
-        throw std::runtime_error("learn_and_test_dmp: impossibile aprire " + path);
+        throw std::runtime_error("learn_and_test_dmp: cannot open " + path);
     }
 
     std::vector<Sample> demo;
     std::string line;
-    std::getline(f, line);  // salta l'header (t,x,y,z,qw,qx,qy,qz)
+    std::getline(f, line);  // skip header (t,x,y,z,qw,qx,qy,qz)
 
     while (std::getline(f, line)) {
         if (line.empty()) continue;
@@ -54,7 +46,7 @@ static std::vector<Sample> loadDemoCsv(const std::string& path) {
         }
         if (vals.size() < 8) {
             throw std::runtime_error(
-                "learn_and_test_dmp: riga malformata (attesi 8 campi, trovati " +
+                "learn_and_test_dmp: malformed line (expected 8 fields, found " +
                 std::to_string(vals.size()) + "): " + line);
         }
 
@@ -66,8 +58,8 @@ static std::vector<Sample> loadDemoCsv(const std::string& path) {
     }
 
     if (demo.size() < 5) {
-        throw std::runtime_error("learn_and_test_dmp: demo troppo corta (" +
-                                  std::to_string(demo.size()) + " campioni)");
+        throw std::runtime_error("learn_and_test_dmp: demo too short (" +
+                                  std::to_string(demo.size()) + " samples)");
     }
     return demo;
 }
@@ -85,12 +77,12 @@ static void writeReplayCsv(const std::string& path, const std::vector<double>& t
 
 int main(int argc, char** argv) {
     if (argc < 6) {
-        std::cerr << "Uso: " << argv[0]
+        std::cerr << "Usage: " << argv[0]
                   << " <input_demo.csv> <output_weights.yaml> <output_replay.csv>"
                   << " <summary.csv> <label>"
                   << " [n_basis|-] [alpha_x|-] [alpha_z|-] [beta_z|-]"
                   << " [feature_flags_path='']\n"
-                  << "  '-' o argomento omesso = usa il default reale della classe DMP\n";
+                  << "  '-' or omitted argument = use compiled DMP class defaults\n";
         return 1;
     }
 
@@ -99,13 +91,8 @@ int main(int argc, char** argv) {
     const std::string output_replay = argv[3];
     const std::string summary_csv  = argv[4];
     const std::string label        = argv[5];
-    // Sonde di default: leggono i valori REALMENTE compilati in DMP/QuaternionDMP
-    // (dmp.hpp/quaternion_dmp.hpp) invece di riscriverli qui come costanti --
-    // se cambi un default nel core, questo tool lo segue senza modifiche.
     const DMP dmp_defaults;
 
-    // Sentinella "-" (o argomento assente) = "usa il default reale", non un
-    // numero duplicato scritto a mano.
     auto parseOrDefault = [](const char* arg, double fallback) -> double {
         std::string s = arg ? arg : "-";
         return (s == "-") ? fallback : std::stod(s);
@@ -119,9 +106,6 @@ int main(int argc, char** argv) {
     const double alpha_x  = parseOrDefault((argc >= 8)  ? argv[7] : nullptr, dmp_defaults.alphaX());
     const double alpha_z  = parseOrDefault((argc >= 9)  ? argv[8] : nullptr, dmp_defaults.alphaZ());
     const double beta_z   = parseOrDefault((argc >= 10) ? argv[9] : nullptr, dmp_defaults.betaZ());
-    // Vuoto (default) = nessun feature flag applicato, comportamento
-    // invariato (LWR indipendente). Se fornito, deve puntare allo STESSO file
-    // che legge haptic_dmp_wrapper_node.cpp in produzione -- non una copia.
     std::string feature_flags_path = (argc >= 11) ? argv[10] : "";
     if (feature_flags_path.empty()) {
         const std::string default_path = "../../src/haptic_dmp_learning/config/dmp_features.yaml";
@@ -132,38 +116,31 @@ int main(int argc, char** argv) {
     }
 
     try {
-        std::cout << "[" << label << "] Carico demo da " << input_csv << "...\n";
+        std::cout << "[" << label << "] Loading demo from " << input_csv << "...\n";
         std::vector<Sample> demo = loadDemoCsv(input_csv);
         const double duration = demo.back().t - demo.front().t;
-        std::cout << "  " << demo.size() << " campioni, durata " << duration << "s\n";
+        std::cout << "  " << demo.size() << " samples, duration " << duration << "s\n";
 
         DMP dmp(n_basis, alpha_x, alpha_z, beta_z);
         QuaternionDMP qdmp(n_basis, alpha_x, alpha_z, beta_z);
 
         if (!feature_flags_path.empty()) {
             haptic_dmp_learning::core::dmp_io::applyFeatureConfig(feature_flags_path, dmp, qdmp);
-            std::cout << "  [Config YAML] Caricato " << feature_flags_path
-                      << " -> Metodo di regressione: " << (dmp.ridgeRegressionEnabled() ? "RIDGE" : "INDEPENDENT_LWR")
-                      << " | Sistema canonico: " << (dmp.secondOrderCanonical() ? "2ND_ORDER" : "1ST_ORDER")
-                      << " | filtro=" << (dmp.velocityFilterEnabled() ? "on" : "off")
+            std::cout << "  [Config YAML] Loaded " << feature_flags_path
+                      << " -> Regression method: " << (dmp.ridgeRegressionEnabled() ? "RIDGE" : "INDEPENDENT_LWR")
+                      << " | Canonical system: " << (dmp.secondOrderCanonical() ? "2ND_ORDER" : "1ST_ORDER")
+                      << " | filter=" << (dmp.velocityFilterEnabled() ? "on" : "off")
                       << "\n";
         } else {
-            std::cout << "  [Config YAML] Nessun file di configurazione -> Metodo di regressione: INDEPENDENT_LWR (default) | Sistema canonico: 1ST_ORDER (default) | Filtro: unabled (default) \n";
+            std::cout << "  [Config YAML] No configuration file -> Regression method: INDEPENDENT_LWR (default) | Canonical system: 1ST_ORDER (default) | Filter: unabled (default)\n";
         }
 
-        std::cout << "  Apprendimento (n_basis=" << n_basis << ")...\n";
+        std::cout << "  Learning (n_basis=" << n_basis << ")...\n";
         dmp.learnFromDemonstration(demo);
         qdmp.learnFromDemonstration(demo);
 
         haptic_dmp_learning::core::dmp_io::saveToYaml(dmp, qdmp, output_yaml);
 
-        // --- Replay IN-PROCESS, stesso numero di campioni e stessa base
-        // temporale della demo (cosi' il confronto per indice fatto da
-        // metrics.cpp resta valido: qui non c'e' jitter/campionamento
-        // irregolare come nelle demo reali, quindi il confronto per indice
-        // e' sicuro; se in futuro riuserai questo stesso tool su demo REALI
-        // andra' introdotto un riallineamento per timestamp, come gia' fatto
-        // in plot_real_demo.py). ---
         dmp.reset();
         qdmp.reset();
 
@@ -193,7 +170,6 @@ int main(int argc, char** argv) {
 
         writeReplayCsv(output_replay, t_out, replay_pos, replay_orient);
 
-        // --- Metriche, riusando metrics.cpp/hpp cosi' come sono ---
         using namespace dmp_tools::metrics;
 
         TrajectoryFidelity tf = computeTrajectoryFidelity(ref_pos, replay_pos);
@@ -209,13 +185,14 @@ int main(int argc, char** argv) {
                            endpoint_pos_error, endpoint_orient_error,
                            dmp.scaleReliable());
 
-        std::cout << "  Salvati: " << output_yaml << ", " << output_replay << "\n";
-        std::cout << "  Riepilogo aggiunto a " << summary_csv << "\n";
+        std::cout << "  Saved: " << output_yaml << ", " << output_replay << "\n";
+        std::cout << "  Summary appended to " << summary_csv << "\n";
 
     } catch (const std::exception& e) {
-        std::cerr << "ERRORE [" << label << "]: " << e.what() << "\n";
+        std::cerr << "ERROR [" << label << "]: " << e.what() << "\n";
         return 1;
     }
 
     return 0;
 }
+

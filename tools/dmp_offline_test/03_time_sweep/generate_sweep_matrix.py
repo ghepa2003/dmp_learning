@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""Genera l'intera matrice di traiettorie sintetiche per lo sweep:
-range di durate (default 30-90s) x un set di goal diversi (spostamenti
-orizzontali/verticali diversi), tutte con lo stesso profilo minimum-jerk
-"picking" (orizzontale poi verticale, transizione smussata).
+"""Generates the full matrix of synthetic trajectories for the sweep:
+range of durations (default 30-90s) x a set of different goals, all with
+the same minimum-jerk "picking" profile.
 
-Scrive i CSV in una cartella di output, piu' un manifest.csv con i
-parametri di ciascun file generato, cosi' da poter incrociare
-facilmente durata/goal con i risultati del fit una volta fatto lo sweep
-sul lato C++.
+Writes CSVs into an output directory, plus a manifest.csv with parameters
+of each generated file.
 
-Uso:
+Usage:
     python3 generate_sweep_matrix.py --outdir sweep_demos
-
-Personalizza le liste DURATIONS e GOALS qui sotto secondo necessita'.
 """
 import argparse
 import csv
@@ -20,29 +15,17 @@ import os
 
 from generate_picking_trajectory import generate, write_csv
 
-# Range di durate da testare (in secondi). Modifica liberamente.
+# Range of durations to test (in seconds).
 DURATIONS = [30, 45, 60, 75, 90]
 
-# Durata ASSOLUTA (in secondi) del solo movimento orizzontale+verticale,
-# indipendente da DURATIONS: e' cio' che rende lo sweep sui tempi
-# significativo per lo studio di risoluzione delle basi (la stessa
-# caratteristica di moto si "comprime" in una frazione di fase sempre
-# minore al crescere della durata totale, invece di essere semplicemente
-# dilatata in modo invariante come farebbe la DMP con una forma dilatata
-# uniformemente). Imposta un valore realistico per il tuo task reale.
+# ABSOLUTE duration (in seconds) of horizontal+vertical movement.
 TRANSITION_DURATION = 10.0
 
-# Rotazione del pennino durante il movimento (stessa finestra temporale
-# della transizione posizionale). "Lieve variazione" per osservare l'effetto
-# sulla Quaternion DMP senza introdurre una rotazione cosi' ampia da rendere
-# il confronto tra demo dominato da quella sola componente.
-ROT_AXIS = (0.0, 0.0, 1.0)   # imbardata (yaw) attorno all'asse verticale
+# Stylus rotation during motion.
+ROT_AXIS = (0.0, 0.0, 1.0)   # yaw around z-axis
 ROT_ANGLE_DEG = 15.0
 
-# Goal diversi da testare (dx, dy, dz) in metri. Modifica liberamente.
-# Il primo e' il caso "principale" (rappresentativo del task reale);
-# gli altri servono a verificare la sensibilita' della DMP a goal
-# diversi con la stessa durata.
+# Different goals to test (dx, dy, dz) in meters.
 GOALS = {
     "goalA_main":     (0.15,  0.00, -0.10),
     "goalB_wide":     (0.25,  0.05, -0.12),
@@ -54,8 +37,8 @@ GOALS = {
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--outdir", required=True, help="cartella di output per i CSV generati")
-    p.add_argument("--dt", type=float, default=0.001, help="passo di campionamento [s]")
+    p.add_argument("--outdir", required=True, help="output directory for generated CSVs")
+    p.add_argument("--dt", type=float, default=0.001, help="sampling step [s]")
     args = p.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -74,11 +57,12 @@ def main():
                                  rot_axis=ROT_AXIS, rot_angle_deg=ROT_ANGLE_DEG)
                 write_csv(rows, fpath)
                 writer.writerow([fname, duration, TRANSITION_DURATION, goal_name, dx, dy, dz])
-                print(f"  {fname}: {len(rows)} campioni")
+                print(f"  {fname}: {len(rows)} samples")
 
     n_total = len(DURATIONS) * len(GOALS)
-    print(f"\nGenerati {n_total} file in {args.outdir}/ (manifest: {manifest_path})")
+    print(f"\nGenerated {n_total} files in {args.outdir}/ (manifest: {manifest_path})")
 
 
 if __name__ == "__main__":
     main()
+

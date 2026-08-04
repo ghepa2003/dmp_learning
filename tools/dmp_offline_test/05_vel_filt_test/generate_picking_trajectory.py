@@ -305,7 +305,7 @@ def main():
         noise_seed=args.noise_seed,
     )
     write_csv(rows, args.output)
-    print(f"Scritto {args.output}: {len(rows)} campioni, ...")
+    print(f"Wrote {args.output}: {len(rows)} samples, ...")
 
     if args.output_truth:
         truth_rows = generate_truth(
@@ -316,8 +316,9 @@ def main():
             rot_axis=rot_axis, rot_angle_deg=args.rot_angle_deg,
         )
         write_truth_csv(truth_rows, args.output_truth)
-        print(f"Scritto {args.output_truth}: {len(truth_rows)} campioni (verita' nota)")
+        print(f"Wrote {args.output_truth}: {len(truth_rows)} samples (ground truth)")
 
 
 if __name__ == "__main__":
     main()
+
