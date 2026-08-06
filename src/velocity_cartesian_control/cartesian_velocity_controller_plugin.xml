@@ -1,0 +1,9 @@
+<library path="velocity_cartesian_control">
+  <class name="velocity_cartesian_control/CartesianVelocityController"
+         type="velocity_cartesian_control::ros_wrapper::CartesianVelocityController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Resolved-rate Cartesian velocity controller (DLS pseudo-inverse), reading target pose from a topic.
+    </description>
+  </class>
+</library>

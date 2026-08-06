@@ -38,6 +38,7 @@ void DMP::initBasisFunctions() {
 
     Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
     centers_.resize(n_basis_);
+
     // Compute the centers in phase space according to the canonical system dynamics.
     for (int i = 0; i < n_basis_; ++i) {
         if (second_order_canonical_) {
@@ -49,6 +50,8 @@ void DMP::initBasisFunctions() {
             centers_(i) = std::exp(-alpha_x_ * t_norm(i));
         }
     }
+
+    // Compute the widths of the Gaussian basis functions to ensure sufficient overlap between neighboring basis functions.
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
@@ -69,11 +72,21 @@ double DMP::basisFunction(int i, double x) const {
 std::vector<Eigen::Vector3d> DMP::movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
                                                         const std::vector<double>& t, double window_sec) const {
     const size_t N = signal.size();
+
+    // If the window is non-positive or there are too few samples, return the original signal.
     if (window_sec <= 0.0 || N < 2) return signal;
+
+    // Estimate the average time step from the timestamps to determine how many samples correspond to the specified window duration.
     double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
+
+    // If the estimated time step is non-positive, return the original signal to avoid division by zero.
     if (dt_est <= 0.0) return signal;
+
+
     int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
     int half = window_samples / 2;
+
+    // Perform moving average smoothing: for each sample, average over the window centered at that sample, clamping to the signal boundaries.
     std::vector<Eigen::Vector3d> out(N);
     for (size_t k = 0; k < N; ++k) {
         int lo = std::max(0, static_cast<int>(k) - half);
@@ -95,7 +108,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             "DMP::learnFromDemonstration: demonstration too short (need at least 5 samples).");
     }
 
-    // 
+    // Exception for non-increasing timestamps in the demonstration.
     const size_t N = demo.size();
     tau_ = demo.back().t - demo.front().t;
     if (tau_ <= 0.0) {
@@ -113,19 +126,17 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     for (size_t k = 0; k < N; ++k) {
     double t_rel = demo[k].t - demo.front().t;
     double t_norm = t_rel / tau_;
-    if (second_order_canonical_) {
-        double a = alpha_z_ / 2.0;
-        x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // closed-form solution of the second-order canonical system with critical damping
-    } else {
-        x_t[k] = std::exp(-alpha_x_ * t_norm);
+        if (second_order_canonical_) {
+            double a = alpha_z_ / 2.0;
+            x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // closed-form solution of the second-order canonical system with critical damping
+        } else {
+            x_t[k] = std::exp(-alpha_x_ * t_norm);
+        }
     }
-}
 
     // Estimate velocity and acceleration via central finite differences.
     // If velocity filter is enabled, moving average smoothing is applied BEFORE
-    // each of the two differentiation stages (not just on raw input signal)
-    // -- a single stage of smoothing would only improve velocity, leaving
-    // acceleration exposed to noise introduced by the first derivative.
+    // each of the two differentiation stages
     std::vector<double> t_all(N);
     std::vector<Eigen::Vector3d> pos_all(N);
     for (size_t k = 0; k < N; ++k) {
@@ -183,11 +194,13 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         Eigen::VectorXd psi_row(n_basis_);
         for (size_t k = 0; k < N; ++k) {
             double psi_sum = 0.0;
+            // Compute the basis function values for the current phase x_t[k] and accumulate their sum for normalization.
             for (int i = 0; i < n_basis_; ++i) {
                 psi_row(i) = basisFunction(i, x_t[k]);
                 psi_sum += psi_row(i);
             }
             if (psi_sum < 1e-8) psi_sum = 1e-8;
+            // Fill the design matrix Phi for the current sample k, normalizing the basis function values and multiplying by the phase x_t[k].
             for (int i = 0; i < n_basis_; ++i) {
                 Phi(static_cast<int>(k), i) = (psi_row(i) / psi_sum) * x_t[k];
             }
@@ -208,6 +221,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
             Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
 
+            // weights_[d](i) = sum_k(psi_i(x_k) * x_k * f_target[k](d)) / sum_k(psi_i(x_k) * x_k^2)
             for (size_t k = 0; k < N; ++k) {
                 double s = x_t[k];
                 for (int i = 0; i < n_basis_; ++i) {

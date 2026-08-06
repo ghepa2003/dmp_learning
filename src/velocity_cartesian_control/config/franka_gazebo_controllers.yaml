@@ -1,0 +1,19 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+
+    velocity_cartesian_controller:
+      type: velocity_cartesian_control/CartesianVelocityController
+
+velocity_cartesian_controller:
+  ros__parameters:
+    joint_names:
+      - fer_joint1
+      - fer_joint2
+      - fer_joint3
+      - fer_joint4
+      - fer_joint5
+      - fer_joint6
+      - fer_joint7
+    ee_frame_name: fer_link8
+    target_pose_topic: /target_pose

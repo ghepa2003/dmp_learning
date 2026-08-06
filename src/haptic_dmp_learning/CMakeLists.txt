@@ -47,9 +47,23 @@ ament_target_dependencies(haptic_dmp_wrapper_node
   sensor_msgs
 )
 
+# ---- DMP Gazebo executor node executable ----
+add_executable(dmp_gazebo_executor_node
+  src/ros/dmp_gazebo_executor_node.cpp
+  src/ros/dmp_executor_main.cpp
+)
+target_link_libraries(dmp_gazebo_executor_node
+  ${PROJECT_NAME}_core
+)
+ament_target_dependencies(dmp_gazebo_executor_node
+  rclcpp
+  geometry_msgs
+)
+
 install(TARGETS
   ${PROJECT_NAME}_core
   haptic_dmp_wrapper_node
+  dmp_gazebo_executor_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

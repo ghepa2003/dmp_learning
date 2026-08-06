@@ -21,6 +21,8 @@ public:
     // second_order_canonical: if true, the canonical system is second-order
     explicit DMP(int n_basis = 20, double alpha_x = 4.6, double alpha_z = 25.0, double beta_z = 6.25,
              bool second_order_canonical = false);
+
+
     // Fits the weights from a single recorded demonstration via locally
     // weighted regression (LWR). 
     //
@@ -34,11 +36,15 @@ public:
 
     // Optionally override the goal before execution (spatial generalization).
     void setGoal(const Eigen::Vector3d& goal);
+
+    // Returns the current goal (last sample of the demonstration, or manually set).
     const Eigen::Vector3d& goal() const { return goal_; }
 
     // Manually set the scale factor for one dimension (bypass of the automatic computation)
     // To be used when isScaleReliable() comes back false
     void setScale(int dim, double s) { scale_(dim) = s; }
+
+    // Returns the current scale factor for each dimension (computed from the original movement amplitude and the current goal).
     const Eigen::Vector3d& scale() const { return scale_; }
 
     // False if, for that dimension, the goal based rescaling risks to be numerically
@@ -50,6 +56,8 @@ public:
         use_ridge_regression_ = enabled;
         ridge_lambda_ = lambda;
     }
+
+    // Returns true if ridge regression is enabled for the weight fitting, false otherwise.
     bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
 
     // Optionally enable a velocity filter on the input demonstration before fitting the weights.
@@ -58,6 +66,8 @@ public:
         filter_window_sec_1_ = window_sec_1;
         filter_window_sec_2_ = window_sec_2;
     }
+
+    // Returns true if a velocity filter is enabled for the input demonstration, false otherwise.
     bool velocityFilterEnabled() const { return use_velocity_filter_; }
 
     // Set whether to use a second-order canonical system (recomputes basis functions).
@@ -65,6 +75,8 @@ public:
         second_order_canonical_ = enabled;
         initBasisFunctions();
     }
+
+    // Returns true if the DMP is using a second-order canonical system, false otherwise.
     bool secondOrderCanonical() const { return second_order_canonical_; }
 
     // Integrates one step of duration dt (seconds). Returns the new position.
@@ -103,8 +115,14 @@ public:
                               const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
                               const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& z0);
 private:
+
+    // Initializes the Gaussian basis functions (centers and widths) based on the number of basis functions and the canonical system dynamics.
     void initBasisFunctions();
+
+    // Computes the value of the i-th Gaussian basis function at phase x.
     double basisFunction(int i, double x) const;
+
+    // Filter the input demonstration to reduce noise in the velocity and acceleration estimates.
     std::vector<Eigen::Vector3d> movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
                                                        const std::vector<double>& t, double window_sec) const;
 

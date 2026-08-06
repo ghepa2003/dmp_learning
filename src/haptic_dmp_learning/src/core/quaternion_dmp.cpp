@@ -218,6 +218,7 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
             Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
 
+            // weights_[d](i) = sum_k(psi_i(x_k) * x_k * f_target[k](d)) / sum_k(psi_i(x_k) * x_k^2)
             for (size_t k = 0; k < N; ++k) {
                 double s = x_t[k];
                 for (int i = 0; i < n_basis_; ++i) {
