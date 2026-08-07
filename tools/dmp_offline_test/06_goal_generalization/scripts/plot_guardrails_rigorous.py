@@ -138,9 +138,9 @@ def make_guardrail_plots(csv_timeseries, csv_summary, out_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot rigorous guardrail benchmark with unified summary")
-    parser.add_argument("--timeseries", default="plots/06_goal_generalization/data/guardrail_timeseries.csv", help="Timeseries CSV")
-    parser.add_argument("--summary", default="plots/06_goal_generalization/data/guardrail_summary_metrics.csv", help="Summary CSV")
-    parser.add_argument("--out-dir", default="plots/06_goal_generalization", help="Output directory")
+    parser.add_argument("--timeseries", default="06_goal_generalization/plots/data/guardrail_timeseries.csv", help="Timeseries CSV")
+    parser.add_argument("--summary", default="06_goal_generalization/plots/data/guardrail_summary_metrics.csv", help="Summary CSV")
+    parser.add_argument("--out-dir", default="06_goal_generalization/plots", help="Output directory")
     args = parser.parse_args()
 
     make_guardrail_plots(args.timeseries, args.summary, args.out_dir)

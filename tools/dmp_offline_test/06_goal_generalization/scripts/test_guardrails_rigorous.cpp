@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
         demo_path = "../../" + demo_path;
     }
 
-    std::string out_dir = (argc >= 3) ? argv[2] : "plots/06_goal_generalization";
+    std::string out_dir = (argc >= 3) ? argv[2] : "06_goal_generalization/plots";
     fs::create_directories(out_dir);
     fs::create_directories(out_dir + "/data");
 

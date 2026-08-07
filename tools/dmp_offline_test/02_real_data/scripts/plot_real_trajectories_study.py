@@ -26,7 +26,6 @@ METRICS_TO_PLOT = [
     ("endpoint_orient_error_deg", "Final Angular Error [deg]"),
 ]
 
-# Expected trial format: real_traj<ID>_<variant> (e.g., real_trajA_lwr, real_trajB_ridge)
 TRIAL_RE = re.compile(r"^real_(traj[A-Z0-9]+)_(.+)$")
 
 
@@ -44,7 +43,6 @@ def load_summary(path):
         for row in reader:
             traj_id, variant = parse_trial(row["trial"])
             if traj_id is None:
-                # Fallback parsing if trial format differs (e.g. trajA_lwr)
                 parts = row["trial"].split("_")
                 if len(parts) >= 2:
                     traj_id = parts[0]
@@ -64,7 +62,6 @@ def plot_grouped_bar(rows, metric_key, metric_label, plot_dir):
     if not trajectories or not variants:
         return None
 
-    # Map: traj -> variant -> val
     data_map = {}
     for r in rows:
         t_id = r["_traj_id"]
@@ -83,12 +80,11 @@ def plot_grouped_bar(rows, metric_key, metric_label, plot_dir):
         offset = (i - (len(variants) - 1) / 2) * width
         rects = ax.bar(x + offset, vals, width, label=var_name, color=colors[i % len(colors)], alpha=0.85)
 
-        # Add value labels above bars
         for rect in rects:
             height = rect.get_height()
             ax.annotate(f"{height:.3f}",
                         xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
+                        xytext=(0, 3),
                         textcoords="offset points",
                         ha="center", va="bottom", fontsize=8)
 
@@ -129,7 +125,7 @@ def write_comparison_table(rows, plot_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--summary-csv", required=True, help="Summary CSV produced by the sweep")
-    parser.add_argument("--plot-dir", default="plots/02_real_data", help="Output directory for plots")
+    parser.add_argument("--plot-dir", default="02_real_data/plots", help="Output directory for plots")
     args = parser.parse_args()
 
     rows = load_summary(args.summary_csv)
@@ -151,4 +147,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

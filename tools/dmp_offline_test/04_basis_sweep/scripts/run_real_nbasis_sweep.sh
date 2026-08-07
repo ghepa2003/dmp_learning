@@ -7,29 +7,25 @@ set -euo pipefail
 N_BASIS_LIST=(5 10 15 20 25 30 40 50 60 80 100 150 200 300 500)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 PLOT_DIR="plots/04_basis_sweep/real"
 mkdir -p build data "${PLOT_DIR}" weights
 
-# --------------------------------------------------------------------------
-# Build learn_and_test_dmp
-# --------------------------------------------------------------------------
 PKG_DIR="../../src/haptic_dmp_learning"
 if [ ! -x build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
-   [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
+   [ "common/src/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
     echo "== Building learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
-        -I 03_time_sweep \
-        -I common \
+        -I common/include \
         -I/usr/include/eigen3 \
-        03_time_sweep/learn_and_test_dmp.cpp \
-        common/metrics.cpp \
+        common/src/learn_and_test_dmp.cpp \
+        common/src/metrics.cpp \
         "${PKG_DIR}/src/core/dmp.cpp" \
         "${PKG_DIR}/src/core/quaternion_dmp.cpp" \
         "${PKG_DIR}/src/core/dmp_io.cpp" \
@@ -37,9 +33,6 @@ if [ ! -x build/learn_and_test_dmp ] || \
         -lyaml-cpp
 fi
 
-# --------------------------------------------------------------------------
-# Find real demo files (Traj A, B, C)
-# --------------------------------------------------------------------------
 TRAJ_ENTRIES=()
 for name in "demo_raw_trajA.csv" "demo_raw_trajB.csv" "demo_raw_trajC.csv"; do
     path=""
@@ -67,8 +60,8 @@ if [ ${#TRAJ_ENTRIES[@]} -eq 0 ]; then
 fi
 
 REG_VARIANTS=(
-    "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
-    "ridge_filter:04_basis_sweep/test_configs/ridge_filter.yaml"
+    "lwr_nofilter:04_basis_sweep/configs/lwr_nofilter.yaml"
+    "ridge_filter:04_basis_sweep/configs/ridge_filter.yaml"
 )
 
 run_single_sweep () {
@@ -110,13 +103,12 @@ for entry in "${TRAJ_ENTRIES[@]}"; do
         TRAJ_PLOT_ARGS+=(--summary-csv "$sum_csv" --series-label "${rv_label}")
     done
 
-    python3 04_basis_sweep/plot_nbasis_study.py "${TRAJ_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/${t_id}"
+    python3 common/scripts/plot_nbasis_study.py "${TRAJ_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/${t_id}"
 done
 
 echo ""
 echo "== n_basis sweep completed on all real trajectories. Generating general comparative plots =="
-python3 04_basis_sweep/plot_nbasis_study.py "${ALL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/all"
+python3 common/scripts/plot_nbasis_study.py "${ALL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/all"
 
 echo ""
 echo "== Done. Per-trajectory plots in ${PLOT_DIR}/traj*/, overall plots with 6 series in ${PLOT_DIR}/all/ =="
-

@@ -166,7 +166,7 @@ def main():
     parser = argparse.ArgumentParser(description="Plot goal generalization for DMP")
     parser.add_argument("--demo", required=True, help="Raw demo CSV")
     parser.add_argument("--replay-orig", required=True, help="Original replay CSV")
-    parser.add_argument("--out-dir", default="plots/06_goal_generalization", help="Output directory")
+    parser.add_argument("--out-dir", default="06_goal_generalization/plots", help="Output directory")
     parser.add_argument("--label", required=True, help="Label e.g. trajA")
     args = parser.parse_args()
 

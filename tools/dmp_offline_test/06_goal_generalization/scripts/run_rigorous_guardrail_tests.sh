@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 OUT_DIR="plots/06_goal_generalization"
@@ -15,11 +15,10 @@ PKG_DIR="../../src/haptic_dmp_learning"
 echo "== Building test_guardrails_rigorous =="
 g++ -std=c++17 -O2 \
     -I "${PKG_DIR}/include" \
-    -I 03_time_sweep \
-    -I common \
+    -I common/include \
     -I/usr/include/eigen3 \
-    06_goal_generalization/test_guardrails_rigorous.cpp \
-    common/metrics.cpp \
+    06_goal_generalization/scripts/test_guardrails_rigorous.cpp \
+    common/src/metrics.cpp \
     "${PKG_DIR}/src/core/dmp.cpp" \
     "${PKG_DIR}/src/core/quaternion_dmp.cpp" \
     "${PKG_DIR}/src/core/dmp_io.cpp" \
@@ -31,7 +30,7 @@ echo "== Executing Rigorous Guardrail Benchmark =="
 
 echo ""
 echo "== Generating Error-over-Time Plot (Synchronized Run) =="
-python3 06_goal_generalization/plot_guardrails_rigorous.py \
+python3 06_goal_generalization/scripts/plot_guardrails_rigorous.py \
     --timeseries "${OUT_DIR}/data/guardrail_timeseries.csv" \
     --summary "${OUT_DIR}/data/guardrail_summary_metrics.csv" \
     --out-dir "${OUT_DIR}"

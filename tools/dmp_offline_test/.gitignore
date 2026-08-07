@@ -9,9 +9,9 @@ sweep_params
 data/
 weights/
 plots/
+0*/plots/
 
 # Legacy generated files
 *.csv
 *.png
 dmp_weights_*.yaml
-

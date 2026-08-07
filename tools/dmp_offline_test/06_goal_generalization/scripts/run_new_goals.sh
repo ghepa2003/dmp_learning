@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # Runs DMP Goal Generalization sweep on the 3 real trajectories (trajA, trajB, trajC).
-#
-# Fits DMP weights ONCE per trajectory (n_basis=100) and executes 5 new distinct goals
-# WITHOUT re-training (using setGoal). Computes goal-reaching position and angular errors,
-# prints metric summary tables, and generates visualization plots.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 N_BASIS="${1:-100}"
@@ -20,11 +16,10 @@ PKG_DIR="../../src/haptic_dmp_learning"
 echo "== Building run_goal_generalization =="
 g++ -std=c++17 -O2 \
     -I "${PKG_DIR}/include" \
-    -I 03_time_sweep \
-    -I common \
+    -I common/include \
     -I/usr/include/eigen3 \
-    06_goal_generalization/run_goal_generalization.cpp \
-    common/metrics.cpp \
+    06_goal_generalization/scripts/run_goal_generalization.cpp \
+    common/src/metrics.cpp \
     "${PKG_DIR}/src/core/dmp.cpp" \
     "${PKG_DIR}/src/core/quaternion_dmp.cpp" \
     "${PKG_DIR}/src/core/dmp_io.cpp" \
@@ -47,7 +42,7 @@ if [ ${#TRAJ_FILES[@]} -eq 0 ]; then
     exit 1
 fi
 
-FEATURE_CONFIG="04_basis_sweep/test_configs/ridge_filter.yaml"
+FEATURE_CONFIG="04_basis_sweep/configs/ridge_filter.yaml"
 
 echo ""
 echo "=========================================================================================="
@@ -66,7 +61,7 @@ for demo_csv in "${TRAJ_FILES[@]}"; do
     echo ">>>> Processing Real Trajectory: ${traj_id} <<<<"
     "${OUT_DIR}/build/run_goal_generalization" "$demo_csv" "${OUT_DIR}" "${traj_id}" "$N_BASIS" "$FEATURE_CONFIG"
 
-    python3 06_goal_generalization/plot_goal_generalization.py \
+    python3 06_goal_generalization/scripts/plot_goal_generalization.py \
         --demo "$demo_csv" \
         --replay-orig "${OUT_DIR}/data/${traj_id}_replay_orig.csv" \
         --out-dir "${OUT_DIR}" \

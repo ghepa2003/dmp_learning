@@ -1,67 +1,47 @@
-# dmp_offline_test
+# DMP Offline Testing Suite
 
-Offline test harness (no ROS2, no Docker, no physical device) for `core::DMP` and
-`core::QuaternionDMP` — points directly to the official package source files (`../../src/haptic_dmp_learning`), no duplicate code copies.
+Suite completa per l'analisi offline, benchmark e validazione dei modelli DMP (Dynamic Movement Primitives) e QuaternionDMP del pacchetto `haptic_dmp_learning`.
 
-## Structure
+## Struttura della Suite
+
+La suite è suddivisa per esperimenti e strumenti comuni per garantire la massima pulizia e riproducibilità:
 
 ```
 tools/dmp_offline_test/
-├── build/                          # Compiled executables
-├── data/                           # Generated CSV files (synthetic demos, replay, metrics)
-├── weights/                        # Generated YAML files with DMP weights
-├── plots/                          # Generated PNG plots
-├── metrics.hpp / metrics.cpp       # Evaluation metrics, LOCAL to tools
-├── test_core_offline.cpp           # Multi-trajectory synthetic test
-├── build_and_run.sh
-├── replay_saved_dmp.cpp            # Loads real dmp_weights.yaml and regenerates replay
-├── replay_build_and_run.sh
-├── plot_dmp_test.py                # Plot synthetic demo vs replay, per trajectory
-└── plot_real_demo.py               # Plot REAL demo (Geomagic) vs replay + metrics
+├── README.md                          # Questo file (guida generale)
+├── common/                            # Moduli condivisi tra i vari esperimenti
+│   ├── include/                       # Header C++ condivisi (metrics.hpp)
+│   ├── src/                           # Sorgenti C++ condivisi (metrics.cpp, learn_and_test_dmp.cpp)
+│   └── scripts/                       # Script Python generici di supporto (trajectory generation, plotting, aggregazione)
+├── 01_clean_trajectories/             # Test base su traiettorie sintetiche pulite
+├── 02_real_data/                      # Analisi e replay su registrazioni reali haptic (Traj A, B, C)
+├── 03_time_sweep/                     # Sweep della durata temporale e generalizzazione temporale
+├── 04_basis_sweep/                    # Sweep sulle funzioni di base (n_basis) e finestra del filtro di velocità
+├── 05_vel_filt_test/                  # Evaluation & benchmark del filtro di velocità a due stadi
+└── 06_goal_generalization/            # Test di generalizzazione del goal e benchmark dei guardrail
 ```
 
-## Synthetic Multi-Trajectory Test
+## Struttura di ciascun Esperimento
 
-```bash
-chmod +x build_and_run.sh
-./build_and_run.sh
-```
+Ogni cartella dell'esperimento (`01_clean_trajectories` ... `06_goal_generalization`) contiene:
+- `scripts/`: Contiene tutti gli script Bash, Python e codice C++ specifici per l'esperimento.
+- `plots/`: Cartella di destinazione per i grafici generati.
+- `configs/`: (Se applicabile) File di configurazione YAML (es. parametri Ridge / LWR e filtri).
+- `README.md`: Documentazione dettagliata dello specifico strumento/esperimento, descrizione dei test e istruzioni per l'esecuzione.
 
-Tests **4 different trajectories** in sequence, each with a specific rationale:
+## Comandi Veloci
 
-| Trajectory | Purpose |
-|---|---|
-| `reach_semplice` | Simple case, baseline — expected high fidelity |
-| `reach_lift_pitch` | Mixed case (translation + bump + rotation) — used in previous tests |
-| `rotazione_pura` | Minimal positional displacement, wide rotation — isolates Quaternion DMP; triggers guardrail A under new goal |
-| `reach_complesso_gradino` | Step-like profile — reproduces multi-segment trajectory limits observed on real hardware |
+Tutti gli script possono essere eseguiti sia dalla root del repository che all'interno della cartella dell'esperimento:
 
-For each trajectory, it generates:
-- `data/demo_original_<name>.csv`, `data/replay_same_goal_<name>.csv`, `data/replay_new_goal_<name>.csv`
-- `weights/dmp_weights_<name>.yaml` (combined position + orientation format)
-- A row in `data/metrics_summary.csv` for `_same_goal` (RMSE, max error) and `_new_goal` (final endpoint error)
-- Console warnings for guardrail A (`isScaleReliable`)
-
-## Plotting a Specific Trajectory
-
-```bash
-python3 plot_dmp_test.py reach_lift_pitch
-```
-
-Without arguments, defaults to `reach_lift_pitch` or lists available trajectories.
-
-## Test with REAL Demo from Geomagic Touch
-
-Once a real demo is recorded (button 0 → move device → button 1), the wrapper outputs `dmp_weights.yaml` and `dmp_demo_recorded.csv` in `~/thesis_ws/`.
-
-```bash
-chmod +x replay_build_and_run.sh
-./replay_build_and_run.sh ~/thesis_ws/dmp_weights.yaml
-python3 plot_real_demo.py ~/thesis_ws/dmp_demo_recorded.csv
-```
-
-`plot_real_demo.py` prints metrics (position RMSE, angular error) directly to console alongside the plot using the exact same formulas as `metrics.cpp`.
-
-## Note on `metrics.hpp/.cpp`
-
-Located **only here**, not in the ROS2 package (`src/haptic_dmp_learning`) — validation/testing tools only. Uses namespace `dmp_tools::metrics`, separated from `haptic_dmp_learning::core`.
+- **01 Clean Trajectories**:
+  `./01_clean_trajectories/scripts/build_and_run.sh`
+- **02 Real Data**:
+  `./02_real_data/scripts/run_real_trajectories_sweep.sh`
+- **03 Time Sweep**:
+  `./03_time_sweep/scripts/build_and_run_timesweep.sh 20 60`
+- **04 Basis & Filter Window Sweep**:
+  `./04_basis_sweep/scripts/run_filter_window_sweep.sh`
+- **05 Velocity Filter Test**:
+  `python3 05_vel_filt_test/scripts/evaluate_moving_average_filter.py --demo ...`
+- **06 Goal Generalization**:
+  `./06_goal_generalization/scripts/run_new_goals.sh 100`

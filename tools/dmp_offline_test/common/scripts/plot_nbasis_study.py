@@ -71,7 +71,7 @@ def detect_instability(rows, metric_key):
     return increases
 
 
-def plot_metric_multi_series(series_data, metric_key, metric_label, plot_dir):
+def plot_metric_multi_series(series_data, metric_key, metric_label, plot_dir, title_suffix=""):
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for i, (series_label, rows) in enumerate(series_data):
         color = SERIES_COLORS[i % len(SERIES_COLORS)]
@@ -81,7 +81,7 @@ def plot_metric_multi_series(series_data, metric_key, metric_label, plot_dir):
 
     ax.set_xlabel("Number of basis functions (n_basis)")
     ax.set_ylabel(metric_label)
-    ax.set_title(f"{metric_label} vs n_basis")
+    ax.set_title(f"{metric_label} vs n_basis{title_suffix}")
     ax.set_yscale("log")
     ax.grid(alpha=0.3, which="both")
     ax.legend()
@@ -131,6 +131,7 @@ def main():
     p.add_argument("--series-label", action="append", default=[],
                     help="label for each --summary-csv in the same order (default: filename if omitted)")
     p.add_argument("--plot-dir", default="plot", help="output directory for plots and tables")
+    p.add_argument("--title-suffix", default="", help="suffix to append to plot titles (e.g. ' (Ridge Regression)')")
     args = p.parse_args()
 
     labels = list(args.series_label)
@@ -165,7 +166,7 @@ def main():
                 for prev_n, n, prev_v, v in increases:
                     print(f"      n_basis {prev_n} -> {n}: {prev_v:.4f} -> {v:.4f}")
 
-        plot_path = plot_metric_multi_series(series_data, metric_key, metric_label, args.plot_dir)
+        plot_path = plot_metric_multi_series(series_data, metric_key, metric_label, args.plot_dir, args.title_suffix)
         table_path = write_metric_table(series_data, metric_key, args.plot_dir)
         print(f"    plot: {plot_path}")
         print(f"    table: {table_path}")
@@ -176,4 +177,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

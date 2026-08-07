@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
 # Sweep on the number of basis functions (n_basis). Two modes:
-#
-#   1) Synthetic (default): generates and uses a pair of synthetic demos
-#      (clean + noisy) for the same trajectory shape.
-#        ./run_nbasis_sweep.sh [duration=60] [goal_name=goalA_main]
-#
-#   2) Real demo: skips synthetic generation, runs sweep only on
-#      the provided real CSV file.
-#        ./run_nbasis_sweep.sh --real-demo path/to/demo_raw.csv
-#
-# Modify N_BASIS_LIST and noise parameters below to change range/intensity.
+#   1) Synthetic (default): generates and uses synthetic demos (clean + noisy).
+#   2) Real demo: skips synthetic generation, runs sweep only on provided CSV.
 
 set -euo pipefail
 
@@ -34,14 +26,8 @@ POS_NOISE_STD=0.0005        # 0.5 mm
 ORIENT_NOISE_STD_DEG=0.1
 NOISE_SEEDS=(42 43 44 45 46)
 
-REAL_FEATURE_FLAGS_PATH="${HOME}/thesis_ws/dmp_features.yaml"
-REGRESSION_VARIANTS=(
-    "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
-    "ridge_filter:04_basis_sweep/test_configs/ridge_filter.yaml"
-)
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 PLOT_DIR="plots/04_basis_sweep"
@@ -53,15 +39,14 @@ if [ ! -x build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/quaternion_dmp.cpp" -nt build/learn_and_test_dmp ] || \
    [ "${PKG_DIR}/src/core/dmp_io.cpp" -nt build/learn_and_test_dmp ] || \
-   [ "03_time_sweep/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
+   [ "common/src/learn_and_test_dmp.cpp" -nt build/learn_and_test_dmp ]; then
     echo "== Building learn_and_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
-        -I 03_time_sweep \
-        -I common \
+        -I common/include \
         -I/usr/include/eigen3 \
-        03_time_sweep/learn_and_test_dmp.cpp \
-        common/metrics.cpp \
+        common/src/learn_and_test_dmp.cpp \
+        common/src/metrics.cpp \
         "${PKG_DIR}/src/core/dmp.cpp" \
         "${PKG_DIR}/src/core/quaternion_dmp.cpp" \
         "${PKG_DIR}/src/core/dmp_io.cpp" \
@@ -69,19 +54,18 @@ if [ ! -x build/learn_and_test_dmp ] || \
         -lyaml-cpp
 fi
 
-# Configuration variants (regression and filtering) to test.
 REG_VARIANTS=(
-    "lwr_nofilter:04_basis_sweep/test_configs/lwr_nofilter.yaml"
-    "lwr_filter:04_basis_sweep/test_configs/lwr_filter.yaml"
-    "ridge_nofilter:04_basis_sweep/test_configs/ridge_nofilter.yaml"
-    "ridge_filter:04_basis_sweep/test_configs/ridge_filter.yaml"
+    "lwr_nofilter:04_basis_sweep/configs/lwr_nofilter.yaml"
+    "lwr_filter:04_basis_sweep/configs/lwr_filter.yaml"
+    "ridge_nofilter:04_basis_sweep/configs/ridge_nofilter.yaml"
+    "ridge_filter:04_basis_sweep/configs/ridge_filter.yaml"
 )
 
 run_sweep_variant () {
-    local variant_name="$1"   # "clean", "noisy_seed42", "real", etc.
+    local variant_name="$1"
     local demo_csv="$2"
-    local rv_label="$3"       # "lwr_nofilter", "lwr_filter", etc.
-    local rv_flags="$4"       # path to config yaml
+    local rv_label="$3"
+    local rv_flags="$4"
 
     local summary_csv="${PLOT_DIR}/nbasis_sweep_results_${variant_name}_${rv_label}.csv"
     rm -f "$summary_csv"
@@ -104,25 +88,23 @@ run_sweep_variant () {
     echo "$summary_csv"
 }
 
-# --- Clean demo ---
 CLEAN_CSV="data/demo_nbasis_sweep_${DURATION}s_${GOAL_NAME}_clean.csv"
 if [ -z "$REAL_DEMO" ] && [ ! -f "$CLEAN_CSV" ]; then
     echo "== Generating clean demo (duration ${DURATION}s) =="
-    python3 04_basis_sweep/generate_picking_trajectory.py \
+    python3 common/scripts/generate_picking_trajectory.py \
         --duration "$DURATION" --transition-duration "$DURATION" \
         --dx "$DX" --dy "$DY" --dz "$DZ" \
         --rot-axis "$ROT_AXIS" --rot-angle-deg "$ROT_ANGLE_DEG" \
         --output "$CLEAN_CSV"
 fi
 
-# --- Synthetic noisy demo: one per seed in NOISE_SEEDS ---
 NOISY_CSVS=()
 if [ -z "$REAL_DEMO" ]; then
     for seed in "${NOISE_SEEDS[@]}"; do
         noisy_csv="data/demo_nbasis_sweep_${DURATION}s_${GOAL_NAME}_noisy_seed${seed}.csv"
         if [ ! -f "$noisy_csv" ]; then
-            echo "== Generating synthetic noisy demo, seed=${seed} (pos_std=${POS_NOISE_STD}m, orient_std=${ORIENT_NOISE_STD_DEG}deg) =="
-            python3 04_basis_sweep/generate_picking_trajectory.py \
+            echo "== Generating synthetic noisy demo, seed=${seed} =="
+            python3 common/scripts/generate_picking_trajectory.py \
                 --duration "$DURATION" --transition-duration "$DURATION" \
                 --dx "$DX" --dy "$DY" --dz "$DZ" \
                 --rot-axis "$ROT_AXIS" --rot-angle-deg "$ROT_ANGLE_DEG" \
@@ -139,7 +121,7 @@ if [ -n "$REAL_DEMO" ]; then
         echo "Real demo file not found: ${REAL_DEMO}"
         exit 1
     fi
-    echo "== Real demo mode: ${REAL_DEMO} (no synthetic generation) =="
+    echo "== Real demo mode: ${REAL_DEMO} =="
     REAL_PLOT_ARGS=()
     for rv in "${REG_VARIANTS[@]}"; do
         rv_label="${rv%%:*}"
@@ -150,14 +132,13 @@ if [ -n "$REAL_DEMO" ]; then
 
     echo ""
     echo "== Sweep completed. Generating comparative plots (real demo) =="
-    python3 04_basis_sweep/plot_nbasis_study.py "${REAL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}"
+    python3 common/scripts/plot_nbasis_study.py "${REAL_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}"
 
     echo ""
     echo "== Done. Plots in ${PLOT_DIR}/ =="
     exit 0
 fi
 
-# --- 1) Sweep on clean demo for all configurations ---
 CLEAN_PLOT_ARGS=()
 for rv in "${REG_VARIANTS[@]}"; do
     rv_label="${rv%%:*}"
@@ -168,9 +149,8 @@ done
 
 echo ""
 echo "== Generating comparative plots for clean demo =="
-python3 04_basis_sweep/plot_nbasis_study.py "${CLEAN_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/clean"
+python3 common/scripts/plot_nbasis_study.py "${CLEAN_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/clean"
 
-# --- 2) Sweep on noisy demo for all configurations and seeds ---
 NOISY_PLOT_ARGS=()
 for rv in "${REG_VARIANTS[@]}"; do
     rv_label="${rv%%:*}"
@@ -185,14 +165,13 @@ done
 
 echo ""
 echo "== Generating raw plots (all seeds for 4 configurations) =="
-python3 04_basis_sweep/plot_nbasis_study.py "${NOISY_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/noisy"
+python3 common/scripts/plot_nbasis_study.py "${NOISY_PLOT_ARGS[@]}" --plot-dir "${PLOT_DIR}/noisy"
 
 echo ""
 echo "== Aggregating seeds into mean +/- std and generating comparative plots == "
-python3 04_basis_sweep/aggregate_nbasis_seeds.py \
+python3 common/scripts/aggregate_nbasis_seeds.py \
     --combined-csv "${PLOT_DIR}/noisy/nbasis_all_metrics.csv" \
     --plot-dir "${PLOT_DIR}"
 
 echo ""
 echo "== Done. Aggregated comparative plots in ${PLOT_DIR}/, clean plots in ${PLOT_DIR}/clean/, raw noisy plots in ${PLOT_DIR}/noisy/ =="
-

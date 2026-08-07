@@ -9,7 +9,7 @@ BASE_GOAL="${2:-goalA_main}"
 N_BASIS="${3:-20}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
 PLOT_DIR="plots/03_time_sweep"
@@ -20,11 +20,10 @@ if [ ! -x build/generalize_test_dmp ]; then
     echo "== Building generalize_test_dmp =="
     g++ -std=c++17 -O2 \
         -I "${PKG_DIR}/include" \
-        -I 03_time_sweep \
-        -I common \
+        -I common/include \
         -I/usr/include/eigen3 \
-        03_time_sweep/generalize_test_dmp.cpp \
-        common/metrics.cpp \
+        03_time_sweep/scripts/generalize_test_dmp.cpp \
+        common/src/metrics.cpp \
         "${PKG_DIR}/src/core/dmp.cpp" \
         "${PKG_DIR}/src/core/quaternion_dmp.cpp" \
         "${PKG_DIR}/src/core/dmp_io.cpp" \
@@ -34,7 +33,7 @@ fi
 
 BASE_CSV="data/demo_synth_${DURATION}s_${BASE_GOAL}.csv"
 if [ ! -f "$BASE_CSV" ]; then
-    echo "Cannot find $BASE_CSV -- check duration/goal name or regenerate with: python3 03_time_sweep/generate_sweep_matrix.py --outdir data"
+    echo "Cannot find $BASE_CSV -- check duration/goal name or regenerate with: python3 03_time_sweep/scripts/generate_sweep_matrix.py --outdir data"
     exit 1
 fi
 
@@ -60,7 +59,7 @@ for target_csv in "${target_files[@]}"; do
     echo "---- ${label} ----"
     build/generalize_test_dmp "$BASE_CSV" "$target_csv" "$replay_out" "$SUMMARY_CSV" "$label" "$N_BASIS"
 
-    python3 03_time_sweep/plot_dmp_timesweep.py \
+    python3 03_time_sweep/scripts/plot_dmp_timesweep.py \
         --demo "$target_csv" \
         --replay "$replay_out" \
         --plot-dir "${PLOT_DIR}" \
@@ -70,4 +69,3 @@ done
 echo ""
 echo "== Generalization test completed. Summary in ${SUMMARY_CSV} =="
 echo "   ('gen_from_${BASE_GOAL}_to_${BASE_GOAL}' is control case: same goal as base demo)"
-
