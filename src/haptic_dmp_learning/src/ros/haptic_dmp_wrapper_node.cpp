@@ -1,5 +1,6 @@
 #include "haptic_dmp_learning/ros/haptic_dmp_wrapper_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
+#include <yaml-cpp/yaml.h>
 
 #include <cstdlib>
 #include <fstream>
@@ -28,11 +29,39 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", default_yaml_path);
     output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", default_csv_path);
 
-    std::string default_features_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml";
+    std::string default_features_path = std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/dmp_features.yaml";
+    if (!std::ifstream(default_features_path).good()) {
+        default_features_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml";
+    }
     feature_flags_path_ = this->declare_parameter<std::string>("feature_flags_path", default_features_path);
 
-    // Initialize the DMP with the specified parameters
+    // If n_basis_ is default 20, check if params.yaml exists and load n_basis from it
+    if (n_basis_ == 20) {
+        std::vector<std::string> params_candidates = {
+            std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/params.yaml",
+            std::string(home ? home : "/root") + "/thesis_ws/params.yaml"
+        };
+        for (const auto& ppath : params_candidates) {
+            std::ifstream check_f(ppath);
+            if (check_f.good()) {
+                try {
+                    YAML::Node pnode = YAML::LoadFile(ppath);
+                    if (pnode["haptic_dmp_wrapper_node"] && pnode["haptic_dmp_wrapper_node"]["ros__parameters"]) {
+                        auto ros_p = pnode["haptic_dmp_wrapper_node"]["ros__parameters"];
+                        if (ros_p["n_basis"]) n_basis_ = ros_p["n_basis"].as<int>();
+                        if (ros_p["alpha_x"]) alpha_x_ = ros_p["alpha_x"].as<double>();
+                        if (ros_p["alpha_z"]) alpha_z_ = ros_p["alpha_z"].as<double>();
+                        if (ros_p["beta_z"]) beta_z_ = ros_p["beta_z"].as<double>();
+                        break;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
+    // Initialize BOTH position DMP and Quaternion DMP with the specified parameters
     dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
+    quat_dmp_ = core::QuaternionDMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
 
     // Applies feature flags (e.g. ridge regression) from separate YAML file
     // from weights. Missing file = no changes, defaults remain (independent LWR)

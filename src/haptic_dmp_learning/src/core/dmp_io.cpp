@@ -37,6 +37,8 @@ Eigen::Vector3d yamlToVec3(const YAML::Node& node) {
 
 YAML::Node dmpToNode(const DMP& dmp) {
     YAML::Node node;
+    node["regression_method"] = dmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    node["velocity_filter_enabled"] = dmp.velocityFilterEnabled();
     node["n_basis"] = dmp.nBasis();
     node["alpha_x"] = dmp.alphaX();
     node["alpha_z"] = dmp.alphaZ();
@@ -75,6 +77,8 @@ Eigen::Quaterniond yamlToQuat(const YAML::Node& node) {
 
 YAML::Node quaternionDmpToNode(const QuaternionDMP& qdmp) {
     YAML::Node node;
+    node["regression_method"] = qdmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    node["velocity_filter_enabled"] = qdmp.velocityFilterEnabled();
     node["n_basis"] = qdmp.nBasis();
     node["alpha_x"] = qdmp.alphaX();
     node["alpha_z"] = qdmp.alphaZ();
@@ -142,11 +146,20 @@ DMP loadFromYaml(const std::string& filepath) {
 
     DMP dmp(n_basis, alpha_x, alpha_z, beta_z, second_order);
     dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights, z0);
+    if (root["regression_method"]) {
+        bool use_ridge = (root["regression_method"].as<std::string>() == "ridge");
+        dmp.setRidgeRegression(use_ridge);
+    }
+    if (root["velocity_filter_enabled"]) {
+        dmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+    }
     return dmp;
 }
 
 void saveToYaml(const DMP& dmp, const QuaternionDMP& qdmp, const std::string& filepath) {
     YAML::Node root;
+    root["regression_method"] = dmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    root["velocity_filter_enabled"] = dmp.velocityFilterEnabled();
     root["position_dmp"] = dmpToNode(dmp);
     root["quaternion_dmp"] = quaternionDmpToNode(qdmp);
 
@@ -180,6 +193,16 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     }
     dmp = DMP(p["n_basis"].as<int>(), p["alpha_x"].as<double>(), p["alpha_z"].as<double>(), p["beta_z"].as<double>(), second_order);
     dmp.setLearnedParameters(p["tau"].as<double>(), y0, goal, dG, A, centers, widths, weights, z0);
+    if (p["regression_method"]) {
+        dmp.setRidgeRegression(p["regression_method"].as<std::string>() == "ridge");
+    } else if (root["regression_method"]) {
+        dmp.setRidgeRegression(root["regression_method"].as<std::string>() == "ridge");
+    }
+    if (p["velocity_filter_enabled"]) {
+        dmp.setVelocityFilter(p["velocity_filter_enabled"].as<bool>());
+    } else if (root["velocity_filter_enabled"]) {
+        dmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+    }
 
     // --- orientation ---
     YAML::Node q = root["quaternion_dmp"];
@@ -194,17 +217,39 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     }
     qdmp = QuaternionDMP(q["n_basis"].as<int>(), q["alpha_x"].as<double>(), q["alpha_z"].as<double>(), q["beta_z"].as<double>());
     qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights, qeta0);
+    if (q["regression_method"]) {
+        qdmp.setRidgeRegression(q["regression_method"].as<std::string>() == "ridge");
+    } else if (root["regression_method"]) {
+        qdmp.setRidgeRegression(root["regression_method"].as<std::string>() == "ridge");
+    }
+    if (q["velocity_filter_enabled"]) {
+        qdmp.setVelocityFilter(q["velocity_filter_enabled"].as<bool>());
+    } else if (root["velocity_filter_enabled"]) {
+        qdmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+    }
 }
 
 void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     YAML::Node root;
+    bool loaded = false;
     try {
         root = YAML::LoadFile(filepath);
+        loaded = true;
     } catch (const YAML::BadFile&) {
-        // Missing file: no modification, objects remain at current defaults
-        // - feature activation is opt-in.
-        return;
+        const char* home = std::getenv("HOME");
+        std::vector<std::string> fallbacks = {
+            std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/dmp_features.yaml",
+            std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml"
+        };
+        for (const auto& fpath : fallbacks) {
+            try {
+                root = YAML::LoadFile(fpath);
+                loaded = true;
+                break;
+            } catch (...) {}
+        }
     }
+    if (!loaded) return;
 
     if (root["regression"]) {
         YAML::Node reg = root["regression"];
