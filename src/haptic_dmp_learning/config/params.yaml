@@ -6,3 +6,24 @@ haptic_dmp_wrapper_node:
     beta_z: 6.25
     output_yaml_path: "/root/thesis_ws/dmp_weights.yaml"
     output_demo_csv_path: "/root/thesis_ws/demo_raw.csv"
+
+csv_master_pose_player_node:
+  ros__parameters:
+    demo_csv_path: "/root/thesis_ws/real_demo/reach_task_baseline.csv"
+    master_pose_topic: "/master_pose_raw"
+    buttons_topic: "/touch0/buttons"
+    frame_id: "panda_link0"
+    publish_rate_hz: 200.0
+    startup_delay_sec: 1.0
+
+live_demo_recorder_node:
+  ros__parameters:
+    n_basis: 100
+    alpha_x: 4.6
+    alpha_z: 25.0
+    beta_z: 6.25
+    master_pose_topic: "/master_pose_raw"
+    target_pose_topic: "/target_pose"
+    buttons_topic: "/touch0/buttons"
+    output_yaml_path: "/root/thesis_ws/live_demo_dmp_weights.yaml"
+    output_demo_csv_path: "/root/thesis_ws/live_demo_raw.csv"

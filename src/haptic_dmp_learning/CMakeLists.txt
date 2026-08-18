@@ -60,10 +60,41 @@ ament_target_dependencies(dmp_gazebo_executor_node
   geometry_msgs
 )
 
+# ---- CSV master pose player node executable (stand-in for the Geomagic
+#      Touch driver while no physical device is attached) ----
+add_executable(csv_master_pose_player_node
+  src/ros/csv_master_pose_player_node.cpp
+  src/ros/csv_master_pose_player_main.cpp
+)
+target_link_libraries(csv_master_pose_player_node
+  ${PROJECT_NAME}_core
+)
+ament_target_dependencies(csv_master_pose_player_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+)
+
+# ---- Live demo recorder node executable (downstream: visualize + learn) ----
+add_executable(live_demo_recorder_node
+  src/ros/live_demo_recorder_node.cpp
+  src/ros/live_demo_recorder_main.cpp
+)
+target_link_libraries(live_demo_recorder_node
+  ${PROJECT_NAME}_core
+)
+ament_target_dependencies(live_demo_recorder_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+)
+
 install(TARGETS
   ${PROJECT_NAME}_core
   haptic_dmp_wrapper_node
   dmp_gazebo_executor_node
+  csv_master_pose_player_node
+  live_demo_recorder_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -73,6 +104,10 @@ install(DIRECTORY include/
 
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
+)
+
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 if(BUILD_TESTING)
