@@ -37,6 +37,40 @@ controller_interface::CallbackReturn CartesianVelocityController::on_init() {
         }
         target_pose_topic_ = node->get_parameter("target_pose_topic").as_string();
 
+        core::VelocityIkSolver::Params ik_params;
+
+        if (!node->has_parameter("kp_linear")) {
+            node->declare_parameter<double>("kp_linear", ik_params.kp_linear);
+        }
+        ik_params.kp_linear = node->get_parameter("kp_linear").as_double();
+
+        if (!node->has_parameter("kp_angular")) {
+            node->declare_parameter<double>("kp_angular", ik_params.kp_angular);
+        }
+        ik_params.kp_angular = node->get_parameter("kp_angular").as_double();
+
+        if (!node->has_parameter("damping_lambda")) {
+            node->declare_parameter<double>("damping_lambda", ik_params.damping_lambda);
+        }
+        ik_params.damping_lambda = node->get_parameter("damping_lambda").as_double();
+
+        if (!node->has_parameter("max_linear_speed")) {
+            node->declare_parameter<double>("max_linear_speed", ik_params.max_linear_speed);
+        }
+        ik_params.max_linear_speed = node->get_parameter("max_linear_speed").as_double();
+
+        if (!node->has_parameter("max_angular_speed")) {
+            node->declare_parameter<double>("max_angular_speed", ik_params.max_angular_speed);
+        }
+        ik_params.max_angular_speed = node->get_parameter("max_angular_speed").as_double();
+
+        if (!node->has_parameter("max_joint_speed")) {
+            node->declare_parameter<double>("max_joint_speed", ik_params.max_joint_speed);
+        }
+        ik_params.max_joint_speed = node->get_parameter("max_joint_speed").as_double();
+
+        ik_solver_.setParams(ik_params);
+
     } catch (const std::exception& e) {
         RCLCPP_ERROR(get_node()->get_logger(), "on_init failed: %s", e.what());
         return controller_interface::CallbackReturn::ERROR;
@@ -71,6 +105,23 @@ CartesianVelocityController::state_interface_configuration() const {
 controller_interface::CallbackReturn CartesianVelocityController::on_configure(
     const rclcpp_lifecycle::State&) {
     auto node = get_node();
+
+    // Refresh VelocityIkSolver parameters
+    core::VelocityIkSolver::Params ik_params;
+    ik_params.kp_linear = node->get_parameter("kp_linear").as_double();
+    ik_params.kp_angular = node->get_parameter("kp_angular").as_double();
+    ik_params.damping_lambda = node->get_parameter("damping_lambda").as_double();
+    ik_params.max_linear_speed = node->get_parameter("max_linear_speed").as_double();
+    ik_params.max_angular_speed = node->get_parameter("max_angular_speed").as_double();
+    ik_params.max_joint_speed = node->get_parameter("max_joint_speed").as_double();
+    ik_solver_.setParams(ik_params);
+
+    RCLCPP_INFO(
+        node->get_logger(),
+        "IK Solver configured: kp_linear=%.2f, kp_angular=%.2f, damping_lambda=%.3f, "
+        "max_linear_speed=%.2f, max_angular_speed=%.2f, max_joint_speed=%.2f",
+        ik_params.kp_linear, ik_params.kp_angular, ik_params.damping_lambda,
+        ik_params.max_linear_speed, ik_params.max_angular_speed, ik_params.max_joint_speed);
 
     // robot_description is NOT automatically available as a parameter on a
     // controller node - it must be fetched by subscribing to the

@@ -17,6 +17,9 @@ namespace core {
 class RobotModel {
 public:
     static constexpr int kNumJoints = 7;
+
+    // using stands for the Eigen types used in the interface, 
+    // to avoid repeating the long Eigen::Matrix<double, ...> type everywhere.  
     using JointVector = Eigen::Matrix<double, kNumJoints, 1>;
     using Jacobian6x7 = Eigen::Matrix<double, 6, kNumJoints>;
 
@@ -64,9 +67,10 @@ private:
     std::string ee_frame_name_;
 
     // Pinocchio model/data - concrete types deliberately not exposed in the
-    // header (pinocchio::Model/pinocchio::Data would leak the Pinocchio
-    // dependency into every includer); pimpl'd in the .cpp once we confirm
-    // the installed API version.
+    // header, to avoid forcing any downstream users of this class to depend on
+    // Pinocchio. The Impl struct is defined in the .cpp file, and the
+    // unique_ptr<Impl> is destructed there too, so the Pinocchio types
+    // are never seen by any downstream users of this header.
     struct Impl;
     std::unique_ptr<Impl> impl_;
 

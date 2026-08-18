@@ -74,3 +74,9 @@ velocity_cartesian_controller:
       - fer_joint7
     ee_frame_name: fer_link8
     target_pose_topic: /target_pose
+    kp_linear: 1.0
+    kp_angular: 1.0
+    damping_lambda: 0.05
+    max_linear_speed: 0.15
+    max_angular_speed: 0.5
+    max_joint_speed: 1.5

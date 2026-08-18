@@ -24,9 +24,12 @@ namespace ros_wrapper {
 // commands them on the velocity command interfaces. First step of the
 // staged plan (velocity now, impedance/force later reusing RobotModel and
 // CartesianError unchanged).
+
+
 class CartesianVelocityController : public controller_interface::ControllerInterface {
 public:
     // Specify the command and state interface configurations for the controller, indicating which interfaces it will read and write to.
+    // Inherited from controller_interface::ControllerInterface, these methods define the interfaces that the controller will use for commanding joint velocities and reading joint states.
     controller_interface::InterfaceConfiguration command_interface_configuration() const override;
     controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
@@ -44,6 +47,8 @@ public:
         const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
 private:
+
+    // Callback for receiving target Cartesian poses from the subscribed topic. Updates the target pose buffer in a thread-safe manner.
     void targetPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
     // params
@@ -64,6 +69,7 @@ private:
     realtime_tools::RealtimeBuffer<geometry_msgs::msg::PoseStamped> target_pose_buffer_;
 
     // Publishers for aligned target pose and actual end-effector pose, with realtime-safe wrappers for publishing in the control loop.
+    // Aligned is the target pose transformed into the robot's Cartesian frame, based on the initial alignment captured when the first target pose is received.
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr aligned_target_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr actual_pose_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_aligned_target_pub_;
