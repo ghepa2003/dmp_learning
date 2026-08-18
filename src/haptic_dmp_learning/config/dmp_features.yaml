@@ -6,5 +6,5 @@ second_order_canonical_system: false
 
 velocity_filter:
   enabled: true
-  window_sec_1: 0.05
-  window_sec_2: 0.05
+  window_sec_1: 0.20
+  window_sec_2: 0.20

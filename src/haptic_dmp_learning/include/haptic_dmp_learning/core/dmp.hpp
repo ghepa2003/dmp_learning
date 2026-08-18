@@ -59,6 +59,7 @@ public:
 
     // Returns true if ridge regression is enabled for the weight fitting, false otherwise.
     bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
+    double ridgeLambda() const { return ridge_lambda_; }
 
     // Optionally enable a velocity filter on the input demonstration before fitting the weights.
     void setVelocityFilter(bool enabled, double window_sec_1 = 0.05, double window_sec_2 = 0.05) {
@@ -69,6 +70,8 @@ public:
 
     // Returns true if a velocity filter is enabled for the input demonstration, false otherwise.
     bool velocityFilterEnabled() const { return use_velocity_filter_; }
+    double filterWindowSec1() const { return filter_window_sec_1_; }
+    double filterWindowSec2() const { return filter_window_sec_2_; }
 
     // Set whether to use a second-order canonical system (recomputes basis functions).
     void setSecondOrderCanonical(bool enabled) {

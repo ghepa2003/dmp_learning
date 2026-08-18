@@ -38,7 +38,14 @@ Eigen::Vector3d yamlToVec3(const YAML::Node& node) {
 YAML::Node dmpToNode(const DMP& dmp) {
     YAML::Node node;
     node["regression_method"] = dmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    if (dmp.ridgeRegressionEnabled()) {
+        node["ridge_lambda"] = dmp.ridgeLambda();
+    }
     node["velocity_filter_enabled"] = dmp.velocityFilterEnabled();
+    if (dmp.velocityFilterEnabled()) {
+        node["velocity_filter_window_sec_1"] = dmp.filterWindowSec1();
+        node["velocity_filter_window_sec_2"] = dmp.filterWindowSec2();
+    }
     node["n_basis"] = dmp.nBasis();
     node["alpha_x"] = dmp.alphaX();
     node["alpha_z"] = dmp.alphaZ();
@@ -78,7 +85,14 @@ Eigen::Quaterniond yamlToQuat(const YAML::Node& node) {
 YAML::Node quaternionDmpToNode(const QuaternionDMP& qdmp) {
     YAML::Node node;
     node["regression_method"] = qdmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    if (qdmp.ridgeRegressionEnabled()) {
+        node["ridge_lambda"] = qdmp.ridgeLambda();
+    }
     node["velocity_filter_enabled"] = qdmp.velocityFilterEnabled();
+    if (qdmp.velocityFilterEnabled()) {
+        node["velocity_filter_window_sec_1"] = qdmp.filterWindowSec1();
+        node["velocity_filter_window_sec_2"] = qdmp.filterWindowSec2();
+    }
     node["n_basis"] = qdmp.nBasis();
     node["alpha_x"] = qdmp.alphaX();
     node["alpha_z"] = qdmp.alphaZ();
@@ -148,10 +162,14 @@ DMP loadFromYaml(const std::string& filepath) {
     dmp.setLearnedParameters(tau, y0, goal, dG, A, centers, widths, weights, z0);
     if (root["regression_method"]) {
         bool use_ridge = (root["regression_method"].as<std::string>() == "ridge");
-        dmp.setRidgeRegression(use_ridge);
+        double lambda = root["ridge_lambda"] ? root["ridge_lambda"].as<double>() : 1e-6;
+        dmp.setRidgeRegression(use_ridge, lambda);
     }
     if (root["velocity_filter_enabled"]) {
-        dmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+        bool use_filt = root["velocity_filter_enabled"].as<bool>();
+        double w1 = root["velocity_filter_window_sec_1"] ? root["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = root["velocity_filter_window_sec_2"] ? root["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        dmp.setVelocityFilter(use_filt, w1, w2);
     }
     return dmp;
 }
@@ -159,7 +177,14 @@ DMP loadFromYaml(const std::string& filepath) {
 void saveToYaml(const DMP& dmp, const QuaternionDMP& qdmp, const std::string& filepath) {
     YAML::Node root;
     root["regression_method"] = dmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
+    if (dmp.ridgeRegressionEnabled()) {
+        root["ridge_lambda"] = dmp.ridgeLambda();
+    }
     root["velocity_filter_enabled"] = dmp.velocityFilterEnabled();
+    if (dmp.velocityFilterEnabled()) {
+        root["velocity_filter_window_sec_1"] = dmp.filterWindowSec1();
+        root["velocity_filter_window_sec_2"] = dmp.filterWindowSec2();
+    }
     root["position_dmp"] = dmpToNode(dmp);
     root["quaternion_dmp"] = quaternionDmpToNode(qdmp);
 
@@ -194,14 +219,24 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     dmp = DMP(p["n_basis"].as<int>(), p["alpha_x"].as<double>(), p["alpha_z"].as<double>(), p["beta_z"].as<double>(), second_order);
     dmp.setLearnedParameters(p["tau"].as<double>(), y0, goal, dG, A, centers, widths, weights, z0);
     if (p["regression_method"]) {
-        dmp.setRidgeRegression(p["regression_method"].as<std::string>() == "ridge");
+        bool use_ridge = (p["regression_method"].as<std::string>() == "ridge");
+        double lambda = p["ridge_lambda"] ? p["ridge_lambda"].as<double>() : 1e-6;
+        dmp.setRidgeRegression(use_ridge, lambda);
     } else if (root["regression_method"]) {
-        dmp.setRidgeRegression(root["regression_method"].as<std::string>() == "ridge");
+        bool use_ridge = (root["regression_method"].as<std::string>() == "ridge");
+        double lambda = root["ridge_lambda"] ? root["ridge_lambda"].as<double>() : 1e-6;
+        dmp.setRidgeRegression(use_ridge, lambda);
     }
     if (p["velocity_filter_enabled"]) {
-        dmp.setVelocityFilter(p["velocity_filter_enabled"].as<bool>());
+        bool use_filt = p["velocity_filter_enabled"].as<bool>();
+        double w1 = p["velocity_filter_window_sec_1"] ? p["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = p["velocity_filter_window_sec_2"] ? p["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        dmp.setVelocityFilter(use_filt, w1, w2);
     } else if (root["velocity_filter_enabled"]) {
-        dmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+        bool use_filt = root["velocity_filter_enabled"].as<bool>();
+        double w1 = root["velocity_filter_window_sec_1"] ? root["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = root["velocity_filter_window_sec_2"] ? root["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        dmp.setVelocityFilter(use_filt, w1, w2);
     }
 
     // --- orientation ---
@@ -218,14 +253,24 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     qdmp = QuaternionDMP(q["n_basis"].as<int>(), q["alpha_x"].as<double>(), q["alpha_z"].as<double>(), q["beta_z"].as<double>());
     qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights, qeta0);
     if (q["regression_method"]) {
-        qdmp.setRidgeRegression(q["regression_method"].as<std::string>() == "ridge");
+        bool use_ridge = (q["regression_method"].as<std::string>() == "ridge");
+        double lambda = q["ridge_lambda"] ? q["ridge_lambda"].as<double>() : 1e-6;
+        qdmp.setRidgeRegression(use_ridge, lambda);
     } else if (root["regression_method"]) {
-        qdmp.setRidgeRegression(root["regression_method"].as<std::string>() == "ridge");
+        bool use_ridge = (root["regression_method"].as<std::string>() == "ridge");
+        double lambda = root["ridge_lambda"] ? root["ridge_lambda"].as<double>() : 1e-6;
+        qdmp.setRidgeRegression(use_ridge, lambda);
     }
     if (q["velocity_filter_enabled"]) {
-        qdmp.setVelocityFilter(q["velocity_filter_enabled"].as<bool>());
+        bool use_filt = q["velocity_filter_enabled"].as<bool>();
+        double w1 = q["velocity_filter_window_sec_1"] ? q["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = q["velocity_filter_window_sec_2"] ? q["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        qdmp.setVelocityFilter(use_filt, w1, w2);
     } else if (root["velocity_filter_enabled"]) {
-        qdmp.setVelocityFilter(root["velocity_filter_enabled"].as<bool>());
+        bool use_filt = root["velocity_filter_enabled"].as<bool>();
+        double w1 = root["velocity_filter_window_sec_1"] ? root["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = root["velocity_filter_window_sec_2"] ? root["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        qdmp.setVelocityFilter(use_filt, w1, w2);
     }
 }
 

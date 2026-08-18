@@ -1,6 +1,6 @@
 haptic_dmp_wrapper_node:
   ros__parameters:
-    n_basis: 100
+    n_basis: 200
     alpha_x: 4.6
     alpha_z: 25.0
     beta_z: 6.25
@@ -18,7 +18,7 @@ csv_master_pose_player_node:
 
 live_demo_recorder_node:
   ros__parameters:
-    n_basis: 100
+    n_basis: 200
     alpha_x: 4.6
     alpha_z: 25.0
     beta_z: 6.25
