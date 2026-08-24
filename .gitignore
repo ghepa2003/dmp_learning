@@ -11,3 +11,11 @@ log/
 dmp_weights.yaml
 demo_raw.csv
 *.png
+
+# dati generati da sessioni di test
+pinocchio_test/
+tools/
+scripts/
+real_demo/
+references/
+scripts/

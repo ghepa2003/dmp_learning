@@ -1,5 +1,5 @@
-#include "velocity_cartesian_control/ros/cartesian_velocity_controller.hpp"
-#include "velocity_cartesian_control/core/cartesian_error.hpp"
+#include "franka_cartesian_control/ros/cartesian_velocity_controller.hpp"
+#include "franka_cartesian_control/core/cartesian_error.hpp"
 
 #include <pluginlib/class_list_macros.hpp>
 
@@ -7,7 +7,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <future>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace ros_wrapper {
 
 // ros2_control velocity controller: reads a target Cartesian pose from a
@@ -133,7 +133,7 @@ controller_interface::CallbackReturn CartesianVelocityController::on_configure(
     std::string urdf_xml;
     {
         // Create a temporary node to subscribe to the /robot_description topic and wait for the URDF XML content.
-        auto temp_node = std::make_shared<rclcpp::Node>("velocity_cartesian_control_urdf_waiter");
+        auto temp_node = std::make_shared<rclcpp::Node>("franka_cartesian_control_urdf_waiter");
         std::promise<std::string> urdf_promise;
         auto urdf_future = urdf_promise.get_future();
 
@@ -310,8 +310,8 @@ controller_interface::return_type CartesianVelocityController::update(
 }
 
 }  // namespace ros_wrapper
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control
 
 // Register the controller as a plugin with the ROS 2 pluginlib system, allowing it to be dynamically loaded by the controller manager.
-PLUGINLIB_EXPORT_CLASS(velocity_cartesian_control::ros_wrapper::CartesianVelocityController,
+PLUGINLIB_EXPORT_CLASS(franka_cartesian_control::ros_wrapper::CartesianVelocityController,
                         controller_interface::ControllerInterface)

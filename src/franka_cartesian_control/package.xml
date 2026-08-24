@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>velocity_cartesian_control</name>
+  <name>franka_cartesian_control</name>
   <version>0.1.0</version>
   <description>Cartesian velocity controller for Franka (DLS resolved-rate), staged step before force/impedance control.</description>
   <maintainer email="you@example.com">Lorenzo</maintainer>
@@ -20,6 +20,6 @@
 
   <export>
     <build_type>ament_cmake</build_type>
-    <controller_interface plugin="${prefix}/cartesian_velocity_controller_plugin.xml"/>
+    <controller_interface plugin="${prefix}/controllers_plugin.xml"/>
   </export>
 </package>

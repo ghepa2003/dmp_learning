@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Estrae i topic PoseStamped da un bag rosbag2 in CSV con header,
-nello stesso formato (t,x,y,z,qw,qx,qy,qz) usato dagli altri strumenti
-diagnostici del progetto (vedi dmp_offline_test/plot_dmp_test.py).
-
+"""... (docstring invariata, solo aggiornare firma uso) ...
 Uso:
-    python3 extract_bag_to_csv.py <path_al_bag> <nome_run>
-
-Produce, dentro ../data/:
-    target_aligned_<nome_run>.csv
-    actual_pose_<nome_run>.csv
+    python3 extract_bag_to_csv.py <path_al_bag> <nome_run> [nome_controller]
 """
 import sys
 import os
@@ -19,13 +12,12 @@ from geometry_msgs.msg import PoseStamped
 from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
 
 
-TOPIC_TO_FILENAME = {
-    "/velocity_cartesian_controller/target_pose_aligned": "target_aligned",
-    "/velocity_cartesian_controller/actual_pose": "actual_pose",
-}
+def extract(bag_path, run_name, controller_name, out_dir):
+    topic_to_filename = {
+        f"/{controller_name}/target_pose_aligned": "target_aligned",
+        f"/{controller_name}/actual_pose": "actual_pose",
+    }
 
-
-def extract(bag_path, run_name, out_dir):
     storage_options = StorageOptions(uri=bag_path, storage_id="sqlite3")
     converter_options = ConverterOptions(input_serialization_format="cdr",
                                           output_serialization_format="cdr")
@@ -33,7 +25,7 @@ def extract(bag_path, run_name, out_dir):
     reader.open(storage_options, converter_options)
 
     writers = {}
-    for topic, short_name in TOPIC_TO_FILENAME.items():
+    for topic, short_name in topic_to_filename.items():
         path = os.path.join(out_dir, f"{short_name}_{run_name}.csv")
         f = open(path, "w", newline="")
         w = csv.writer(f)
@@ -41,7 +33,7 @@ def extract(bag_path, run_name, out_dir):
         writers[topic] = (f, w)
 
     t0 = None
-    counts = {topic: 0 for topic in TOPIC_TO_FILENAME}
+    counts = {topic: 0 for topic in topic_to_filename}
 
     while reader.has_next():
         topic, data, timestamp_ns = reader.read_next()
@@ -60,15 +52,16 @@ def extract(bag_path, run_name, out_dir):
         f.close()
 
     for topic, count in counts.items():
-        print(f"{topic}: {count} messaggi -> {TOPIC_TO_FILENAME[topic]}_{run_name}.csv")
+        print(f"{topic}: {count} messaggi -> {topic_to_filename[topic]}_{run_name}.csv")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Uso: python3 extract_bag_to_csv.py <path_al_bag> <nome_run>")
+    if len(sys.argv) not in (3, 4):
+        print("Uso: python3 extract_bag_to_csv.py <path_al_bag> <nome_run> [nome_controller]")
         sys.exit(1)
 
     bag_path, run_name = sys.argv[1], sys.argv[2]
+    controller_name = sys.argv[3] if len(sys.argv) == 4 else "cartesian_impedance_controller"
     out_dir = os.path.join(os.path.dirname(__file__), "..", "data")
     os.makedirs(out_dir, exist_ok=True)
-    extract(bag_path, run_name, out_dir)
+    extract(bag_path, run_name, controller_name, out_dir)

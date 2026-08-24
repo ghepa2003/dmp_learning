@@ -1,10 +1,10 @@
 #pragma once
 
 #include <Eigen/Dense>
-#include "velocity_cartesian_control/core/robot_model.hpp"
-#include "velocity_cartesian_control/core/cartesian_error.hpp"
+#include "franka_cartesian_control/core/robot_model.hpp"
+#include "franka_cartesian_control/core/cartesian_error.hpp"
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace core {
 
 // Resolved-rate motion control: converts a desired Cartesian pose error into
@@ -44,4 +44,4 @@ private:
 };
 
 }  // namespace core
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

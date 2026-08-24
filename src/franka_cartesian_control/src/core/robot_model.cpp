@@ -1,4 +1,4 @@
-#include "velocity_cartesian_control/core/robot_model.hpp"
+#include "franka_cartesian_control/core/robot_model.hpp"
 
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <algorithm>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace core {
 
 // Internal implementation details hidden behind the PIMPL idiom, to avoid
@@ -102,7 +102,14 @@ void RobotModel::update(const JointVector& q, const JointVector& dq) {
     for (int i = 0; i < kNumJoints; ++i) {
         gravity_(i) = impl_->data.g(impl_->q_index[static_cast<size_t>(i)]);
     }
+
+    // Compute Coriolis torques using the non-linear effects function, which includes both gravity and Coriolis terms.
+    // Subtract gravity to isolate the Coriolis effects.
+    Eigen::VectorXd nle = pinocchio::nonLinearEffects(impl_->model, impl_->data, q_full, v_full);
+    for (int i = 0; i < kNumJoints; ++i) {
+        coriolis_(i) = nle(impl_->q_index[static_cast<size_t>(i)]) - gravity_(i);
+    }
 }
 
 }  // namespace core
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

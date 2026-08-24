@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(velocity_cartesian_control)
+project(franka_cartesian_control)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -27,7 +27,9 @@ include_directories(include)
 add_library(${PROJECT_NAME}_core STATIC
   src/core/robot_model.cpp
   src/core/velocity_ik_solver.cpp
+  src/core/impedance_solver.cpp
 )
+
 set_target_properties(${PROJECT_NAME}_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -40,6 +42,7 @@ target_link_libraries(${PROJECT_NAME}_core
 
 add_library(${PROJECT_NAME} SHARED
   src/ros/cartesian_velocity_controller.cpp
+  src/ros/cartesian_impedance_controller.cpp
 )
 target_link_libraries(${PROJECT_NAME}
   ${PROJECT_NAME}_core
@@ -54,7 +57,7 @@ ament_target_dependencies(${PROJECT_NAME}
   geometry_msgs
 )
 
-pluginlib_export_plugin_description_file(controller_interface cartesian_velocity_controller_plugin.xml)
+pluginlib_export_plugin_description_file(controller_interface controllers_plugin.xml)
 
 install(TARGETS
   ${PROJECT_NAME}
@@ -69,7 +72,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(FILES cartesian_velocity_controller_plugin.xml
+install(FILES controllers_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
 

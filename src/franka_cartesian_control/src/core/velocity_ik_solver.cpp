@@ -1,7 +1,7 @@
-#include "velocity_cartesian_control/core/velocity_ik_solver.hpp"
+#include "franka_cartesian_control/core/velocity_ik_solver.hpp"
 #include <algorithm>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace core {
 
 VelocityIkSolver::VelocityIkSolver() : params_(Params()) {}
@@ -47,4 +47,4 @@ VelocityIkSolver::JointVector VelocityIkSolver::solve(
 }
 
 }  // namespace core
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

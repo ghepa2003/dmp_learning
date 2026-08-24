@@ -2,7 +2,7 @@
 
 #include <Eigen/Dense>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace core {
 
 struct CartesianError {
@@ -50,4 +50,4 @@ inline CartesianError computePoseError(const Eigen::Vector3d& current_pos,
 }
 
 }  // namespace core
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

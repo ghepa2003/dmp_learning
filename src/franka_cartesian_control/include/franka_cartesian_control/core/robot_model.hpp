@@ -5,7 +5,7 @@
 #include <memory>
 #include <Eigen/Dense>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace core {
 
 // Zero-ROS-dependency wrapper around a Pinocchio model, exposing exactly
@@ -58,6 +58,10 @@ public:
     // see open point about sim-vs-real gravity handling.
     const JointVector& gravity() const { return gravity_; }
 
+    // Coriolis torque vector c(q, dq), 7x1 - Gazebo only applies gravity compensation, 
+    // so this is needed to get the full dynamics. 
+    const JointVector& coriolis() const { return coriolis_; }
+
     // Returns the joint names in the order expected by this model (the same
     // order as the input joint_names_ vector passed to the constructor).
     const std::vector<std::string>& jointNames() const { return joint_names_; }
@@ -78,7 +82,8 @@ private:
     Eigen::Quaterniond ee_orientation_;
     Jacobian6x7 jacobian_;
     JointVector gravity_;
+    JointVector coriolis_;
 };
 
 }  // namespace core
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

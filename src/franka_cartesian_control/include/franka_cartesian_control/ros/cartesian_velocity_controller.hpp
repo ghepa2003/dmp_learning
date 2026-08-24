@@ -9,12 +9,12 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 
-#include "velocity_cartesian_control/core/robot_model.hpp"
-#include "velocity_cartesian_control/core/velocity_ik_solver.hpp"
+#include "franka_cartesian_control/core/robot_model.hpp"
+#include "franka_cartesian_control/core/velocity_ik_solver.hpp"
 
 #include <realtime_tools/realtime_publisher.hpp>
 
-namespace velocity_cartesian_control {
+namespace franka_cartesian_control {
 namespace ros_wrapper {
 
 // ros2_control velocity controller: reads a target Cartesian pose from a
@@ -86,4 +86,4 @@ private:
 };
 
 }  // namespace ros_wrapper
-}  // namespace velocity_cartesian_control
+}  // namespace franka_cartesian_control

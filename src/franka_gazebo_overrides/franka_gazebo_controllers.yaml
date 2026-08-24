@@ -28,7 +28,10 @@ controller_manager:
       type: comanip_controllers/JointVelocityController
 
     velocity_cartesian_controller:
-      type: velocity_cartesian_control/CartesianVelocityController
+      type: franka_cartesian_control/CartesianVelocityController
+
+    cartesian_impedance_controller:
+      type: franka_cartesian_control/CartesianImpedanceController
 
 joint_position_example_controller:
   ros__parameters:
@@ -80,3 +83,24 @@ velocity_cartesian_controller:
     max_linear_speed: 0.15
     max_angular_speed: 0.5
     max_joint_speed: 1.5
+cartesian_impedance_controller:
+  ros__parameters:
+    joint_names:
+      - fer_joint1
+      - fer_joint2
+      - fer_joint3
+      - fer_joint4
+      - fer_joint5
+      - fer_joint6
+      - fer_joint7
+    ee_frame_name: fer_link8
+    target_pose_topic: /target_pose
+    translational_stiffness: 200.0
+    rotational_stiffness: 150.0
+    translational_damping: 10.0
+    rotational_damping: 1.0
+    nullspace_stiffness: 0.2
+    joint1_nullspace_stiffness: 100.0
+    delta_tau_max: 1.0
+    nullspace_pinv_damping: 0.05
+    compensate_gravity_internally: false
