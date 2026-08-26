@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
@@ -11,9 +10,18 @@
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
-// Loads a previously learned DMP (position + orientation) from a weights YAML
-// and replays it by integrating dmp_.step()/qdmp_.step() at a fixed rate,
-// publishing each pose as the target for a downstream Cartesian controller.
+/**
+ * @brief ROS 2 Node for Replaying Trained DMPs as Cartesian Target Trajectories.
+ *
+ * @details
+ * Functionality:
+ * 1. Loads pre-trained DMP parameters (position + quaternion orientation) from a YAML file.
+ * 2. Initializes the canonical phase x = 1.0 and transformation states.
+ * 3. Periodically steps the dynamic systems forward at `control_rate_hz` (e.g. 200 Hz, dt = 0.005 s).
+ * 4. Publishes timestamped target poses on `/target_pose` for downstream Cartesian controllers
+ *    (`CartesianVelocityController` or `CartesianImpedanceController`).
+ * 5. Upon reaching duration tau, clamps target pose to the exact goal attractor.
+ */
 class DmpGazeboExecutorNode : public rclcpp::Node {
 public:
     DmpGazeboExecutorNode();
@@ -27,16 +35,16 @@ private:
     rclcpp::TimerBase::SharedPtr startup_timer_;
     rclcpp::TimerBase::SharedPtr step_timer_;
 
-    // core objects
+    // Core mathematical DMP models
     core::DMP dmp_;
     core::QuaternionDMP qdmp_;
 
-    // rollout state
+    // Rollout tracking state
     double dt_;
     double elapsed_;
     bool finished_;
 
-    // params
+    // Parameters
     std::string weights_yaml_path_;
     std::string target_pose_topic_;
     std::string frame_id_;

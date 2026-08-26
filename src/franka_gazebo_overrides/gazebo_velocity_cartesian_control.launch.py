@@ -12,26 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Launch file for Franka Emika / FER Cartesian Velocity Control in Gazebo Sim.
+
+Orchestrates:
+1. Robot description rendering from xacro (with standard velocity interfaces).
+2. Launching Gazebo simulator world.
+3. Spawning the robot model into Gazebo.
+4. Starting `robot_state_publisher` and `joint_state_publisher`.
+5. Loading and activating controllers in sequence:
+   - `joint_state_broadcaster` (after spawn exits)
+   - `velocity_cartesian_controller` (after state broadcaster activates)
+6. Optional RViz2 visualization (disabled if `headless=true`).
+"""
+
 import os
 import xacro
 
 from ament_index_python.packages import get_package_share_directory
 
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess, RegisterEventHandler
+from launch import LaunchContext, LaunchDescription
+from launch.actions import (
+    AppendEnvironmentVariable,
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.conditions import UnlessCondition
 from launch.event_handlers import OnProcessExit
-
-from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch import LaunchContext, LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import  LaunchConfiguration
-from launch.actions import AppendEnvironmentVariable
 from launch_ros.actions import Node
 
+
 def get_robot_description(context: LaunchContext, arm_id, load_gripper, franka_hand):
+    """
+    Renders the Franka Xacro robot description into XML URDF with velocity command interfaces.
+    """
     arm_id_str = context.perform_substitution(arm_id)
     load_gripper_str = context.perform_substitution(load_gripper)
     franka_hand_str = context.perform_substitution(franka_hand)
@@ -44,12 +63,12 @@ def get_robot_description(context: LaunchContext, arm_id, load_gripper, franka_h
     )
 
     robot_description_config = xacro.process_file(
-        franka_xacro_file, 
+        franka_xacro_file,
         mappings={
-            'arm_id': arm_id_str, 
-            'hand': load_gripper_str, 
-            'ros2_control': 'true', 
-            'gazebo': 'true', 
+            'arm_id': arm_id_str,
+            'hand': load_gripper_str,
+            'ros2_control': 'true',
+            'gazebo': 'true',
             'ee_id': franka_hand_str
         }
     )
@@ -68,31 +87,34 @@ def get_robot_description(context: LaunchContext, arm_id, load_gripper, franka_h
     return [robot_state_publisher]
 
 
-
 def prepare_launch_description():
-    # Configure ROS nodes for launch
     load_gripper_name = 'load_gripper'
     franka_hand_name = 'franka_hand'
     arm_id_name = 'arm_id'
+    headless_name = 'headless'
 
     load_gripper = LaunchConfiguration(load_gripper_name)
     franka_hand = LaunchConfiguration(franka_hand_name)
     arm_id = LaunchConfiguration(arm_id_name)
+    headless = LaunchConfiguration(headless_name)
 
     load_gripper_launch_argument = DeclareLaunchArgument(
-            load_gripper_name,
-            default_value='false',
-            description='true/false for activating the gripper')
+        load_gripper_name,
+        default_value='false',
+        description='true/false for activating the gripper')
     franka_hand_launch_argument = DeclareLaunchArgument(
-            franka_hand_name,
-            default_value='franka_hand',
-            description='Default value: franka_hand')
+        franka_hand_name,
+        default_value='franka_hand',
+        description='Default value: franka_hand')
     arm_id_launch_argument = DeclareLaunchArgument(
-            arm_id_name,
-            default_value='fer',
-            description='Available values: fr3, fp3 and fer')
+        arm_id_name,
+        default_value='fer',
+        description='Available values: fr3, fp3 and fer')
+    headless_launch_argument = DeclareLaunchArgument(
+        headless_name,
+        default_value='false',
+        description='Run headless without RViz (true/false)')
 
-    # Get robot description
     robot_state_publisher = OpaqueFunction(
         function=get_robot_description,
         args=[arm_id, load_gripper, franka_hand])
@@ -102,7 +124,7 @@ def prepare_launch_description():
     gazebo_empty_world = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
-        launch_arguments={'gz_args': 'empty.sdf -r', }.items(),
+        launch_arguments={'gz_args': 'empty.sdf -r'}.items(),
     )
 
     # Spawn
@@ -113,23 +135,26 @@ def prepare_launch_description():
         output='screen',
     )
 
-    # Visualize in RViz
+    # Visualize in RViz (only if not headless)
     rviz_file = os.path.join(get_package_share_directory('franka_description'), 'rviz',
                              'visualize_franka.rviz')
-    rviz = Node(package='rviz2',
-             executable='rviz2',
-             name='rviz2',
-             arguments=['--display-config', rviz_file, '-f', 'world'],
+    rviz = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['--display-config', rviz_file, '-f', 'world'],
+        condition=UnlessCondition(headless),
     )
-    
+
     load_joint_state_broadcaster = ExecuteProcess(
         cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
-                'joint_state_broadcaster'],
+             'joint_state_broadcaster'],
         output='screen'
     )
 
     load_velocity_cartesian_controller = ExecuteProcess(
-        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active', 'velocity_cartesian_controller'],
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
+             'velocity_cartesian_controller'],
         output='screen'
     )
 
@@ -137,16 +162,17 @@ def prepare_launch_description():
         load_gripper_launch_argument,
         franka_hand_launch_argument,
         arm_id_launch_argument,
+        headless_launch_argument,
         gazebo_empty_world,
         robot_state_publisher,
         rviz,
         spawn,
         RegisterEventHandler(
-                event_handler=OnProcessExit(
-                    target_action=spawn,
-                    on_exit=[load_joint_state_broadcaster],
-                )
-        ),    
+            event_handler=OnProcessExit(
+                target_action=spawn,
+                on_exit=[load_joint_state_broadcaster],
+            )
+        ),
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=load_joint_state_broadcaster,
@@ -162,6 +188,7 @@ def prepare_launch_description():
                  'rate': 30}],
         ),
     ])
+
 
 def generate_launch_description():
     launch_description = prepare_launch_description()

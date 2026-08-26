@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Linear point-to-point translation of the testing_plane object in Gazebo,
-commanded via /testing_plane/testing_plane_position_controller/commands.
+Linear Point-to-Point Translation Node for the Testing Plane in Gazebo.
 
-Orientation is held fixed at whatever the object's current orientation is
-when this node starts (read once from /testing_plane/joint_states) - this
-script only moves trasl_x/y/z, never rot_x/y/z.
+Commands the 6-DOF moving testing plane via
+`/testing_plane/testing_plane_position_controller/commands`.
+
+Interpolation & Motion Control:
+- Generates smooth trajectories using either linear interpolation or a 5th-order minimum-jerk polynomial
+  s(tau) = 10*tau^3 - 15*tau^4 + 6*tau^5, where tau in [0, 1].
+- Reads the initial object pose from `/testing_plane/joint_states` via a one-shot subscriber to avoid discontinuities at t=0.
+- Holds orientation (rot_x, rot_y, rot_z) fixed while commanding translation (trasl_x, trasl_y, trasl_z).
 """
 
 import numpy as np
@@ -26,10 +30,11 @@ JOINT_ORDER = [
 
 
 def minimum_jerk_s(tau: float) -> float:
-    """Minimum-jerk scalar profile s(tau) in [0,1] for tau in [0,1]: zero
-    velocity and zero acceleration at both endpoints (standard 5th-order
-    polynomial, same family as Hoffmann et al. canonical system smoothing -
-    used here purely for Cartesian interpolation, not a full DMP)."""
+    """
+    Evaluates 5th-order minimum-jerk scalar profile s(tau) for normalized time tau in [0, 1].
+    Satisfies zero velocity and zero acceleration boundary conditions at tau=0 and tau=1:
+      s(tau) = 10*tau^3 - 15*tau^4 + 6*tau^5
+    """
     tau = min(max(tau, 0.0), 1.0)
     return 10.0 * tau**3 - 15.0 * tau**4 + 6.0 * tau**5
 
@@ -38,12 +43,13 @@ class LinearTranslationNode(Node):
     def __init__(self):
         super().__init__("testing_plane_linear_translation")
 
+        # 1. Declare parameters
         self.declare_parameter("explicit_point_a", False)
         self.declare_parameter("point_a", [0.0, 0.0, 0.0])
         self.declare_parameter("point_b", [0.0, 0.0, 0.0])
         self.declare_parameter("duration_sec", 5.0)
         self.declare_parameter("publish_rate_hz", 100.0)
-        self.declare_parameter("profile", "minimum_jerk")  # or "linear"
+        self.declare_parameter("profile", "minimum_jerk")  # 'minimum_jerk' or 'linear'
         self.declare_parameter("hold_at_end", True)
         self.declare_parameter(
             "commands_topic",
@@ -69,18 +75,21 @@ class LinearTranslationNode(Node):
         commands_topic = self.get_parameter("commands_topic").value
         joint_states_topic = self.get_parameter("joint_states_topic").value
 
+        # 2. Publisher for position controller command array
         self.pub = self.create_publisher(Float64MultiArray, commands_topic, 10)
 
-        self.current_state = None  # filled by _joint_states_cb
+        # 3. Read initial joint states via one-shot subscriber
+        self.current_state = None
         self._js_sub = self.create_subscription(
             JointState, joint_states_topic, self._joint_states_cb, 10
         )
 
-        self.get_logger().info(f"Waiting for one message on {joint_states_topic}...")
+        self.get_logger().info(f"Waiting for initial message on {joint_states_topic}...")
         while rclpy.ok() and self.current_state is None:
             rclpy.spin_once(self, timeout_sec=0.2)
-        self.destroy_subscription(self._js_sub)  # one-shot
+        self.destroy_subscription(self._js_sub)
 
+        # 4. Resolve start state point_a and fixed orientation
         self.point_a, self.rot_fixed = self._resolve_start_state()
 
         self.get_logger().info(
@@ -89,12 +98,12 @@ class LinearTranslationNode(Node):
             f"orientation held at {self.rot_fixed.tolist()}"
         )
 
+        # 5. Start periodic timer
         self.start_time = self.get_clock().now()
         self.finished = False
         self.timer = self.create_timer(1.0 / self.rate_hz, self._step)
 
     def _joint_states_cb(self, msg: JointState):
-        # Map by name, never assume ordering.
         if self.current_state is None:
             name_to_pos = dict(zip(msg.name, msg.position))
             try:
@@ -120,8 +129,7 @@ class LinearTranslationNode(Node):
             self.get_logger().warn(
                 f"point_a {point_a.tolist()} differs from actual current "
                 f"position {current_pos.tolist()} by {mismatch:.4f} m "
-                f"(tolerance {self.tol} m) - this WILL cause a visible jump "
-                f"at t=0, left as-is since point_a was explicitly set."
+                f"(tolerance {self.tol} m) - this will cause a jump at t=0."
             )
         return point_a, current_rot
 
@@ -133,8 +141,10 @@ class LinearTranslationNode(Node):
         tau = min(elapsed / self.duration, 1.0)
         s = tau if self.profile == "linear" else minimum_jerk_s(tau)
 
+        # Interpolated Cartesian position
         pos = self.point_a + s * (self.point_b - self.point_a)
 
+        # Command all 6 joints: [x, y, z, rot_x, rot_y, rot_z]
         msg = Float64MultiArray()
         msg.data = [
             float(pos[0]), float(pos[1]), float(pos[2]),

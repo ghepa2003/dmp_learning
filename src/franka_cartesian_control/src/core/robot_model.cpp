@@ -5,6 +5,7 @@
 #include <pinocchio/algorithm/jacobian.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/algorithm/crba.hpp>
 
 #include <stdexcept>
 #include <algorithm>
@@ -12,22 +13,24 @@
 namespace franka_cartesian_control {
 namespace core {
 
-// Internal implementation details hidden behind the PIMPL idiom, to avoid
-// exposing Pinocchio headers in the public RobotModel.hpp interface.
+/**
+ * @brief Internal PIMPL implementation holding Pinocchio C++ objects.
+ */
 struct RobotModel::Impl {
-    pinocchio::Model model;
-    pinocchio::Data data;
-    pinocchio::FrameIndex ee_frame_id;
-    // Maps caller's joint order (joint_names_, e.g. fer_joint1..7) to
-    // Pinocchio's internal q/v index for each joint - NOT assumed to be
-    // identity, since Pinocchio may reorder joints internally relative to
-    // URDF declaration order depending on the tree structure.
+    pinocchio::Model model;            ///< Static kinematic/dynamic tree parsed from URDF
+    pinocchio::Data data;              ///< Dynamic workspace holding intermediate computations (FK, Jacobians, torques)
+    pinocchio::FrameIndex ee_frame_id; ///< Integer frame identifier for the chosen end-effector link
+
+    /**
+     * Explicit index mapping arrays:
+     * Pinocchio builds an internal joint tree and assigns indices to configuration (q) and velocity (v) coordinates.
+     * We map each caller joint index (0 to 6) to Pinocchio's model.idx_qs[joint_id] and model.idx_vs[joint_id].
+     * This guarantees correct ordering regardless of how URDF XML nodes are sequenced.
+     */
     std::array<int, kNumJoints> q_index;
     std::array<int, kNumJoints> v_index;
 };
 
-// Constructor: builds the Pinocchio model from URDF XML content, resolves the
-// end-effector frame and the caller's joint order to Pinocchio's internal indices, and initializes the cached Jacobian and gravity vectors to zero.
 RobotModel::RobotModel(const std::string& urdf_xml_content,
                         const std::vector<std::string>& joint_names,
                         const std::string& ee_frame_name)
@@ -38,18 +41,19 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
             " joint names, got " + std::to_string(joint_names_.size()));
     }
 
-    // Create the Pinocchio model and data structures, and build the model from the provided URDF XML content.
     impl_ = std::make_unique<Impl>();
+
+    // Parse URDF XML string directly into Pinocchio model structure
     pinocchio::urdf::buildModelFromXML(urdf_xml_content, impl_->model);
     impl_->data = pinocchio::Data(impl_->model);
 
+    // Validate and locate the designated end-effector frame
     if (!impl_->model.existFrame(ee_frame_name)) {
         throw std::invalid_argument("RobotModel: end-effector frame not found in URDF: " + ee_frame_name);
     }
     impl_->ee_frame_id = impl_->model.getFrameId(ee_frame_name);
 
-    // Resolve caller joint order -> Pinocchio's internal indices, explicitly,
-    // instead of assuming URDF declaration order == Pinocchio joint order.
+    // Map each joint name to its internal configuration and velocity coordinate offset
     for (int i = 0; i < kNumJoints; ++i) {
         const std::string& jn = joint_names_[static_cast<size_t>(i)];
         if (!impl_->model.existJointName(jn)) {
@@ -62,18 +66,14 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
 
     jacobian_.setZero();
     gravity_.setZero();
+    coriolis_.setZero();
+    mass_matrix_.setZero();
 }
-
 
 RobotModel::~RobotModel() = default;
 
-// Update the robot model's state based on the provided joint positions (q) and velocities (dq). 
-// This function computes the forward kinematics, Jacobian, and gravity vector for the current joint state.
 void RobotModel::update(const JointVector& q, const JointVector& dq) {
-    // Assemble Pinocchio's full configuration/velocity vectors from the
-    // caller's 7-vector, using the resolved indices - handles the case
-    // where model.nq/model.nv > 7 (e.g. a free-flyer base, not expected
-    // here but not assumed away either) and any internal joint reordering.
+    // 1. Pack the 7 actuated joint values into Pinocchio's full coordinate vectors
     Eigen::VectorXd q_full = Eigen::VectorXd::Zero(impl_->model.nq);
     Eigen::VectorXd v_full = Eigen::VectorXd::Zero(impl_->model.nv);
     for (int i = 0; i < kNumJoints; ++i) {
@@ -81,13 +81,18 @@ void RobotModel::update(const JointVector& q, const JointVector& dq) {
         v_full(impl_->v_index[static_cast<size_t>(i)]) = dq(i);
     }
 
+    // 2. Compute Forward Kinematics (FK) and Joint Jacobians for all joints
     pinocchio::computeJointJacobians(impl_->model, impl_->data, q_full);
     pinocchio::updateFramePlacements(impl_->model, impl_->data);
 
+    // 3. Extract End-Effector Placement in Base Frame (SE(3))
     const auto& oMf = impl_->data.oMf[impl_->ee_frame_id];
     ee_position_ = oMf.translation();
     ee_orientation_ = Eigen::Quaterniond(oMf.rotation());
 
+    // 4. Compute 6xN Geometric Frame Jacobian in LOCAL_WORLD_ALIGNED frame
+    // This convention aligns linear and angular velocities with the robot base frame coordinates (link0),
+    // matching standard Cartesian control laws v = J * dq.
     Jacobian6x7 J_full = Jacobian6x7::Zero();
     pinocchio::Data::Matrix6x J_pin(6, impl_->model.nv);
     J_pin.setZero();
@@ -98,16 +103,31 @@ void RobotModel::update(const JointVector& q, const JointVector& dq) {
     }
     jacobian_ = J_full;
 
+    // 5. Compute Generalized Gravity Torques g(q) = dV/dq
     pinocchio::computeGeneralizedGravity(impl_->model, impl_->data, q_full);
     for (int i = 0; i < kNumJoints; ++i) {
         gravity_(i) = impl_->data.g(impl_->q_index[static_cast<size_t>(i)]);
     }
 
-    // Compute Coriolis torques using the non-linear effects function, which includes both gravity and Coriolis terms.
-    // Subtract gravity to isolate the Coriolis effects.
+    // 6. Compute Coriolis Torques c(q, dq)
+    // Pinocchio nonLinearEffects calculates NLE(q, dq) = C(q, dq)*dq + g(q) via RNEA.
+    // Subtracting g(q) isolates the Coriolis and centrifugal joint torques.
     Eigen::VectorXd nle = pinocchio::nonLinearEffects(impl_->model, impl_->data, q_full, v_full);
     for (int i = 0; i < kNumJoints; ++i) {
         coriolis_(i) = nle(impl_->q_index[static_cast<size_t>(i)]) - gravity_(i);
+    }
+
+    // 7. Compute Joint-Space Mass Matrix M(q) via Composite Rigid Body Algorithm (CRBA).
+    // CRBA fills only the upper triangular part of data.M by Pinocchio convention;
+    // mirror it to get a full symmetric matrix before extracting our 7x7 submatrix.
+    pinocchio::crba(impl_->model, impl_->data, q_full);
+    impl_->data.M.triangularView<Eigen::StrictlyLower>() =
+        impl_->data.M.transpose().triangularView<Eigen::StrictlyLower>();
+    for (int i = 0; i < kNumJoints; ++i) {
+        for (int j = 0; j < kNumJoints; ++j) {
+            mass_matrix_(i, j) = impl_->data.M(impl_->v_index[static_cast<size_t>(i)],
+                                                impl_->v_index[static_cast<size_t>(j)]);
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 #pragma once
+
 #include <array>
 #include <vector>
 #include <Eigen/Geometry>
@@ -7,64 +8,106 @@
 namespace haptic_dmp_learning {
 namespace core {
 
-// Quaternion DMP (Ude et al. 2014): state (q, eta) instead of (y, z), error 
-// via logarithmic/exponential map instead of Euclidean subtraction. 
-// Shares the same canonical system (same tau, same alpha_x) as the positional DMP learned 
-// from the same demo - see tau() and the consistency check in the wrapper.
-
+/**
+ * @brief Discrete Dynamic Movement Primitive for 3D Orientation Trajectories in SO(3) (Ude et al. 2014).
+ *
+ * @details
+ * Mathematical Theory & Riemannian Geometry on Unit Quaternions:
+ * Unlike 3D positions in Euclidean space R^3, orientations live on the non-Euclidean Riemannian manifold SO(3),
+ * represented by unit quaternions S^3 = { q in H : ||q|| = 1 }.
+ * Standard vector subtraction (g - y) cannot be applied to quaternions.
+ *
+ * 1. Logarithmic & Exponential Maps (Lie Group SO(3) <-> Lie Algebra so(3) ~ R^3):
+ *    - Log Map: Extracts rotation vector r = (theta / 2) * u from quaternion q:
+ *        logMap(q) = (theta / 2) * u
+ *      Orientation error from q to attractor goal g:
+ *        e_o = 2 * logMap(g * q^-1)
+ *    - Exp Map: Converts rotation vector r into incremental unit quaternion:
+ *        expMap(r) = [cos(||r||), sin(||r||) * (r / ||r||)]
+ *
+ * 2. Quaternion Transformation System:
+ *    Let eta in R^3 be the scaled angular velocity vector (eta = tau * omega):
+ *      tau * deta/dt = alpha_z * (2 * beta_z * logMap(goal * q^-1) - eta) + f(x)
+ *    Manifold integration step on S^3:
+ *      dq = expMap( (dt / (2 * tau)) * eta )
+ *      q(t + dt) = (dq * q(t)).normalized()
+ *
+ * 3. Non-Linear Forcing Function f(x):
+ *    Modulates angular trajectory shape using Gaussian kernels across phase x in (0, 1]:
+ *      f(x) = ( sum_{i=1}^M psi_i(x) * w_i / sum_{i=1}^M psi_i(x) ) * x
+ *    where w_i in R^3 are 3-dimensional learned angular shape weights.
+ */
 class QuaternionDMP {
 public:
+    /**
+     * @brief Constructs a Quaternion DMP.
+     * @param n_basis Number of Gaussian basis functions (default: 20).
+     * @param alpha_x Canonical decay rate (default: 4.6).
+     * @param alpha_z Transformation stiffness gain (default: 25.0).
+     * @param beta_z Transformation damping gain (default: 6.25, critical damping).
+     */
     explicit QuaternionDMP(int n_basis = 20, double alpha_x = 4.6, double alpha_z = 25.0, double beta_z = 6.25);
 
-    // Fits the weights from a single recorded demonstration
+    /**
+     * @brief Fits orientation weights from recorded demonstration samples.
+     * @param demo Vector of recorded Sample objects containing orientations.
+     */
     void learnFromDemonstration(const std::vector<Sample>& demo);
 
-    // Resets the internal integration state (x=1, q=q0, eta=eta0) to
-    // replay/execute the learned DMP from the start via step().
+    /**
+     * @brief Resets internal rollout state to initial conditions (x=1, q=q0, eta=eta0).
+     */
     void reset();
 
-    // Optionally override the goal before execution (spatial generalization).
+    /**
+     * @brief Overrides the target orientation attractor goal in SO(3).
+     * @param goal Desired final unit quaternion.
+     */
     void setGoal(const Eigen::Quaterniond& goal);
 
-    // Returns the current goal (last sample of the demonstration, or manually set).
+    /// @brief Returns the active target goal quaternion.
     const Eigen::Quaterniond& goal() const { return goal_; }
 
-    // Returns the current initial angular velocity (first sample of the demonstration, or manually set).
+    /// @brief Returns the initial angular velocity offset eta0.
     const Eigen::Vector3d& eta0() const { return eta0_; }
 
-    // Optionally enable ridge regression (L2 regularization) for the weight fitting.
+    /// @brief Enables or disables global Ridge Regression (L2 regularization).
     void setRidgeRegression(bool enabled, double lambda = 1e-6) {
         use_ridge_regression_ = enabled;
         ridge_lambda_ = lambda;
     }
 
-    // Returns true if ridge regression is enabled for the weight fitting, false otherwise.
     bool ridgeRegressionEnabled() const { return use_ridge_regression_; }
     double ridgeLambda() const { return ridge_lambda_; }
 
-    // Optionally enable a velocity filter on the input demonstration before fitting the weights.
+    /// @brief Enables pre-filtering of demonstration rotation trajectory.
     void setVelocityFilter(bool enabled, double window_sec_1 = 0.05, double window_sec_2 = 0.05) {
         use_velocity_filter_ = enabled;
         filter_window_sec_1_ = window_sec_1;
         filter_window_sec_2_ = window_sec_2;
     }
 
-    // Returns true if a velocity filter is enabled for the input demonstration, false otherwise.
     bool velocityFilterEnabled() const { return use_velocity_filter_; }
     double filterWindowSec1() const { return filter_window_sec_1_; }
     double filterWindowSec2() const { return filter_window_sec_2_; }
 
-    // Step integration; it returns the normalized current orientation
+    /**
+     * @brief Integrates the Quaternion DMP forward by time step dt on S^3.
+     * @param dt Integration time step in seconds.
+     * @return Eigen::Quaterniond Updated unit quaternion orientation q(t + dt).
+     */
     Eigen::Quaterniond step(double dt);
 
-    // Returns true if the DMP has been learned from a demonstration (weights have been fitted).
+    /// @brief Returns the current integrated unit quaternion orientation q.
+    const Eigen::Quaterniond& orientation() const { return q_; }
+
+    /// @brief Returns true if weights have been successfully learned or loaded.
     bool isLearned() const { return learned_; }
 
-    // Returns the current time of the canonical system for checking consistency with the positional DMP learned from the same demo.
+    /// @brief Returns the demonstration duration tau.
     double tau() const { return tau_; } 
 
-
-    // --- accessors needed for serialization (see dmp_io.hpp) ---
+    // --- Accessors for Serialization & I/O ---
     int nBasis() const { return n_basis_; }
     double alphaX() const { return alpha_x_; }
     double alphaZ() const { return alpha_z_; }
@@ -74,27 +117,34 @@ public:
     const Eigen::VectorXd& widths() const { return widths_; }
     const std::array<Eigen::VectorXd, 3>& weights() const { return weights_; }
 
-    // Reconstructs a QuaternionDMP from previously saved parameters (e.g. loaded from YAML). Used by dmp_io when loading.
+    struct Diagnostics {
+        double initial_eta_norm = 0.0;
+        double final_eta_norm = 0.0;
+    };
+    const Diagnostics& diagnostics() const { return diag_; }
+
+    /**
+     * @brief Directly sets pre-trained parameters (used by YAML loader).
+     */
     void setLearnedParameters(double tau, const Eigen::Quaterniond& q0, const Eigen::Quaterniond& goal,
                                const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
                                const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& eta0);
 
-    // Logarithmic map from SO(3) to R^3, mapping a unit quaternion to its corresponding rotation vector (axis-angle representation).
+    /**
+     * @brief Logarithmic map from unit quaternion to Lie algebra so(3) rotation vector.
+     */
     static Eigen::Vector3d logMap(const Eigen::Quaterniond& q);
 
-    // Exponential map from R^3 to SO(3), mapping a rotation vector back to a unit quaternion.
+    /**
+     * @brief Exponential map from Lie algebra so(3) rotation vector to unit quaternion.
+     */
     static Eigen::Quaterniond expMap(const Eigen::Vector3d& r);
 
 private:
     void initBasisFunctions();
     double basisFunction(int i, double x) const;
 
-    // Unwraps the rotation vector sequence from the demonstration, ensuring continuity across quaternion sign flips.
     std::vector<Eigen::Vector3d> unwrapRotationVector(const std::vector<Sample>& demo) const;
-
-    // Filter the input demonstration to reduce noise in the velocity and acceleration estimates.
-    std::vector<Eigen::Vector3d> movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
-                                                       const std::vector<double>& t, double window_sec) const;
 
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
@@ -114,6 +164,7 @@ private:
     bool use_velocity_filter_ = false;
     double filter_window_sec_1_ = 0.05;
     double filter_window_sec_2_ = 0.05;
+    Diagnostics diag_;
 };
 
 }  // namespace core

@@ -79,3 +79,59 @@ directly, in-process, on the samples accumulated in a
 (`common/src/learn_and_test_dmp.cpp`) links the exact same `core/*.cpp` files
 but is only used for batch sweeps/plots - it is not part of the live
 pipeline and nothing here shells out to it.
+
+## Misconfiguration must fail loudly, never silently downgrade
+
+A prior refactor (2026-08-24) replaced the fallback/error handling below with
+silent early-returns. The result: a broken/unreachable `dmp_features.yaml`
+made `applyFeatureConfig()` return without applying anything, and a node
+started via bare `ros2 run` (no `--params-file`) silently kept `n_basis=20`
+instead of the validated `200`. Neither failure printed anything. On real
+teleoperated demo data this combination degrades the learned trajectory from
+~0.23mm RMSE to ~72mm RMSE / 60deg mean orientation error - the DMP looks
+"completely wrong" with no error message pointing at why. Root-caused by
+isolating with synthetic data (core algorithm unaffected, ~1mm RMSE) then
+real data with the config deliberately broken (reproduced the 72mm/60deg
+failure exactly). The two conventions below exist specifically to prevent
+this class of regression from recurring silently:
+
+- **`core::dmp_io::applyFeatureConfig()` never fails silently.** It tries the
+  given path, then two hardcoded fallback locations
+  (`$HOME/thesis_ws/src/haptic_dmp_learning/config/dmp_features.yaml`,
+  `$HOME/thesis_ws/dmp_features.yaml`), and if all three fail it **throws**
+  `std::runtime_error` listing every path it tried. Proceeding with the
+  default independent-LWR/no-filter behavior after a config load failure is
+  not an acceptable fallback: it looks like a working DMP with much worse
+  accuracy, not an obvious failure. Both `haptic_dmp_wrapper_node` and
+  `live_demo_recorder_node` let this exception propagate out of the
+  constructor; `main()` in each catches it, logs via `RCLCPP_FATAL`, and
+  exits with status 1 instead of calling `rclcpp::spin()`.
+- **`haptic_dmp_wrapper_node` requires `--ros-args --params-file
+  <config/params.yaml>` at launch.** `n_basis`, `alpha_x`, `alpha_z`, and
+  `beta_z` are declared as *mandatory* ROS2 parameters (no default value), so
+  `declare_parameter<T>(name)` itself throws if they were not supplied
+  externally - there is deliberately no code path left that silently reads
+  `params.yaml` by hand or falls back to the ROS-default `n_basis=20`. This
+  node has no launch file (it targets the real Geomagic Touch device inside
+  the `geomagic_touch` container, run directly via `ros2 run`), so this is
+  the only guard against forgetting `--params-file`. `live_demo_recorder_node`
+  is not required to do this the same way because `launch/live_demo.launch.py`
+  always passes `params_file` explicitly.
+- **Output/weights/feature-config paths default to absolute
+  (`$HOME/thesis_ws/...`) paths**, not relative ones, in `config/params.yaml`
+  and in the three nodes' `declare_parameter` defaults
+  (`output_yaml_path`, `output_demo_csv_path`, `weights_yaml_path`,
+  `feature_flags_path`). Relative defaults silently depend on the process's
+  current working directory at launch, which is not guaranteed to be
+  `/root/thesis_ws` for every way these nodes get started - this is what let
+  `dmp_gazebo_executor_node` load a stale `dmp_weights.yaml` without
+  complaint in one investigation.
+- Whenever an editing pass touches `dmp_io.cpp`, the ROS node constructors,
+  or `config/params.yaml`, the change needs an actual `colcon build
+  --packages-select haptic_dmp_learning --symlink-install` (not just
+  `--symlink-install` for YAML edits) before it is considered live: check
+  that the resulting binaries under `build/haptic_dmp_learning/` are newer
+  than the edited sources (`stat` both, or `find <sources> -newer <binary>`
+  should be empty). A rebuilt-but-unverified binary was mistaken for a stale
+  one during this investigation - always check the actual mtimes rather than
+  assuming.

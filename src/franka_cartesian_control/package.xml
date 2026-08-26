@@ -15,8 +15,12 @@
   <depend>rclcpp_lifecycle</depend>
   <depend>realtime_tools</depend>
   <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>Eigen3</depend>
   <depend>pinocchio</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

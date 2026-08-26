@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Wrapper personale: lancia un'immagine docker_factory con il mount aggiuntivo
 # di thesis_ws, senza toccare i run.sh tracciati dal repo del laboratorio.
-set -e
+set -euo pipefail
 
-IMAGE_NAME="$1"
+IMAGE_NAME="${1:-}"
 if [ -z "$IMAGE_NAME" ]; then
     echo "Usage: $0 <IMAGE_NAME>"
     exit 1
 fi
 
-IMAGE_DIR="$HOME/utils/docker_factory/images/$IMAGE_NAME"
+THESIS_WS="${THESIS_WS:-$HOME/thesis_ws}"
+DOCKER_FACTORY_DIR="${DOCKER_FACTORY_DIR:-$HOME/utils/docker_factory}"
+IMAGE_DIR="$DOCKER_FACTORY_DIR/images/$IMAGE_NAME"
+
+if [ ! -f "$IMAGE_DIR/docker_run.cfg" ]; then
+    echo "[ERRORE] File di configurazione non trovato in $IMAGE_DIR/docker_run.cfg"
+    exit 1
+fi
+
 source "$IMAGE_DIR/docker_run.cfg"
 
 xhost +local:docker >/dev/null
@@ -23,10 +31,10 @@ docker run --user root:root \
     --device /dev/dri/ --device /dev/video0 --device /dev/bus/usb \
     -v /dev:/dev \
     --privileged -e "QT_X11_NO_MITSHM=1" \
-    -e DISPLAY=$DISPLAY -e RMW_IMPLEMENTATION -e SHELL \
+    -e DISPLAY="$DISPLAY" -e RMW_IMPLEMENTATION -e SHELL \
     -v "$SSH_AUTH_SOCK:/ssh-agent" -e SSH_AUTH_SOCK=/ssh-agent \
-    -v ~/.bash_history:/home/$USER/.bash_history \
+    -v ~/.bash_history:/home/"$USER"/.bash_history \
     --volume "$HOME/.Xauthority:/root/.Xauthority:ro" \
     --volume /dev/shm:/dev/shm \
-    --volume "$HOME/thesis_ws:/root/thesis_ws" \
+    --volume "$THESIS_WS:/root/thesis_ws" \
     -it "$IMAGE_NAME:$TAG" "$SHELL" -c "$CMD_INTERACTIVE"

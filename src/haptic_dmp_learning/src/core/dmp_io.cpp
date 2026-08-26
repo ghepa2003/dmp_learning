@@ -1,7 +1,9 @@
 #include "haptic_dmp_learning/core/dmp_io.hpp"
 #include <yaml-cpp/yaml.h>
+#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -9,12 +11,18 @@ namespace dmp_io {
 
 namespace {
 
+/**
+ * @brief Helper: Serializes arbitrary Eigen vector to YAML sequence.
+ */
 YAML::Node vectorToYaml(const Eigen::VectorXd& v) {
     YAML::Node node(YAML::NodeType::Sequence);
     for (int i = 0; i < v.size(); ++i) node.push_back(v(i));
     return node;
 }
 
+/**
+ * @brief Helper: Serializes 3D vector [x, y, z] to YAML sequence.
+ */
 YAML::Node vec3ToYaml(const Eigen::Vector3d& v) {
     YAML::Node node(YAML::NodeType::Sequence);
     node.push_back(v.x());
@@ -23,6 +31,9 @@ YAML::Node vec3ToYaml(const Eigen::Vector3d& v) {
     return node;
 }
 
+/**
+ * @brief Helper: Deserializes YAML sequence into Eigen vector.
+ */
 Eigen::VectorXd yamlToVector(const YAML::Node& node) {
     Eigen::VectorXd v(static_cast<int>(node.size()));
     for (std::size_t i = 0; i < node.size(); ++i) {
@@ -31,10 +42,16 @@ Eigen::VectorXd yamlToVector(const YAML::Node& node) {
     return v;
 }
 
+/**
+ * @brief Helper: Deserializes YAML sequence [x, y, z] into Eigen::Vector3d.
+ */
 Eigen::Vector3d yamlToVec3(const YAML::Node& node) {
     return Eigen::Vector3d(node[0].as<double>(), node[1].as<double>(), node[2].as<double>());
 }
 
+/**
+ * @brief Converts a translational DMP instance into a structured YAML node hierarchy.
+ */
 YAML::Node dmpToNode(const DMP& dmp) {
     YAML::Node node;
     node["regression_method"] = dmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
@@ -72,16 +89,25 @@ YAML::Node dmpToNode(const DMP& dmp) {
     return node;
 }
 
+/**
+ * @brief Helper: Serializes unit quaternion [w, x, y, z] to YAML sequence.
+ */
 YAML::Node quatToYaml(const Eigen::Quaterniond& q) {
     YAML::Node node(YAML::NodeType::Sequence);
     node.push_back(q.w()); node.push_back(q.x()); node.push_back(q.y()); node.push_back(q.z());
     return node;
 }
 
+/**
+ * @brief Helper: Deserializes YAML sequence [w, x, y, z] into unit quaternion.
+ */
 Eigen::Quaterniond yamlToQuat(const YAML::Node& node) {
     return Eigen::Quaterniond(node[0].as<double>(), node[1].as<double>(), node[2].as<double>(), node[3].as<double>());
 }
 
+/**
+ * @brief Converts a rotational QuaternionDMP instance into a structured YAML node hierarchy.
+ */
 YAML::Node quaternionDmpToNode(const QuaternionDMP& qdmp) {
     YAML::Node node;
     node["regression_method"] = qdmp.ridgeRegressionEnabled() ? "ridge" : "independent_lwr";
@@ -276,25 +302,43 @@ void loadFromYaml(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
 
 void applyFeatureConfig(const std::string& filepath, DMP& dmp, QuaternionDMP& qdmp) {
     YAML::Node root;
-    bool loaded = false;
-    try {
-        root = YAML::LoadFile(filepath);
-        loaded = true;
-    } catch (const YAML::BadFile&) {
+    std::vector<std::string> attempted;
+
+    auto try_load = [&](const std::string& path) -> bool {
+        attempted.push_back(path);
+        try {
+            root = YAML::LoadFile(path);
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+
+    bool loaded = !filepath.empty() && try_load(filepath);
+
+    if (!loaded) {
         const char* home = std::getenv("HOME");
-        std::vector<std::string> fallbacks = {
+        const std::vector<std::string> fallbacks = {
             std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/dmp_features.yaml",
             std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml"
         };
         for (const auto& fpath : fallbacks) {
-            try {
-                root = YAML::LoadFile(fpath);
+            if (try_load(fpath)) {
                 loaded = true;
                 break;
-            } catch (...) {}
+            }
         }
     }
-    if (!loaded) return;
+
+    if (!loaded) {
+        std::string tried;
+        for (const auto& p : attempted) tried += "\n  - " + p;
+        throw std::runtime_error(
+            "dmp_io::applyFeatureConfig: could not load the feature configuration YAML from any "
+            "known location. Proceeding would silently fall back to independent LWR without "
+            "velocity filtering, which is not a safe default - refusing to continue. Paths tried:" +
+            tried);
+    }
 
     if (root["regression"]) {
         YAML::Node reg = root["regression"];

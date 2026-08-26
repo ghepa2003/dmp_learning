@@ -1,7 +1,7 @@
 #include "haptic_dmp_learning/core/dmp.hpp"
+#include "haptic_dmp_learning/core/filter_utils.hpp"
 #include <cmath>
 #include <stdexcept>
-#include <iostream>
 #include <algorithm>
 
 namespace haptic_dmp_learning {
@@ -25,37 +25,37 @@ DMP::DMP(int n_basis, double alpha_x, double alpha_z, double beta_z, bool second
       dG_(Eigen::Vector3d::Zero()),
       A_(Eigen::Vector3d::Zero()),
       scale_(Eigen::Vector3d::Ones()) {
-        scale_reliable_.fill(true);
-        for (auto& w : weights_) {
+    scale_reliable_.fill(true);
+    for (auto& w : weights_) {
         w = Eigen::VectorXd::Zero(n_basis_);
     }
     initBasisFunctions();
 }
 
 void DMP::initBasisFunctions() {
-    // Equispaced centers in the normalized time [0,1], then mapped to phase space via the canonical system decay
-    // - standard approach (Ijspeert).
-
+    // 1. Distribute kernel centers c_i: equispaced in normalized time t_norm in [0, 1],
+    // then mapped to phase space via the analytic decay law of the canonical system.
     Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
     centers_.resize(n_basis_);
 
-    // Compute the centers in phase space according to the canonical system dynamics.
     for (int i = 0; i < n_basis_; ++i) {
         if (second_order_canonical_) {
             double a = alpha_z_ / 2.0; 
-            // Closed-form solution of the second-order canonical system with critical damping: x(t) = (1 + a * t) * exp(-a * t)
+            // Closed-form critically damped 2nd-order impulse response: x(t) = (1 + a*t) * exp(-a*t)
             centers_(i) = (1.0 + a * t_norm(i)) * std::exp(-a * t_norm(i));
         } else {
-            // First-order canonical system: x(t) = exp(-alpha_x * t)
+            // First-order exponential decay: x(t) = exp(-alpha_x * t)
             centers_(i) = std::exp(-alpha_x_ * t_norm(i));
         }
     }
 
-    // Compute the widths of the Gaussian basis functions to ensure sufficient overlap between neighboring basis functions.
+    // 2. Compute Gaussian kernel bandwidths h_i:
+    // Chosen so neighboring basis functions overlap at ~55% of their peak height:
+    //   h_i = 1 / ( (c_{i+1} - c_i) * 0.55 )^2
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
-            double d = (centers_(i + 1) - centers_(i)) * 0.55;  // overlap factor from the reference implementation (used by Schaal/Ijspeert)
+            double d = (centers_(i + 1) - centers_(i)) * 0.55;
             widths_(i) = 1.0 / (d * d);
         } else {
             widths_(i) = widths_(i - 1);
@@ -64,51 +64,18 @@ void DMP::initBasisFunctions() {
 }
 
 double DMP::basisFunction(int i, double x) const {
-    // Direct implmentation of the Gaussian basis function: psi_i(x) = exp(-h_i * (x - c_i)^2)
+    // Evaluates Gaussian Radial Basis Function: psi_i(x) = exp( -h_i * (x - c_i)^2 )
     double d = x - centers_(i);
     return std::exp(-widths_(i) * d * d);
 }
 
-std::vector<Eigen::Vector3d> DMP::movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
-                                                        const std::vector<double>& t, double window_sec) const {
-    const size_t N = signal.size();
-
-    // If the window is non-positive or there are too few samples, return the original signal.
-    if (window_sec <= 0.0 || N < 2) return signal;
-
-    // Estimate the average time step from the timestamps to determine how many samples correspond to the specified window duration.
-    double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
-
-    // If the estimated time step is non-positive, return the original signal to avoid division by zero.
-    if (dt_est <= 0.0) return signal;
-
-
-    int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
-    int half = window_samples / 2;
-
-    // Perform moving average smoothing: for each sample, average over the window centered at that sample, clamping to the signal boundaries.
-    std::vector<Eigen::Vector3d> out(N);
-    for (size_t k = 0; k < N; ++k) {
-        int lo = std::max(0, static_cast<int>(k) - half);
-        int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
-        Eigen::Vector3d sum = Eigen::Vector3d::Zero();
-        int count = 0;
-        for (int j = lo; j <= hi; ++j) { sum += signal[j]; ++count; }
-        out[k] = sum / static_cast<double>(count);
-    }
-    return out;
-}
-
-
 void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
-
-    // Exception for dealing with too-short demonstrations or non-increasing timestamps.
+    // 1. Validation of demonstration length and temporal monotonicity
     if (demo.size() < 5) {
         throw std::runtime_error(
             "DMP::learnFromDemonstration: demonstration too short (need at least 5 samples).");
     }
 
-    // Exception for non-increasing timestamps in the demonstration.
     const size_t N = demo.size();
     tau_ = demo.back().t - demo.front().t;
     if (tau_ <= 0.0) {
@@ -119,34 +86,33 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     y0_ = demo.front().position;
     goal_ = demo.back().position;
 
-    // Canonical system phase x(t) is a simple exponential decay: no need to
-    // integrate it forward, just evaluate it analytically at each sample time.
-    // x(t) = exp(-alpha_x / tau * t_rel), where t_rel = t - t0
+    // 2. Compute phase trajectory x(t) analytically at each sample time
     std::vector<double> x_t(N);
     for (size_t k = 0; k < N; ++k) {
-    double t_rel = demo[k].t - demo.front().t;
-    double t_norm = t_rel / tau_;
+        double t_rel = demo[k].t - demo.front().t;
+        double t_norm = t_rel / tau_;
         if (second_order_canonical_) {
             double a = alpha_z_ / 2.0;
-            x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);  // closed-form solution of the second-order canonical system with critical damping
+            x_t[k] = (1.0 + a * t_norm) * std::exp(-a * t_norm);
         } else {
             x_t[k] = std::exp(-alpha_x_ * t_norm);
         }
     }
 
-    // Estimate velocity and acceleration via central finite differences.
-    // If velocity filter is enabled, moving average smoothing is applied BEFORE
-    // each of the two differentiation stages
+    // 3. Extract time and position trajectories
     std::vector<double> t_all(N);
     std::vector<Eigen::Vector3d> pos_all(N);
     for (size_t k = 0; k < N; ++k) {
         t_all[k] = demo[k].t;
         pos_all[k] = demo[k].position;
     }
+
+    // 4. Pre-filtering: optionally smooth position before numerical differentiation
     std::vector<Eigen::Vector3d> pos_for_diff = use_velocity_filter_
-        ? movingAverageSmooth(pos_all, t_all, filter_window_sec_1_)
+        ? filter_utils::movingAverageSmooth(pos_all, t_all, filter_window_sec_1_)
         : pos_all;
 
+    // 5. Compute velocities via central finite differences: dy/dt ~ (y[k+1] - y[k-1]) / (t[k+1] - t[k-1])
     std::vector<Eigen::Vector3d> vel(N), acc(N);
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
@@ -156,17 +122,19 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         vel[k] = (pos_for_diff[kp1] - pos_for_diff[km1]) / dt;
     }
 
+    // 6. Post-filtering of velocity signal
     if (use_velocity_filter_) {
-        vel = movingAverageSmooth(vel, t_all, filter_window_sec_2_);
+        vel = filter_utils::movingAverageSmooth(vel, t_all, filter_window_sec_2_);
     }
 
-    std::cerr << "[DMP diag] |vel(0)| = " << vel.front().norm()
-              << " m/s, |vel(N-1)| = " << vel.back().norm() << " m/s ("
-              << "|z(0)| = " << (tau_ * vel.front()).norm()
-              << ", |z(N-1)| = " << (tau_ * vel.back()).norm() << " scaled)\n";
-
+    // 7. Store boundary diagnostics and initial velocity offset z0
+    diag_.initial_vel_norm = vel.front().norm();
+    diag_.final_vel_norm = vel.back().norm();
+    diag_.initial_z_norm = (tau_ * vel.front()).norm();
+    diag_.final_z_norm = (tau_ * vel.back()).norm();
     z0_ = tau_ * vel.front();
 
+    // 8. Compute accelerations via central finite differences on smoothed velocity
     for (size_t k = 0; k < N; ++k) {
         size_t km1 = (k == 0) ? 0 : k - 1;
         size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
@@ -175,8 +143,8 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         acc[k] = (vel[kp1] - vel[km1]) / dt;
     }
 
-    // Precompute the per-sample forcing-term target for all three dimensions
-    // (shared between the independent-LWR and ridge paths below).
+    // 9. Compute target forcing signal f_target(t) by inverting the transformation system:
+    //    f_target,d(t) = tau^2 * d^2y/dt^2 - alpha_z * (beta_z * (goal - y) - tau * dy/dt)
     std::vector<Eigen::Vector3d> f_target(N);
     for (size_t k = 0; k < N; ++k) {
         for (int d = 0; d < 3; ++d) {
@@ -185,22 +153,20 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         }
     }
 
+    // 10. Fit kernel weights w_{d,i}
     if (use_ridge_regression_) {
-        // Joint ridge regression per dimension: Phi(k,i) = psi_i(x_k) * x_k,
-        // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d. Unlike independent LWR
-        // below, this accounts for cross-terms between overlapping basis
-        // functions (off-diagonal Gram is not assumed zero).
+        // Global Ridge Regression (L2 regularized):
+        // Design matrix Phi (N x M): Phi(k, i) = (psi_i(x_k) / sum_j psi_j(x_k)) * x_k
+        // Normal equation: w_d = (Phi^T Phi + lambda * I)^-1 * Phi^T * f_d
         Eigen::MatrixXd Phi(N, n_basis_);
         Eigen::VectorXd psi_row(n_basis_);
         for (size_t k = 0; k < N; ++k) {
             double psi_sum = 0.0;
-            // Compute the basis function values for the current phase x_t[k] and accumulate their sum for normalization.
             for (int i = 0; i < n_basis_; ++i) {
                 psi_row(i) = basisFunction(i, x_t[k]);
                 psi_sum += psi_row(i);
             }
             if (psi_sum < 1e-8) psi_sum = 1e-8;
-            // Fill the design matrix Phi for the current sample k, normalizing the basis function values and multiplying by the phase x_t[k].
             for (int i = 0; i < n_basis_; ++i) {
                 Phi(static_cast<int>(k), i) = (psi_row(i) / psi_sum) * x_t[k];
             }
@@ -215,13 +181,12 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             weights_[d] = solver.solve(Phi.transpose() * f_d);
         }
     } else {
-        // Locally weighted regression, independently per dimension and per basis
-        // function - standard closed-form DMP weight fitting (original behavior).
+        // Standard Locally Weighted Regression (LWR):
+        // w_{d,i} = sum_k (psi_i(x_k) * x_k * f_target[k](d)) / sum_k (psi_i(x_k) * x_k^2)
         for (int d = 0; d < 3; ++d) {
             Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
             Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
 
-            // weights_[d](i) = sum_k(psi_i(x_k) * x_k * f_target[k](d)) / sum_k(psi_i(x_k) * x_k^2)
             for (size_t k = 0; k < N; ++k) {
                 double s = x_t[k];
                 for (int i = 0; i < n_basis_; ++i) {
@@ -236,7 +201,7 @@ void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         }
     }
 
-    // Compute the observed amplitude of the forcing term per dimension, for later scaling checks.
+    // 11. Record original displacement dG = goal - y0 and bounding amplitude A per dimension
     dG_ = goal_ - y0_;
     scale_ = Eigen::Vector3d::Ones();  
     scale_reliable_.fill(true);
@@ -261,18 +226,19 @@ void DMP::reset() {
 }
 
 void DMP::setGoal(const Eigen::Vector3d& goal) {
-    // Check if the new goal is too far from the original goal, in which case we might not want to scale the forcing term.
     constexpr double kAmplitudeRatioThreshold = 2.0;  
     constexpr double kMinDG = 1e-6;  
+
     for (int d = 0; d < 3; ++d) {
         double new_dG = goal(d) - y0_(d);
+        // Guard against division by zero if demonstrated motion had zero net displacement along axis d
         if (std::abs(dG_(d)) < kMinDG) {
             scale_reliable_[d] = false;
-            // If the original movement amplitude is too small, we cannot reliably scale the forcing term. Set scale to 1.0 and mark it as unreliable.
             scale_(d) = 1.0; 
             continue;
         }
-        // Check the ratio of the learned amplitude to the new amplitude. If it's too large, mark the scale as unreliable.
+
+        // Verify that the demonstrated motion did not exhibit large reversals relative to net displacement
         double ratio = A_(d) / std::abs(dG_(d));
         if (ratio > kAmplitudeRatioThreshold) {
             scale_reliable_[d] = false;
@@ -289,20 +255,23 @@ void DMP::setLearnedParameters(double tau, const Eigen::Vector3d& y0, const Eige
                                 const Eigen::Vector3d& dG, const Eigen::Vector3d& A,
                                 const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,
                                 const std::array<Eigen::VectorXd, 3>& weights, const Eigen::Vector3d& z0) {
-    // Set the learned parameters directly, bypassing the learning step. This is used when loading a DMP from saved parameters.                                
-    tau_ = tau; y0_ = y0; goal_ = goal;
-    dG_ = dG; A_ = A;
+    tau_ = tau;
+    y0_ = y0;
+    goal_ = goal;
+    dG_ = dG;
+    A_ = A;
     z0_ = z0;
     scale_ = Eigen::Vector3d::Ones();
     scale_reliable_.fill(true);
-    centers_ = centers; widths_ = widths; weights_ = weights;
+    centers_ = centers;
+    widths_ = widths;
+    weights_ = weights;
     n_basis_ = static_cast<int>(centers.size());
     learned_ = true;
 }
 
 Eigen::Vector3d DMP::step(double dt, const Eigen::Vector3d& ct, double cc) {
-    // Canonical system: tau * dx = -alpha_x * x
-    // Integrate forward with simple Euler step. x_ is clamped to [0,1].
+    // 1. Integrate canonical phase clock forward
     if (second_order_canonical_) {
         double dv = (alpha_z_ * (beta_z_ * (0.0 - x_) - v_) + cc) / tau_;
         double dx = v_ / tau_;
@@ -314,18 +283,17 @@ Eigen::Vector3d DMP::step(double dt, const Eigen::Vector3d& ct, double cc) {
     }
     if (x_ < 0.0) x_ = 0.0;
 
-    // Forcing term (normalized weighted sum of Gaussian kernels), per dimension
+    // 2. Evaluate normalized Gaussian basis function kernels at current phase x_
     Eigen::VectorXd psi(n_basis_);
     double psi_sum = 0.0;
     for (int i = 0; i < n_basis_; ++i) {
         psi(i) = basisFunction(i, x_);
         psi_sum += psi(i);
     }
-
-    // Guard against the case where all basis functions are effectively zero (e.g., x_ is very small and all kernels are far away).
     if (psi_sum < 1e-8) psi_sum = 1e-8;
 
-    // Compute the forcing term f(x) for each dimension, scaled by the learned weights and the current phase x_.
+    // 3. Compute non-linear forcing function f(x):
+    //    f_d(x) = ( sum_i psi_i(x) * w_{d,i} / sum_i psi_i(x) ) * x * s_d
     Eigen::Vector3d f = Eigen::Vector3d::Zero();
     for (int d = 0; d < 3; ++d) {
         double weighted = 0.0;
@@ -335,7 +303,9 @@ Eigen::Vector3d DMP::step(double dt, const Eigen::Vector3d& ct, double cc) {
         f(d) = (weighted / psi_sum) * x_ * scale_(d);
     }
 
-    // Transformation system: tau*dz = alpha_z(beta_z(g-y)-z) + f ; tau*dy = z
+    // 4. Integrate transformation system:
+    //    dz/dt = ( alpha_z * (beta_z * (goal - y) - z) + f + ct ) / tau
+    //    dy/dt = z / tau
     Eigen::Vector3d dz = (alpha_z_ * (beta_z_ * (goal_ - y_) - z_) + f + ct) / tau_;
     Eigen::Vector3d dy = z_ / tau_;
 

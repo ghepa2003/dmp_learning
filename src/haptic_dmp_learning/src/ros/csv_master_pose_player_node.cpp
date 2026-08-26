@@ -8,19 +8,11 @@
 
 using namespace std::chrono_literals;
 
-// This node is intended for playback of a recorded demonstration from a CSV file.
-// It publishes the master pose and button messages at a specified rate, allowing
-// for visualization and triggering of downstream learning nodes. The CSV file
-// should contain time-stamped pose data (position and orientation) for the master device.
-
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
 namespace {
-// Gap between the idle-baseline Joy message and the synthetic start rising
-// edge, so a real driver's own idle state is never mistaken for the start
-// edge itself (mirrors how an operator has some idle time before pressing
-// the physical start button).
+// Idle gap between the baseline joy message and the start button rising edge
 constexpr double kStartEdgeDelaySec = 0.2;
 }  // namespace
 
@@ -29,11 +21,8 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
       next_row_idx_(0),
       finished_(false) {
 
-    const char* home = std::getenv("HOME");
-    std::string default_csv_path =
-        std::string(home ? home : "/root") + "/thesis_ws/real_demo/reach_task_baseline.csv";
-
-    demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", default_csv_path);
+    // 1. Declare ROS parameters
+    demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "reach_task_baseline.csv");
     master_pose_topic_ = this->declare_parameter<std::string>("master_pose_topic", "/master_pose_raw");
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
     frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
@@ -42,8 +31,10 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
 
     dt_ = 1.0 / publish_rate_hz_;
 
+    // 2. Load demo trajectory from CSV
     loadCsv(demo_csv_path_);
 
+    // 3. Create publishers for pose and button events
     pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
         master_pose_topic_, rclcpp::QoS(10));
     buttons_pub_ = this->create_publisher<sensor_msgs::msg::Joy>(
@@ -55,11 +46,11 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
                 demo_csv_path_.c_str(), rows_.size(), master_pose_topic_.c_str(),
                 startup_delay_sec_, buttons_topic_.c_str());
 
+    // 4. Initial delay timer: emits baseline idle joy message before triggering start edge
     startup_timer_ = this->create_wall_timer(
         std::chrono::duration<double>(startup_delay_sec_), [this]() {
             startup_timer_->cancel();
-            // Idle baseline: seeds prev_buttons_ downstream without being
-            // mistaken for a rising edge (see live_demo_recorder_node).
+            // Publish idle baseline [0, 0] so downstream rising-edge detector initializes
             publishButtons(0, 0);
             start_edge_timer_ = this->create_wall_timer(
                 std::chrono::duration<double>(kStartEdgeDelaySec),
@@ -77,7 +68,7 @@ void CsvMasterPosePlayerNode::loadCsv(const std::string& path) {
     }
 
     std::string line;
-    std::getline(f, line);  // header: t,x,y,z,qw,qx,qy,qz
+    std::getline(f, line);  // Discard header line: t,x,y,z,qw,qx,qy,qz
 
     while (std::getline(f, line)) {
         if (line.empty()) continue;
@@ -126,7 +117,7 @@ void CsvMasterPosePlayerNode::publishRow(const CsvRow& row) {
 
 void CsvMasterPosePlayerNode::beginPlayback() {
     RCLCPP_INFO(this->get_logger(), "Playback started.");
-    publishButtons(1, 0);  // start rising edge
+    publishButtons(1, 0);  // Emulate button 0 rising edge (Start Recording)
 
     playback_start_time_ = this->now();
     next_row_idx_ = 0;
@@ -140,16 +131,18 @@ void CsvMasterPosePlayerNode::beginPlayback() {
 void CsvMasterPosePlayerNode::playbackCallback() {
     if (finished_) return;
 
+    // Advance to latest CSV row matching elapsed wall-clock time
     double elapsed = (this->now() - playback_start_time_).seconds();
     while (next_row_idx_ + 1 < rows_.size() && rows_[next_row_idx_ + 1].t <= elapsed) {
         ++next_row_idx_;
     }
     publishRow(rows_[next_row_idx_]);
 
+    // Check for completion
     if (elapsed >= rows_.back().t) {
         finished_ = true;
         playback_timer_->cancel();
-        publishButtons(0, 1);  // stop rising edge -> triggers training downstream
+        publishButtons(0, 1);  // Emulate button 1 rising edge (Stop & Train DMP)
         RCLCPP_INFO(this->get_logger(), "Playback finished (end of file).");
     }
 }

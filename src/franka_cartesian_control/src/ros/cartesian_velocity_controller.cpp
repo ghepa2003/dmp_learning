@@ -2,23 +2,21 @@
 #include "franka_cartesian_control/core/cartesian_error.hpp"
 
 #include <pluginlib/class_list_macros.hpp>
-
-
 #include <std_msgs/msg/string.hpp>
 #include <future>
 
 namespace franka_cartesian_control {
 namespace ros_wrapper {
 
-// ros2_control velocity controller: reads a target Cartesian pose from a
-// topic, computes the pose error against the current end-effector pose
-// (via core::RobotModel, Pinocchio-based FK/Jacobian), solves the desired
-// joint velocities via damped least squares (core::VelocityIkSolver), and
-// commands them on the velocity command interfaces.
+/**
+ * @brief Initializes parameters for the Cartesian velocity controller.
+ * Declares ROS 2 parameters with default values and loads IK solver gains.
+ */
 controller_interface::CallbackReturn CartesianVelocityController::on_init() {
     try {
         auto node = get_node();
 
+        // 1. Declare joint names for the 7-DOF Franka manipulator
         if (!node->has_parameter("joint_names")) {
             node->declare_parameter<std::vector<std::string>>(
                 "joint_names",
@@ -27,16 +25,19 @@ controller_interface::CallbackReturn CartesianVelocityController::on_init() {
         }
         joint_names_ = node->get_parameter("joint_names").as_string_array();
 
+        // 2. Declare end-effector link frame name (must exist in URDF tree)
         if (!node->has_parameter("ee_frame_name")) {
             node->declare_parameter<std::string>("ee_frame_name", "fer_link8");
         }
         ee_frame_name_ = node->get_parameter("ee_frame_name").as_string();
 
+        // 3. Declare subscribed target pose topic
         if (!node->has_parameter("target_pose_topic")) {
             node->declare_parameter<std::string>("target_pose_topic", "/target_pose");
         }
         target_pose_topic_ = node->get_parameter("target_pose_topic").as_string();
 
+        // 4. Declare DLS IK Solver Parameters (gains, damping lambda, velocity saturations)
         core::VelocityIkSolver::Params ik_params;
 
         if (!node->has_parameter("kp_linear")) {
@@ -78,7 +79,10 @@ controller_interface::CallbackReturn CartesianVelocityController::on_init() {
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
-// Configure the controller: read the robot_description parameter (URDF XML content), build the RobotModel, and set up the target pose subscription.
+/**
+ * @brief Configures command interfaces requested by this controller from hardware/Gazebo.
+ * Velocity controller claims '<joint_name>/velocity' interfaces for all 7 joints.
+ */
 controller_interface::InterfaceConfiguration
 CartesianVelocityController::command_interface_configuration() const {
     controller_interface::InterfaceConfiguration config;
@@ -89,7 +93,10 @@ CartesianVelocityController::command_interface_configuration() const {
     return config;
 }
 
-// Configure the controller: specify the state interfaces (position and velocity for each joint) that the controller will read.
+/**
+ * @brief Configures feedback state interfaces read by this controller.
+ * Reads position and velocity for all 7 joints to update Pinocchio kinematic state.
+ */
 controller_interface::InterfaceConfiguration
 CartesianVelocityController::state_interface_configuration() const {
     controller_interface::InterfaceConfiguration config;
@@ -101,12 +108,14 @@ CartesianVelocityController::state_interface_configuration() const {
     return config;
 }
 
-// Configure the controller: read the robot_description parameter (URDF XML content), build the RobotModel, and set up the target pose subscription.
+/**
+ * @brief Lifecycle configure transition: builds RobotModel, initializes subscribers and real-time publishers.
+ */
 controller_interface::CallbackReturn CartesianVelocityController::on_configure(
     const rclcpp_lifecycle::State&) {
     auto node = get_node();
 
-    // Refresh VelocityIkSolver parameters
+    // 1. Refresh tunable IK Solver parameters from node parameters
     core::VelocityIkSolver::Params ik_params;
     ik_params.kp_linear = node->get_parameter("kp_linear").as_double();
     ik_params.kp_angular = node->get_parameter("kp_angular").as_double();
@@ -123,45 +132,14 @@ controller_interface::CallbackReturn CartesianVelocityController::on_configure(
         ik_params.kp_linear, ik_params.kp_angular, ik_params.damping_lambda,
         ik_params.max_linear_speed, ik_params.max_angular_speed, ik_params.max_joint_speed);
 
-    // robot_description is NOT automatically available as a parameter on a
-    // controller node - it must be fetched by subscribing to the
-    // /robot_description topic (published with transient_local QoS by
-    // robot_state_publisher, so a late subscriber still receives the last
-    // message). Using a dedicated temporary node + executor here, separate
-    // from the controller_manager's own executor, to wait synchronously
-    // without interfering with it.
-    std::string urdf_xml;
-    {
-        // Create a temporary node to subscribe to the /robot_description topic and wait for the URDF XML content.
-        auto temp_node = std::make_shared<rclcpp::Node>("franka_cartesian_control_urdf_waiter");
-        std::promise<std::string> urdf_promise;
-        auto urdf_future = urdf_promise.get_future();
-
-        // Subscribe to the /robot_description topic with transient_local QoS to receive the last published message.
-        auto sub = temp_node->create_subscription<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(1).transient_local(),
-            [&urdf_promise](const std_msgs::msg::String::SharedPtr msg) {
-                urdf_promise.set_value(msg->data);
-            });
-
-        // Use a single-threaded executor to spin the temporary node and wait for the URDF message.
-        rclcpp::executors::SingleThreadedExecutor executor;
-        executor.add_node(temp_node);
-
-        // Wait for the URDF message with a timeout to avoid blocking indefinitely if the message is not published.
-        const auto timeout = std::chrono::seconds(5);
-        auto status = executor.spin_until_future_complete(urdf_future, timeout);
-
-        if (status != rclcpp::FutureReturnCode::SUCCESS) {
-            RCLCPP_ERROR(node->get_logger(),
-                         "Timed out waiting for /robot_description (5s) - is "
-                         "robot_state_publisher running and publishing?");
-            return controller_interface::CallbackReturn::ERROR;
-        }
-        urdf_xml = urdf_future.get();
+    // 2. Fetch URDF XML model string from /robot_description (transient_local QoS)
+    auto urdf_opt = fetchRobotDescription(node->get_logger());
+    if (!urdf_opt) {
+        return controller_interface::CallbackReturn::ERROR;
     }
+    std::string urdf_xml = *urdf_opt;
 
-    // Build the RobotModel from the URDF XML content, resolving the end-effector frame and joint order, and initialize the target pose subscription.
+    // 3. Build Pinocchio core RobotModel
     try {
         robot_model_ = std::make_unique<core::RobotModel>(urdf_xml, joint_names_, ee_frame_name_);
     } catch (const std::exception& e) {
@@ -169,31 +147,30 @@ controller_interface::CallbackReturn CartesianVelocityController::on_configure(
         return controller_interface::CallbackReturn::ERROR;
     }
 
-    // Subscribe to the target pose topic, which updates the target pose buffer in a thread-safe manner.
+    // 4. Subscribe to target pose topic (writes lock-free into RealtimeBuffer)
     target_pose_sub_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
         target_pose_topic_, rclcpp::QoS(10),
         std::bind(&CartesianVelocityController::targetPoseCallback, this, std::placeholders::_1));
 
-    // Create publishers for aligned target pose and actual end-effector pose, with realtime-safe wrappers for publishing in the control loop.
+    // 5. Pre-allocate real-time safe publishers for telemetry
     aligned_target_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
-    "~/target_pose_aligned", rclcpp::QoS(10));
-
+        "~/target_pose_aligned", rclcpp::QoS(10));
     rt_aligned_target_pub_ = std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>>(
         aligned_target_pub_);
 
     actual_pose_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
         "~/actual_pose", rclcpp::QoS(10));
-
     rt_actual_pose_pub_ = std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>>(
         actual_pose_pub_);
 
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
-// Activate the controller: read the current joint states, update the RobotModel, and initialize the target pose to the current end-effector pose to avoid a startup jump.
+/**
+ * @brief Lifecycle activate transition: captures initial end-effector pose and resets frame alignment.
+ */
 controller_interface::CallbackReturn CartesianVelocityController::on_activate(
     const rclcpp_lifecycle::State&) {
-    // Read the current joint states from the state interfaces and update the RobotModel with the current joint positions and velocities.
     core::RobotModel::JointVector q, dq;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         q(static_cast<int>(i)) = state_interfaces_[2 * i].get_value();
@@ -201,43 +178,45 @@ controller_interface::CallbackReturn CartesianVelocityController::on_activate(
     }
     robot_model_->update(q, dq);
 
-    activation_ee_position_ = robot_model_->eePosition();
-    activation_ee_orientation_ = robot_model_->eeOrientation();
-
-    // Force re-capture of the DMP->robot alignment against the first
-    // target received in this activation cycle (not carried over from a
-    // previous activation).
-    alignment_captured_ = false;
+    // Anchor frame alignment to physical activation pose
+    frame_aligner_.reset(robot_model_->eePosition(), robot_model_->eeOrientation());
     target_received_.store(false);
 
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
-// Deactivate the controller: command zero velocity on all joints to ensure a safe stop.
+/**
+ * @brief Lifecycle deactivate transition: defensively commands zero velocity to all joints.
+ */
 controller_interface::CallbackReturn CartesianVelocityController::on_deactivate(
     const rclcpp_lifecycle::State&) {
-    // Command zero velocity on the way out, defensively.
     for (auto& ci : command_interfaces_) {
         ci.set_value(0.0);
     }
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
-// Callback for receiving the target pose from the subscribed topic. Updates the target pose buffer in a thread-safe manner.
+/**
+ * @brief Asynchronous subscription callback: receives incoming target pose and writes to lock-free RT buffer.
+ */
 void CartesianVelocityController::targetPoseCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     target_pose_buffer_.writeFromNonRT(*msg);
     target_received_.store(true);
 }
 
-// Update the controller: read the current joint states, compute the pose error, solve for desired joint velocities, and command them to the actuators.
+/**
+ * @brief Real-time deterministic control loop (1 kHz): executes closed-loop resolved-rate velocity IK.
+ */
 controller_interface::return_type CartesianVelocityController::update(
     const rclcpp::Time& time, const rclcpp::Duration& /*period*/) {
+    // 1. Safety check: hold stationary position if no target pose has been received yet
     if (!target_received_.load()) {
         for (auto& ci : command_interfaces_) ci.set_value(0.0);
         return controller_interface::return_type::OK;
     }
 
+    // 2. Read current joint states from hardware interfaces and update Pinocchio kinematics
     core::RobotModel::JointVector q, dq;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         q(static_cast<int>(i)) = state_interfaces_[2 * i].get_value();
@@ -245,6 +224,7 @@ controller_interface::return_type CartesianVelocityController::update(
     }
     robot_model_->update(q, dq);
 
+    // 3. Lock-free read of raw target pose from real-time buffer
     const auto& raw_target = *target_pose_buffer_.readFromRT();
     Eigen::Vector3d raw_pos(raw_target.pose.position.x, raw_target.pose.position.y,
                              raw_target.pose.position.z);
@@ -252,22 +232,13 @@ controller_interface::return_type CartesianVelocityController::update(
                                  raw_target.pose.orientation.y, raw_target.pose.orientation.z);
     raw_quat.normalize();
 
-    if (!alignment_captured_) {
-        // Rigid offset: robot's actual starting pose minus the DMP's first
-        // published pose. Applied to every subsequent target, this
-        // re-anchors the demonstrated relative motion to wherever the
-        // robot actually starts, instead of the haptic device's frame.
-        position_offset_ = activation_ee_position_ - raw_pos;
-        orientation_offset_ = activation_ee_orientation_ * raw_quat.conjugate();
-        alignment_captured_ = true;
-        RCLCPP_INFO(get_node()->get_logger(),
-                    "Captured DMP->robot alignment: position offset = [%.3f, %.3f, %.3f] m",
-                    position_offset_.x(), position_offset_.y(), position_offset_.z());
-    }
+    // 4. Align raw trajectory pose to robot base frame using rigid offset
+    auto logger = get_node()->get_logger();
+    Eigen::Vector3d target_pos;
+    Eigen::Quaterniond target_quat;
+    frame_aligner_.align(raw_pos, raw_quat, target_pos, target_quat, &logger);
 
-    Eigen::Vector3d target_pos = position_offset_ + raw_pos;
-    Eigen::Quaterniond target_quat = (orientation_offset_ * raw_quat).normalized();
-
+    // 5. Publish telemetry (lock-free non-blocking trylock)
     if (rt_actual_pose_pub_->trylock()) {
         auto& msg = rt_actual_pose_pub_->msg_;
         msg.header.stamp = time;
@@ -295,13 +266,16 @@ controller_interface::return_type CartesianVelocityController::update(
         msg.pose.orientation.z = target_quat.z();
         rt_aligned_target_pub_->unlockAndPublish();
     }
-    
+
+    // 6. Compute 6D Cartesian Error (linear translation + Lie algebra orientation)
     core::CartesianError err = core::computePoseError(
         robot_model_->eePosition(), robot_model_->eeOrientation(), target_pos, target_quat);
 
+    // 7. Solve DLS Inverse Kinematics: compute desired twist V_des and joint velocities dq_cmd
     auto twist = ik_solver_.desiredTwist(err);
     auto dq_cmd = ik_solver_.solve(robot_model_->jacobian(), twist);
 
+    // 8. Write commanded joint velocities directly into hardware command interfaces
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         command_interfaces_[i].set_value(dq_cmd(static_cast<int>(i)));
     }
@@ -312,6 +286,6 @@ controller_interface::return_type CartesianVelocityController::update(
 }  // namespace ros_wrapper
 }  // namespace franka_cartesian_control
 
-// Register the controller as a plugin with the ROS 2 pluginlib system, allowing it to be dynamically loaded by the controller manager.
+// Register as dynamically loadable controller plugin
 PLUGINLIB_EXPORT_CLASS(franka_cartesian_control::ros_wrapper::CartesianVelocityController,
                         controller_interface::ControllerInterface)

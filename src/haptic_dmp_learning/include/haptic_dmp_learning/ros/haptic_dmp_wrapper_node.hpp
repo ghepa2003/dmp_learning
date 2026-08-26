@@ -14,8 +14,17 @@
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
-// Read /touch0/pose and /touch0/buttons, translate them into
-// core::Sample objects, and drive a core::DemonstrationRecorder + core::DMP.
+/**
+ * @brief ROS 2 Node for Teleoperation Demonstration Recording and DMP Learning.
+ *
+ * @details
+ * Workflow & Operation:
+ * 1. Teleoperation Tracking: Subscribes to `/touch0/pose` from the Geomagic Touch haptic stylus driver (SensorData QoS, ~1 kHz).
+ * 2. State Machine Triggering: Subscribes to `/touch0/buttons` (Joy message) and listens for rising-edge transitions:
+ *    - Button 0 (Front Grey Button): Starts recording a demonstration, resetting the sample buffer.
+ *    - Button 1 (Rear White Button): Stops recording, saves raw CSV, fits 3D position and SO(3) quaternion DMPs,
+ *      and serializes learned parameters to YAML.
+ */
 class HapticDmpWrapperNode : public rclcpp::Node {
 public:
     HapticDmpWrapperNode();
@@ -32,17 +41,17 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
 
-    // core objects
+    // Core mathematical objects
     core::DemonstrationRecorder recorder_;
     core::DMP dmp_;
     core::QuaternionDMP quat_dmp_;
 
-    // state
+    // State machine tracking
     bool recording_;
     rclcpp::Time record_start_time_;
-    std::vector<int32_t> prev_buttons_;  // for rising-edge detection, empty until first msg
+    std::vector<int32_t> prev_buttons_;  ///< Stores previous joy button state for rising-edge detection
 
-    // params
+    // ROS Parameters
     std::string output_yaml_path_;
     std::string output_demo_csv_path_; 
     int n_basis_;

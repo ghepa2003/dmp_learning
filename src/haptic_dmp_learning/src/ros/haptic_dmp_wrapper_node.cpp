@@ -1,7 +1,6 @@
 #include "haptic_dmp_learning/ros/haptic_dmp_wrapper_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
-#include <yaml-cpp/yaml.h>
-
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cstdlib>
 #include <fstream>
 
@@ -9,108 +8,90 @@ namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
 HapticDmpWrapperNode::HapticDmpWrapperNode()
-    : 
-      // Initialize the ROS node with the name "haptic_dmp_wrapper_node"
-      Node("haptic_dmp_wrapper_node"),
-      dmp_(20, 4.6, 25.0, 6.25, false),  // default DMP parameters; will be overridden by ROS2 params
+    : Node("haptic_dmp_wrapper_node"),
+      dmp_(20, 4.6, 25.0, 6.25, false),
       recording_(false) {
 
-    // Parameters - override via a params.yaml or -p on the command line.
-    // First value is from the params.yaml, second is the default if not specified there.
-    n_basis_ = this->declare_parameter<int>("n_basis", 20);
-    alpha_x_ = this->declare_parameter<double>("alpha_x", 4.6);
-    alpha_z_ = this->declare_parameter<double>("alpha_z", 25.0);
-    beta_z_ = this->declare_parameter<double>("beta_z", 6.25);
+    // 1. Declare DMP hyper-parameters as MANDATORY (no default). A wrong
+    // n_basis silently degrades the learned trajectory without any error
+    // (verified: n_basis=20 instead of the validated 200 raises real-data
+    // RMSE from 0.23mm to 1.4mm) - so this node refuses to start unless these
+    // come from an explicit --ros-args --params-file <config/params.yaml>.
+    try {
+        n_basis_ = this->declare_parameter<int>("n_basis");
+        alpha_x_ = this->declare_parameter<double>("alpha_x");
+        alpha_z_ = this->declare_parameter<double>("alpha_z");
+        beta_z_ = this->declare_parameter<double>("beta_z");
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            "haptic_dmp_wrapper_node: required parameters (n_basis, alpha_x, alpha_z, beta_z) "
+            "were not provided. This node must be launched with "
+            "--ros-args --params-file <path/to/haptic_dmp_learning/config/params.yaml> "
+            "so the validated DMP hyper-parameters are used instead of silently falling back "
+            "to hardcoded ROS defaults. Underlying error: " + std::string(e.what()));
+    }
 
-    // Default output paths: allow override via ROS2 parameter.
+    // 2. Output file paths (absolute defaults so behavior does not depend on
+    // the process's current working directory at launch)
     const char* home = std::getenv("HOME");
-    std::string default_yaml_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_weights.yaml";
-    std::string default_csv_path = std::string(home ? home : "/root") + "/thesis_ws/demo_raw.csv";
-    output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", default_yaml_path);
-    output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", default_csv_path);
+    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+    output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", ws_root + "/dmp_weights.yaml");
+    output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", ws_root + "/demo_raw.csv");
 
-    std::string default_features_path = std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/dmp_features.yaml";
-    if (!std::ifstream(default_features_path).good()) {
-        default_features_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_features.yaml";
+    // 3. Locate optional feature configuration YAML file (absolute default;
+    // dmp_io::applyFeatureConfig has its own fallback chain and will refuse
+    // to continue rather than silently reverting to unfiltered LWR)
+    std::string default_features_path;
+    try {
+        default_features_path = ament_index_cpp::get_package_share_directory("haptic_dmp_learning") + "/config/dmp_features.yaml";
+    } catch (const std::exception&) {
+        default_features_path = ws_root + "/src/haptic_dmp_learning/config/dmp_features.yaml";
     }
     feature_flags_path_ = this->declare_parameter<std::string>("feature_flags_path", default_features_path);
 
-    // If n_basis_ is default 20, check if params.yaml exists and load n_basis from it
-    if (n_basis_ == 20) {
-        std::vector<std::string> params_candidates = {
-            std::string(home ? home : "/root") + "/thesis_ws/src/haptic_dmp_learning/config/params.yaml",
-            std::string(home ? home : "/root") + "/thesis_ws/params.yaml"
-        };
-        for (const auto& ppath : params_candidates) {
-            std::ifstream check_f(ppath);
-            if (check_f.good()) {
-                try {
-                    YAML::Node pnode = YAML::LoadFile(ppath);
-                    if (pnode["haptic_dmp_wrapper_node"] && pnode["haptic_dmp_wrapper_node"]["ros__parameters"]) {
-                        auto ros_p = pnode["haptic_dmp_wrapper_node"]["ros__parameters"];
-                        if (ros_p["n_basis"]) n_basis_ = ros_p["n_basis"].as<int>();
-                        if (ros_p["alpha_x"]) alpha_x_ = ros_p["alpha_x"].as<double>();
-                        if (ros_p["alpha_z"]) alpha_z_ = ros_p["alpha_z"].as<double>();
-                        if (ros_p["beta_z"]) beta_z_ = ros_p["beta_z"].as<double>();
-                        break;
-                    }
-                } catch (...) {}
-            }
-        }
-    }
-
-    // Initialize BOTH position DMP and Quaternion DMP with the specified parameters
+    // 4. Instantiate core translational and rotational DMP solvers
     dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
     quat_dmp_ = core::QuaternionDMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
 
-    // Applies feature flags (e.g. ridge regression) from separate YAML file
-    // from weights. Missing file = no changes, defaults remain (independent LWR)
-    // - opt-in activation, does not require this file to work as before.
+    // 5. Apply advanced algorithmic features (Ridge regression, velocity filters)
     core::dmp_io::applyFeatureConfig(feature_flags_path_, dmp_, quat_dmp_);
 
-    // Initialize the subscriptions to the Geomagic Touch topics
-    // NOTE: /touch0/pose is published at ~1000 Hz -> best-effort sensor QoS,
-    // not the default reliable one (avoids unnecessary buffering/backlog).
+    // 6. Subscribe to Geomagic Touch pose (~1 kHz, best-effort sensor QoS)
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
         "/touch0/pose", rclcpp::SensorDataQoS(),
         std::bind(&HapticDmpWrapperNode::poseCallback, this, std::placeholders::_1));
 
-    // Initialize the subscription to the buttons topic with a queue size of 10
+    // 7. Subscribe to stylus physical buttons (joy message)
     buttons_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
         "/touch0/buttons", 10,
         std::bind(&HapticDmpWrapperNode::buttonsCallback, this, std::placeholders::_1));
 
     RCLCPP_INFO(this->get_logger(),
-    
                 "haptic_dmp_wrapper_node ready. Press button 0 to start recording a demo, "
                 "button 1 to stop and learn the DMP. DMP output: %s | Demo CSV: %s",
                 output_yaml_path_.c_str(), output_demo_csv_path_.c_str());
 }
 
 void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-    // If not currently recording, ignore the pose messages
     if (!recording_) return;
 
-    // Prefer the message's own timestamp; fall back to reception time if the
-    // publisher never populated header.stamp (common with some drivers).
+    // Use message timestamp if available; fall back to reception time
     rclcpp::Time now = msg->header.stamp;
     if (now.nanoseconds() == 0) {
         now = this->now();
     }
 
-    // Create a Sample object with the current time and position, and add it to the recorder
-    // The orientation is also captured and normalized.
+    // Assemble Sample object and buffer it into recorder
     core::Sample s;
     s.t = (now - record_start_time_).seconds();
     s.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
     Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
-                           msg->pose.orientation.y, msg->pose.orientation.z);
+                              msg->pose.orientation.y, msg->pose.orientation.z);
     s.orientation = orient.normalized();
     recorder_.addSample(s);
 }
 
 void HapticDmpWrapperNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg) {
-    // Check that the buttons message has at least 2 entries; if not, log a warning and return
     if (msg->buttons.size() < 2) {
         RCLCPP_WARN_ONCE(this->get_logger(),
                           "Expected at least 2 entries in /touch0/buttons, got %zu",
@@ -118,12 +99,12 @@ void HapticDmpWrapperNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPt
         return;
     }
 
-    // If this is the first buttons message received, initialize prev_buttons_ and return
     if (prev_buttons_.empty()) {
         prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
-        return;  // first message: just initialize state, nothing to trigger yet
+        return;
     }
 
+    // Rising-edge detection (0 -> 1 transition)
     bool rising0 = (msg->buttons[0] != 0) && (prev_buttons_[0] == 0);
     bool rising1 = (msg->buttons[1] != 0) && (prev_buttons_[1] == 0);
 
@@ -144,7 +125,6 @@ void HapticDmpWrapperNode::startRecording() {
 }
 
 void HapticDmpWrapperNode::stopRecordingAndLearn() {
-    // Stop recording and learn the DMP from the recorded demonstration
     recording_ = false;
     RCLCPP_INFO(this->get_logger(), "Recording stopped. %zu samples collected.", recorder_.size());
 
@@ -153,7 +133,7 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
         return;
     }
 
-        
+    // Save raw demonstrated trajectory to CSV
     if (!output_demo_csv_path_.empty()) {
         try {
             saveDemoToCsv(output_demo_csv_path_);
@@ -163,6 +143,7 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
         }
     }
 
+    // Fit weights for both translational and rotational DMPs
     try {
         dmp_.learnFromDemonstration(recorder_.samples());
         quat_dmp_.learnFromDemonstration(recorder_.samples());
@@ -173,7 +154,16 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
                         "check demo timestamps.",
                         dmp_.tau(), quat_dmp_.tau());
         }
-        std::cerr << "[SAVE diag] dmp.z0() norm before saveToYaml = " << dmp_.z0().norm() << "\n";
+
+        const auto& dmp_diag = dmp_.diagnostics();
+        const auto& qdmp_diag = quat_dmp_.diagnostics();
+        RCLCPP_INFO(this->get_logger(),
+                    "DMP learned: |vel(0)|=%.3f m/s, |vel(end)|=%.3f m/s, |z(0)|=%.3f | "
+                    "QuaternionDMP: |eta(0)|=%.3f, |eta(end)|=%.3f",
+                    dmp_diag.initial_vel_norm, dmp_diag.final_vel_norm, dmp_diag.initial_z_norm,
+                    qdmp_diag.initial_eta_norm, qdmp_diag.final_eta_norm);
+
+        // Serialize learned parameters to destination YAML
         core::dmp_io::saveToYaml(dmp_, quat_dmp_, output_yaml_path_);
         RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());
     } catch (const std::exception& e) {
@@ -189,7 +179,7 @@ void HapticDmpWrapperNode::saveDemoToCsv(const std::string& path) const {
     f << "t,x,y,z,qw,qx,qy,qz\n";
     for (const auto& s : recorder_.samples()) {
         f << s.t << "," << s.position.x() << "," << s.position.y() << "," << s.position.z() << ","
-        << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << "\n";
+          << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << "\n";
     }
 }
 

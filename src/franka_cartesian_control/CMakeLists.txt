@@ -19,6 +19,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
 
@@ -55,6 +56,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
   realtime_tools
   geometry_msgs
+  std_msgs
 )
 
 pluginlib_export_plugin_description_file(controller_interface controllers_plugin.xml)
@@ -79,6 +81,13 @@ install(FILES controllers_plugin.xml
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_cartesian_error test/test_cartesian_error.cpp)
+  target_link_libraries(test_cartesian_error ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_velocity_ik test/test_velocity_ik.cpp)
+  target_link_libraries(test_velocity_ik ${PROJECT_NAME}_core)
 endif()
 
 ament_export_include_directories(include)

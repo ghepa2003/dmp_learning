@@ -12,15 +12,16 @@ namespace ros_wrapper {
 
 DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     : Node("dmp_gazebo_executor_node"),
-      dmp_(20, 4.6, 25.0, 6.25, false),   // placeholders; overwritten by loadFromYaml below
+      dmp_(20, 4.6, 25.0, 6.25, false),   // Placeholders overwritten by loadFromYaml
       qdmp_(20, 4.6, 25.0, 6.25),
       dt_(0.005),
       elapsed_(0.0),
       finished_(false) {
 
+    // 1. Declare parameters (absolute default so behavior does not depend on
+    // the process's current working directory at launch)
     const char* home = std::getenv("HOME");
-    std::string default_weights_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_weights.yaml";
-
+    const std::string default_weights_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_weights.yaml";
     weights_yaml_path_ = this->declare_parameter<std::string>("weights_yaml_path", default_weights_path);
     target_pose_topic_ = this->declare_parameter<std::string>("target_pose_topic", "/target_pose");
     frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
@@ -29,6 +30,7 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
 
     dt_ = 1.0 / control_rate_hz_;
 
+    // 2. Load trained DMP parameters from YAML
     try {
         core::dmp_io::loadFromYaml(weights_yaml_path_, dmp_, qdmp_);
     } catch (const std::exception& e) {
@@ -44,9 +46,11 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
                     dmp_.tau(), qdmp_.tau());
     }
 
+    // 3. Reset internal rollout states (x=1, y=y0, q=q0)
     dmp_.reset();
     qdmp_.reset();
 
+    // 4. Create target pose publisher
     pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
         target_pose_topic_, rclcpp::QoS(10));
 
@@ -56,6 +60,7 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
                 weights_yaml_path_.c_str(), dmp_.tau(), control_rate_hz_,
                 target_pose_topic_.c_str(), startup_delay_sec_);
 
+    // 5. One-shot startup delay timer to give Gazebo and controller time to stabilize
     startup_timer_ = this->create_wall_timer(
         std::chrono::duration<double>(startup_delay_sec_),
         std::bind(&DmpGazeboExecutorNode::startTimer, this));
@@ -79,6 +84,7 @@ void DmpGazeboExecutorNode::stepCallback() {
     bool at_end = (elapsed_ + dt_) >= dmp_.tau();
 
     if (!at_end) {
+        // Step translational and rotational DMPs forward by dt
         Eigen::Vector3d ct = Eigen::Vector3d::Zero();
         double cc = 0.0;
         Eigen::Vector3d pos = dmp_.step(dt_, ct, cc);
@@ -93,9 +99,7 @@ void DmpGazeboExecutorNode::stepCallback() {
         msg.pose.orientation.y = quat.y();
         msg.pose.orientation.z = quat.z();
     } else {
-        // Snap exactly to the learned goal instead of integrating past tau,
-        // where the forcing term is no longer trustworthy (see open
-        // post-tau divergence investigation).
+        // Clamp explicitly to goal attractor once tau is reached
         Eigen::Vector3d goal = dmp_.goal();
         msg.pose.position.x = goal.x();
         msg.pose.position.y = goal.y();

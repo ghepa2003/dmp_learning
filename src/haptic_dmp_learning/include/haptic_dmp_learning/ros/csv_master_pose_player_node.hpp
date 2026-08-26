@@ -12,15 +12,17 @@
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
-// Stand-in for the Geomagic Touch driver while no physical device is
-// attached: loads a previously recorded demo CSV (t,x,y,z,qw,qx,qy,qz,
-// non-uniform timestamps) and replays it with a zero-order hold onto
-// /master_pose_raw, at the same wall-clock pace it was recorded.
-//
-// Also emits the button events a real device's start/stop presses would
-// produce on /touch0/buttons (sensor_msgs/Joy), so that any downstream node
-// listening for that mechanism (see live_demo_recorder_node) behaves
-// identically whether the source is this CSV player or the real driver.
+/**
+ * @brief Synthetic Teleoperation Source: Streams recorded CSV trajectories and emulates haptic button events.
+ *
+ * @details
+ * Purpose & Architecture:
+ * - Allows full testing of the teleoperation learning pipeline without requiring a physical Geomagic Touch device connected.
+ * - Loads a previously recorded CSV demonstration containing timestamps, positions [x, y, z], and quaternions [qw, qx, qy, qz].
+ * - Publishes Cartesian poses to `/master_pose_raw` using zero-order hold at `publish_rate_hz` matching the original elapsed time.
+ * - Emulates Joy button messages on `/touch0/buttons` (button 0 press at start, button 1 press at finish), seamlessly
+ *   triggering downstream recorder and DMP learning nodes (`LiveDemoRecorderNode`).
+ */
 class CsvMasterPosePlayerNode : public rclcpp::Node {
 public:
     CsvMasterPosePlayerNode();
@@ -46,15 +48,15 @@ private:
     rclcpp::TimerBase::SharedPtr start_edge_timer_;
     rclcpp::TimerBase::SharedPtr playback_timer_;
 
-    // demo data
+    // In-memory trajectory buffer
     std::vector<CsvRow> rows_;
 
-    // playback state
+    // Playback state
     rclcpp::Time playback_start_time_;
     size_t next_row_idx_;
     bool finished_;
 
-    // params
+    // Parameters
     std::string demo_csv_path_;
     std::string master_pose_topic_;
     std::string buttons_topic_;

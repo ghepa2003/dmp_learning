@@ -1,10 +1,9 @@
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
+#include "haptic_dmp_learning/core/filter_utils.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
-#include <iostream>
 #include <Eigen/Dense>
-#include <algorithm>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -22,13 +21,13 @@ QuaternionDMP::QuaternionDMP(int n_basis, double alpha_x, double alpha_z, double
     initBasisFunctions();
 }
 
-// The basis functions are Gaussian kernels in the phase space, with centers and widths determined by the canonical system's decay.
-// Same as the positional DMP, but here we use them for the forcing term in the quaternion DMP.
 void QuaternionDMP::initBasisFunctions() {
+    // 1. Distribute kernel centers c_i across canonical phase decay: c_i = exp(-alpha_x * t_norm_i)
     Eigen::VectorXd t_norm = Eigen::VectorXd::LinSpaced(n_basis_, 0.0, 1.0);
     centers_.resize(n_basis_);
     for (int i = 0; i < n_basis_; ++i) centers_(i) = std::exp(-alpha_x_ * t_norm(i));
 
+    // 2. Bandwidths h_i with 55% Gaussian kernel overlap
     widths_ = Eigen::VectorXd::Zero(n_basis_);
     for (int i = 0; i < n_basis_; ++i) {
         if (i < n_basis_ - 1) {
@@ -45,18 +44,18 @@ double QuaternionDMP::basisFunction(int i, double x) const {
     return std::exp(-widths_(i) * d * d);
 }
 
-// The log map from SO(3) to R^3, mapping a unit quaternion to its corresponding rotation vector (axis-angle representation).
 Eigen::Vector3d QuaternionDMP::logMap(const Eigen::Quaterniond& q) {
+    // Extracts half-angle rotation vector (theta / 2) * u from unit quaternion q
     Eigen::Vector3d v(q.x(), q.y(), q.z());
     double vnorm = v.norm();
     if (vnorm < 1e-8) return Eigen::Vector3d::Zero();
-    double w = std::max(-1.0, std::min(1.0, q.w()));  // clamp for safe acos
+    double w = std::max(-1.0, std::min(1.0, q.w()));  // Clamp against numerical overshoot in acos
     double angle = std::acos(w);
     return angle * v / vnorm;
 }
 
-// The exp map from R^3 to SO(3), mapping a rotation vector back to a unit quaternion.
 Eigen::Quaterniond QuaternionDMP::expMap(const Eigen::Vector3d& r) {
+    // Maps rotation vector r = (theta / 2) * u back to unit quaternion on S^3
     double theta = r.norm();
     if (theta < 1e-8) return Eigen::Quaterniond::Identity();
     Eigen::Vector3d axis = r / theta;
@@ -65,6 +64,8 @@ Eigen::Quaterniond QuaternionDMP::expMap(const Eigen::Vector3d& r) {
 }
 
 std::vector<Eigen::Vector3d> QuaternionDMP::unwrapRotationVector(const std::vector<Sample>& demo) const {
+    // Unwraps discrete orientation trajectory into continuous cumulative rotation vector in R^3
+    // Prevents spurious +/- 2*pi phase wrap-around discontinuities during filtering
     const size_t N = demo.size();
     std::vector<Eigen::Vector3d> r(N, Eigen::Vector3d::Zero());
     for (size_t k = 1; k < N; ++k) {
@@ -77,27 +78,6 @@ std::vector<Eigen::Vector3d> QuaternionDMP::unwrapRotationVector(const std::vect
     return r;
 }
 
-std::vector<Eigen::Vector3d> QuaternionDMP::movingAverageSmooth(const std::vector<Eigen::Vector3d>& signal,
-                                                                  const std::vector<double>& t, double window_sec) const {
-    const size_t N = signal.size();
-    if (window_sec <= 0.0 || N < 2) return signal;
-    double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
-    if (dt_est <= 0.0) return signal;
-    int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
-    int half = window_samples / 2;
-    std::vector<Eigen::Vector3d> out(N);
-    for (size_t k = 0; k < N; ++k) {
-        int lo = std::max(0, static_cast<int>(k) - half);
-        int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
-        Eigen::Vector3d sum = Eigen::Vector3d::Zero();
-        int count = 0;
-        for (int j = lo; j <= hi; ++j) { sum += signal[j]; ++count; }
-        out[k] = sum / static_cast<double>(count);
-    }
-    return out;
-}
-
-// The learnFromDemonstration method computes the weights for the forcing term based on the provided demonstration samples.
 void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     if (demo.size() < 5) {
         throw std::runtime_error("QuaternionDMP::learnFromDemonstration: demonstration too short.");
@@ -110,25 +90,22 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     q0_ = demo.front().orientation.normalized();
     goal_ = demo.back().orientation.normalized();
 
+    // 1. Analytic evaluation of canonical phase decay
     std::vector<double> x_t(N);
     for (size_t k = 0; k < N; ++k) {
         double t_rel = demo[k].t - demo.front().t;
         x_t[k] = std::exp(-alpha_x_ / tau_ * t_rel);
     }
 
-
-    // Compute angular velocity (eta) and its derivative (eta_dot).
+    // 2. Compute angular velocity eta and its derivative eta_dot
     std::vector<Eigen::Vector3d> eta(N), eta_dot(N);
 
     if (use_velocity_filter_) {
-        // Filtered path: unwrapped trajectory -> smoothing -> derivative,
-        // repeated for each of the two stages (eta, then eta_dot), same
-        // logic validated for position in DMP::learnFromDemonstration.
         std::vector<double> t_all(N);
         for (size_t k = 0; k < N; ++k) t_all[k] = demo[k].t;
 
         std::vector<Eigen::Vector3d> r = unwrapRotationVector(demo);
-        r = movingAverageSmooth(r, t_all, filter_window_sec_1_);
+        r = filter_utils::movingAverageSmooth(r, t_all, filter_window_sec_1_);
 
         for (size_t k = 0; k < N; ++k) {
             size_t km1 = (k == 0) ? 0 : k - 1;
@@ -137,7 +114,7 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             if (dt <= 0.0) dt = 1e-6;
             eta[k] = tau_ * (r[kp1] - r[km1]) / dt;
         }
-        eta = movingAverageSmooth(eta, t_all, filter_window_sec_2_);
+        eta = filter_utils::movingAverageSmooth(eta, t_all, filter_window_sec_2_);
 
         for (size_t k = 0; k < N; ++k) {
             size_t km1 = (k == 0) ? 0 : k - 1;
@@ -147,7 +124,6 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             eta_dot[k] = (eta[kp1] - eta[km1]) / dt;
         }
     } else {
-        // Original behavior, unchanged.
         for (size_t k = 0; k < N; ++k) {
             size_t km1 = (k == 0) ? 0 : k - 1;
             size_t kp1 = (k == N - 1) ? N - 1 : k + 1;
@@ -169,13 +145,11 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
     }
 
     eta0_ = eta.front();
+    diag_.initial_eta_norm = eta.front().norm();
+    diag_.final_eta_norm = eta.back().norm();
 
-    std::cerr << "[QuaternionDMP diag] |eta(0)| = " << eta.front().norm()
-              << " rad/s (scaled by tau), |eta(N-1)| = " << eta.back().norm()
-              << " rad/s (scaled by tau)\n";
-
-    // Precompute per-sample forcing-term target for all three dimensions
-    // (shared between the independent-LWR and ridge paths below).
+    // 3. Compute target angular forcing function:
+    //    f_target = tau * deta/dt - alpha_z * (2 * beta_z * logMap(goal * q^-1) - eta)
     std::vector<Eigen::Vector3d> f_target(N);
     for (size_t k = 0; k < N; ++k) {
         Eigen::Quaterniond qk = demo[k].orientation.normalized();
@@ -185,10 +159,8 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
         }
     }
 
+    // 4. Fit 3D angular weights w_i
     if (use_ridge_regression_) {
-        // Joint ridge regression per dimension (same logic as
-        // DMP::learnFromDemonstration): Phi(k,i) = psi_i(x_k) * x_k,
-        // w_d = (Phi^T Phi + lambda I)^-1 Phi^T f_d.
         Eigen::MatrixXd Phi(N, n_basis_);
         Eigen::VectorXd psi_row(n_basis_);
         for (size_t k = 0; k < N; ++k) {
@@ -212,13 +184,10 @@ void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
             weights_[d] = solver.solve(Phi.transpose() * f_d);
         }
     } else {
-        // Locally weighted regression, independently per dimension and per basis
-        // function - original behavior.
         for (int d = 0; d < 3; ++d) {
             Eigen::VectorXd num = Eigen::VectorXd::Zero(n_basis_);
             Eigen::VectorXd den = Eigen::VectorXd::Zero(n_basis_);
 
-            // weights_[d](i) = sum_k(psi_i(x_k) * x_k * f_target[k](d)) / sum_k(psi_i(x_k) * x_k^2)
             for (size_t k = 0; k < N; ++k) {
                 double s = x_t[k];
                 for (int i = 0; i < n_basis_; ++i) {
@@ -259,13 +228,13 @@ void QuaternionDMP::setLearnedParameters(double tau, const Eigen::Quaterniond& q
     learned_ = true;
 }
 
-// The step function integrates the DMP forward in time by dt, updating the internal state and returning the current orientation.
 Eigen::Quaterniond QuaternionDMP::step(double dt) {
+    // 1. Decay canonical phase clock
     double dx = -alpha_x_ / tau_ * x_;
     x_ += dx * dt;
     if (x_ < 0.0) x_ = 0.0;
 
-    // Compute the forcing term f(x) using the learned weights and the current phase x_.
+    // 2. Evaluate Gaussian basis functions
     Eigen::VectorXd psi(n_basis_);
     double psi_sum = 0.0;
     for (int i = 0; i < n_basis_; ++i) {
@@ -274,7 +243,7 @@ Eigen::Quaterniond QuaternionDMP::step(double dt) {
     }
     if (psi_sum < 1e-8) psi_sum = 1e-8;
 
-    // Compute the forcing term f(x) for each dimension, scaled by the learned weights and the current phase x_.
+    // 3. Compute angular forcing term f(x)
     Eigen::Vector3d f = Eigen::Vector3d::Zero();
     for (int d = 0; d < 3; ++d) {
         double weighted = 0.0;
@@ -282,15 +251,17 @@ Eigen::Quaterniond QuaternionDMP::step(double dt) {
         f(d) = (weighted / psi_sum) * x_;
     }
 
-    // Transformation system: tau * d(eta)/dt = alpha_z * (2 * beta_z * log(goal * q^{-1}) - eta) + f
+    // 4. Transformation system on Lie algebra: tau * deta/dt = alpha_z * (2 * beta_z * log(goal * q^-1) - eta) + f
     Eigen::Vector3d log_err = logMap(goal_ * q_.conjugate());
     Eigen::Vector3d eta_dot = (alpha_z_ * (2.0 * beta_z_ * log_err - eta_) + f) / tau_;
     eta_ += eta_dot * dt;
 
-    // Integration with exponential map: q(t+dt) = exp_q((dt/2tau)*eta) * q(t)
+    // 5. Exponential map geodesic integration on S^3:
+    //    dq = expMap( (dt / (2 * tau)) * eta )
+    //    q(t + dt) = (dq * q(t)).normalized()
     Eigen::Quaterniond dq = expMap((dt / (2.0 * tau_)) * eta_);
     q_ = dq * q_;
-    q_.normalize();  // Normalization (used by Fabisch/Böckmann)
+    q_.normalize();
 
     return q_;
 }

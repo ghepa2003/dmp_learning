@@ -1,7 +1,10 @@
+# Controller Manager Configuration for Franka Emika / FER in Gazebo Sim
+# Defines active controllers and their loop update rates (1000 Hz real-time control).
 controller_manager:
   ros__parameters:
-    update_rate: 1000  # Hz
+    update_rate: 1000  # Controller manager execution frequency in Hz
 
+    # Standard Franka example controllers
     joint_position_example_controller:
       type: franka_example_controllers/JointPositionExampleController
 
@@ -14,24 +17,26 @@ controller_manager:
     forward_torque_controller:
       type: franka_example_controllers/ForwardTorqueController
 
+    # State Broadcasters
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    # tried to add
-      
     franka_robot_state_broadcaster:
       type: franka_robot_state_broadcaster/FrankaRobotStateBroadcaster
 
-    ## comanip_controllers
-
+    # Custom Co-manipulation / Research Controllers
     joint_velocity_controller:
       type: comanip_controllers/JointVelocityController
 
+    # Cartesian Velocity Controller (Kinematic Differential IK on command_interfaces: velocity)
     velocity_cartesian_controller:
       type: franka_cartesian_control/CartesianVelocityController
 
+    # Cartesian Impedance Controller (Dynamic Compliance Control on command_interfaces: effort)
     cartesian_impedance_controller:
       type: franka_cartesian_control/CartesianImpedanceController
+
+# --- Controller Specific Parameter Blocks ---
 
 joint_position_example_controller:
   ros__parameters:
@@ -60,11 +65,11 @@ joint_impedance_example_controller:
       - 1.0
       - 0.5
 
-    ## comanip_controllers
-
 joint_velocity_controller:
   ros__parameters:
     gazebo: true
+
+# Parameters for Cartesian Velocity Controller (Differential Kinematics & DLS Inverse Kinematics)
 velocity_cartesian_controller:
   ros__parameters:
     joint_names:
@@ -77,12 +82,14 @@ velocity_cartesian_controller:
       - fer_joint7
     ee_frame_name: fer_link8
     target_pose_topic: /target_pose
-    kp_linear: 1.0
-    kp_angular: 1.0
-    damping_lambda: 0.05
-    max_linear_speed: 0.15
-    max_angular_speed: 0.5
-    max_joint_speed: 1.5
+    kp_linear: 1.0              # Proportional gain for translational task-space error (s^-1)
+    kp_angular: 1.0             # Proportional gain for rotational task-space error (s^-1)
+    damping_lambda: 0.05        # Damped Least Squares regularizer lambda to avoid kinematic singularities
+    max_linear_speed: 0.15      # Translational end-effector velocity clamp (m/s)
+    max_angular_speed: 0.5      # Rotational end-effector angular velocity clamp (rad/s)
+    max_joint_speed: 1.5        # Joint velocity limit clamp (rad/s)
+
+# Parameters for Cartesian Impedance Controller (Task-Space Dynamic Compliance & Nullspace Posture)
 cartesian_impedance_controller:
   ros__parameters:
     joint_names:
@@ -95,12 +102,13 @@ cartesian_impedance_controller:
       - fer_joint7
     ee_frame_name: fer_link8
     target_pose_topic: /target_pose
-    translational_stiffness: 200.0
-    rotational_stiffness: 150.0
-    translational_damping: 10.0
-    rotational_damping: 1.0
-    nullspace_stiffness: 0.2
-    joint1_nullspace_stiffness: 100.0
-    delta_tau_max: 1.0
-    nullspace_pinv_damping: 0.05
-    compensate_gravity_internally: false
+    translational_stiffness: 2000.0   # Translational virtual spring stiffness K_p (N/m)
+    rotational_stiffness: 150.0      # Rotational virtual spring stiffness K_o (Nm/rad)
+    translational_damping: 10.0      # Translational virtual damper D_p (Ns/m)
+    rotational_damping: 1.0          # Rotational virtual damper D_o (Nms/rad)
+    nullspace_stiffness: 0.2         # Nullspace posture stiffness K_ns (Nm/rad)
+    joint1_nullspace_stiffness: 100.0 # High stiffness dedicated to base yaw joint to prevent drift
+    delta_tau_max: 1.0               # Maximum torque rate of change per iteration (Nm/ms)
+    nullspace_pinv_damping: 0.05     # Damping for Jacobian transpose nullspace pseudoinverse
+    compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
+    enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics

@@ -14,15 +14,17 @@
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
 
-// The single "downstream" node of the live dry-run pipeline: listens to
-// /master_pose_raw (today: csv_master_pose_player_node stand-in; tomorrow:
-// the Geomagic Touch driver via a launch remap, unmodified), and - using the
-// very same /touch0/buttons start/stop detection as haptic_dmp_wrapper_node -
-// records the demonstration, republishes every pose onto /target_pose (so
-// the demo is visible live in Gazebo through the existing
-// CartesianVelocityController) only while recording is active, and fits the
-// DMP (ridge regression + velocity filter, same core:: calls as the wrapper
-// node) as soon as the demo ends.
+/**
+ * @brief ROS 2 Node for Live Interactive Demonstration Recording, Real-Time Gazebo Mirroring, and DMP Fitting.
+ *
+ * @details
+ * Dual-Role Architecture:
+ * 1. Teleoperation Mirroring: Listens to incoming master pose stream on `/master_pose_raw` (from hardware driver or CSV player).
+ *    While recording is active, immediately forwards each pose onto `/target_pose` so that the robot in Gazebo mirrors the operator's
+ *    motion live through the active Cartesian controller.
+ * 2. Online DMP Fitting: Monitors Joy button states on `/touch0/buttons`. On the rising edge of button 1 (stop), fits translational
+ *    and rotational DMPs and exports the learned weights to YAML.
+ */
 class LiveDemoRecorderNode : public rclcpp::Node {
 public:
     LiveDemoRecorderNode();
@@ -40,17 +42,17 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
 
-    // core objects
+    // Core mathematical objects
     core::DemonstrationRecorder recorder_;
     core::DMP dmp_;
     core::QuaternionDMP quat_dmp_;
 
-    // state
+    // State machine
     bool recording_;
     rclcpp::Time record_start_time_;
-    std::vector<int32_t> prev_buttons_;  // for rising-edge detection, empty until first msg
+    std::vector<int32_t> prev_buttons_;  ///< Previous button state for rising-edge detection
 
-    // params
+    // Parameters
     std::string master_pose_topic_;
     std::string target_pose_topic_;
     std::string buttons_topic_;

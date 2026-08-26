@@ -1,17 +1,34 @@
 <?xml version="1.0"?>
+<!--
+  6-DOF Testing Plane Model for Contact & Teleoperation Interaction in Gazebo Sim.
+
+  Kinematic Chain:
+    dummy_fixed_link (world anchor)
+      -> fixed_joint -> dummy_link
+      -> trasl_x_joint (prismatic X) -> trasl_x_link
+      -> trasl_y_joint (prismatic Y) -> trasl_y_link
+      -> trasl_z_joint (prismatic Z) -> trasl_z_link
+      -> rot_x_joint (revolute roll) -> rot_x_link
+      -> rot_y_joint (revolute pitch) -> rot_y_link
+      -> rot_z_joint (revolute yaw) -> rot_z_link
+      -> testing_plane_joint (fixed) -> testing_plane_link (physical red box)
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="testing_plane">
     <xacro:property name="robot_namespace" value="testing_plane"/>
 
-	<xacro:property name="h_testing_plane" value="0.1" />
-	<xacro:property name="l_testing_plane" value="0.1" />
-	<xacro:property name="w_testing_plane" value="0.1" />
+    <!-- Physical Box Dimensions (meters) -->
+    <xacro:property name="h_testing_plane" value="0.1" />
+    <xacro:property name="l_testing_plane" value="0.1" />
+    <xacro:property name="w_testing_plane" value="0.1" />
 
     <xacro:property name="absolute_height" value="1.0" />
 
+    <!-- Initial Position in Gazebo World -->
     <xacro:property name="initial_x" value="0.5" />
     <xacro:property name="initial_y" value="0.0" />
     <xacro:property name="initial_z" value="0.05" />
 
+    <!-- World Anchor Link -->
     <link name="${robot_namespace}_dummy_fixed_link">
          <inertial>
             <mass value="1e6" />
@@ -20,8 +37,8 @@
                 ixx="1e6" ixy="0.0" ixz="0.0"
                 iyy="1e6" iyz="0.0"
                 izz="1e6"/>
-+        </inertial>
-+    </link>
+        </inertial>
+    </link>
 
     <joint name="${robot_namespace}_fixed_joint" type="fixed">
         <parent link="${robot_namespace}_dummy_fixed_link"/>

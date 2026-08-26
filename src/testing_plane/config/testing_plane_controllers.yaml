@@ -1,14 +1,20 @@
+# ros2_control configuration for the 6-DOF moving testing plane simulation object.
+# The object has 3 prismatic joints (trasl_x, trasl_y, trasl_z) and 3 revolute joints (rot_x, rot_y, rot_z).
+
 /testing_plane/controller_manager:
   ros__parameters:
-    update_rate: 500
+    update_rate: 500  # Controller update loop rate in Hz
     use_sim_time: true
 
+    # State broadcaster for all 6 degrees of freedom
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
+    # Joint group velocity controller for velocity commands
     testing_plane_velocity_controller:
       type: velocity_controllers/JointGroupVelocityController
 
+    # Joint group position controller for kinematic trajectory and position commands
     testing_plane_position_controller:
       type: position_controllers/JointGroupPositionController
 

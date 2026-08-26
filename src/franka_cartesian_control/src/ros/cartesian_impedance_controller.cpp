@@ -2,16 +2,20 @@
 #include "franka_cartesian_control/core/cartesian_error.hpp"
 
 #include <sstream>
-
 #include <pluginlib/class_list_macros.hpp>
 
 namespace franka_cartesian_control {
 namespace ros_wrapper {
 
+/**
+ * @brief Initializes parameters for Cartesian impedance control.
+ * Declares stiffness (K), damping (D), nullspace gains, and safety limits as tunable ROS 2 parameters.
+ */
 controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
     try {
         auto node = get_node();
 
+        // 1. Declare joint names for the 7-DOF Franka manipulator
         if (!node->has_parameter("joint_names")) {
             node->declare_parameter<std::vector<std::string>>(
                 "joint_names",
@@ -20,18 +24,19 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         }
         joint_names_ = node->get_parameter("joint_names").as_string_array();
 
+        // 2. Declare end-effector link frame name
         if (!node->has_parameter("ee_frame_name")) {
             node->declare_parameter<std::string>("ee_frame_name", "fer_link8");
         }
         ee_frame_name_ = node->get_parameter("ee_frame_name").as_string();
 
+        // 3. Declare target pose topic name
         if (!node->has_parameter("target_pose_topic")) {
             node->declare_parameter<std::string>("target_pose_topic", "/target_pose");
         }
         target_pose_topic_ = node->get_parameter("target_pose_topic").as_string();
 
-        // Impedance gains as parameters, so they can be tuned without
-        // recompiling - same SERL-sourced defaults as core::CartesianImpedanceSolver::Params.
+        // 4. Declare Compliance and Nullspace Parameters (SERL-sourced defaults)
         core::CartesianImpedanceSolver::Params params;
         auto declare_and_get = [&node](const std::string& name, double def) {
             if (!node->has_parameter(name)) node->declare_parameter<double>(name, def);
@@ -51,6 +56,12 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         }
         params.compensate_gravity_internally = node->get_parameter("compensate_gravity_internally").as_bool();
 
+        if (!node->has_parameter("enable_nullspace_leak_diagnostics")) {
+            node->declare_parameter<bool>("enable_nullspace_leak_diagnostics", false);
+        }
+        enable_nullspace_leak_diagnostics_ =
+            node->get_parameter("enable_nullspace_leak_diagnostics").as_bool();
+
         impedance_solver_ = core::CartesianImpedanceSolver(params);
 
         std::ostringstream joint_names_str;
@@ -64,13 +75,13 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
             "  joint_names                   = [%s]\n"
             "  ee_frame_name                 = %s\n"
             "  target_pose_topic             = %s\n"
-            "  translational_stiffness       = %.3f\n"
-            "  rotational_stiffness          = %.3f\n"
-            "  translational_damping         = %.3f\n"
-            "  rotational_damping            = %.3f\n"
+            "  translational_stiffness       = %.3f N/m\n"
+            "  rotational_stiffness          = %.3f Nm/rad\n"
+            "  translational_damping         = %.3f Ns/m\n"
+            "  rotational_damping            = %.3f Nms/rad\n"
             "  nullspace_stiffness           = %.3f\n"
             "  joint1_nullspace_stiffness    = %.3f\n"
-            "  delta_tau_max                 = %.3f\n"
+            "  delta_tau_max                 = %.3f Nm/cycle\n"
             "  nullspace_pinv_damping        = %.3f\n"
             "  compensate_gravity_internally = %s",
             joint_names_str.str().c_str(),
@@ -93,6 +104,10 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief Configures effort command interfaces for torque control mode.
+ * Impedance controller claims '<joint_name>/effort' interfaces for all 7 joints.
+ */
 controller_interface::InterfaceConfiguration
 CartesianImpedanceController::command_interface_configuration() const {
     controller_interface::InterfaceConfiguration config;
@@ -103,6 +118,9 @@ CartesianImpedanceController::command_interface_configuration() const {
     return config;
 }
 
+/**
+ * @brief Configures feedback state interfaces read by this controller (positions and velocities).
+ */
 controller_interface::InterfaceConfiguration
 CartesianImpedanceController::state_interface_configuration() const {
     controller_interface::InterfaceConfiguration config;
@@ -114,37 +132,21 @@ CartesianImpedanceController::state_interface_configuration() const {
     return config;
 }
 
+/**
+ * @brief Lifecycle configure transition: fetches URDF, builds Pinocchio model, creates subscribers/publishers.
+ */
 controller_interface::CallbackReturn CartesianImpedanceController::on_configure(
     const rclcpp_lifecycle::State&) {
     auto node = get_node();
 
-    // robot_description via topic (transient_local), same mechanism as
-    // CartesianVelocityController - see that class for full rationale.
-    std::string urdf_xml;
-    {
-        auto temp_node = std::make_shared<rclcpp::Node>("franka_cartesian_control_urdf_waiter_impedance");
-        std::promise<std::string> urdf_promise;
-        auto urdf_future = urdf_promise.get_future();
-
-        auto sub = temp_node->create_subscription<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(1).transient_local(),
-            [&urdf_promise](const std_msgs::msg::String::SharedPtr msg) {
-                urdf_promise.set_value(msg->data);
-            });
-
-        rclcpp::executors::SingleThreadedExecutor executor;
-        executor.add_node(temp_node);
-
-        const auto timeout = std::chrono::seconds(5);
-        auto status = executor.spin_until_future_complete(urdf_future, timeout);
-
-        if (status != rclcpp::FutureReturnCode::SUCCESS) {
-            RCLCPP_ERROR(node->get_logger(), "Timed out waiting for /robot_description (5s)");
-            return controller_interface::CallbackReturn::ERROR;
-        }
-        urdf_xml = urdf_future.get();
+    // 1. Fetch URDF XML model string from /robot_description (transient_local QoS)
+    auto urdf_opt = fetchRobotDescription(node->get_logger());
+    if (!urdf_opt) {
+        return controller_interface::CallbackReturn::ERROR;
     }
+    std::string urdf_xml = *urdf_opt;
 
+    // 2. Build Pinocchio core RobotModel
     try {
         robot_model_ = std::make_unique<core::RobotModel>(urdf_xml, joint_names_, ee_frame_name_);
     } catch (const std::exception& e) {
@@ -152,10 +154,12 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_configure(
         return controller_interface::CallbackReturn::ERROR;
     }
 
+    // 3. Subscribe to target pose topic
     target_pose_sub_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
         target_pose_topic_, rclcpp::QoS(10),
         std::bind(&CartesianImpedanceController::targetPoseCallback, this, std::placeholders::_1));
 
+    // 4. Pre-allocate real-time safe publishers for telemetry
     aligned_target_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
         "~/target_pose_aligned", rclcpp::QoS(10));
     rt_aligned_target_pub_ = std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>>(
@@ -166,11 +170,23 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_configure(
     rt_actual_pose_pub_ = std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>>(
         actual_pose_pub_);
 
+    if (enable_nullspace_leak_diagnostics_) {
+        nullspace_leak_pub_ = node->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "~/nullspace_leak", rclcpp::QoS(10));
+        rt_nullspace_leak_pub_ =
+            std::make_unique<realtime_tools::RealtimePublisher<std_msgs::msg::Float64MultiArray>>(
+                nullspace_leak_pub_);
+    }
+
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief Lifecycle activate transition: captures initial end-effector pose, sets nullspace target configuration.
+ */
 controller_interface::CallbackReturn CartesianImpedanceController::on_activate(
     const rclcpp_lifecycle::State&) {
+    // 1. Read initial joint positions and velocities
     core::RobotModel::JointVector q, dq;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         q(static_cast<int>(i)) = state_interfaces_[2 * i].get_value();
@@ -178,26 +194,26 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_activate(
     }
     robot_model_->update(q, dq);
 
-    activation_ee_position_ = robot_model_->eePosition();
-    activation_ee_orientation_ = robot_model_->eeOrientation();
+    // 2. Anchor frame alignment to physical activation pose
+    frame_aligner_.reset(robot_model_->eePosition(), robot_model_->eeOrientation());
 
-    // Nullspace target = configuration at activation (SERL: "set nullspace
-    // equilibrium configuration to initial q" in starting()).
+    // 3. Set nullspace posture target to the current joint configuration q at activation
     impedance_solver_.setNullspaceTarget(q);
 
-    // Start from zero commanded torque; the first update() cycle's rate
-    // saturation will ramp up smoothly from here (delta_tau_max per cycle).
+    // 4. Initialize torque memory to zero for smooth slew-rate ramping
     tau_prev_ = core::RobotModel::JointVector::Zero();
     for (auto& ci : command_interfaces_) {
         ci.set_value(0.0);
     }
 
-    alignment_captured_ = false;
     target_received_.store(false);
 
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief Lifecycle deactivate transition: defensively commands zero torque to all joints.
+ */
 controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate(
     const rclcpp_lifecycle::State&) {
     for (auto& ci : command_interfaces_) {
@@ -206,19 +222,27 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief Asynchronous subscription callback: receives incoming target pose and writes to lock-free RT buffer.
+ */
 void CartesianImpedanceController::targetPoseCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     target_pose_buffer_.writeFromNonRT(*msg);
     target_received_.store(true);
 }
 
+/**
+ * @brief Real-time deterministic control loop (1 kHz): computes Cartesian impedance + nullspace torque.
+ */
 controller_interface::return_type CartesianImpedanceController::update(
     const rclcpp::Time& time, const rclcpp::Duration&) {
+    // 1. Hold zero torque if no target pose has been received yet
     if (!target_received_.load()) {
         for (auto& ci : command_interfaces_) ci.set_value(0.0);
         return controller_interface::return_type::OK;
     }
 
+    // 2. Read current joint states and update Pinocchio kinematics, Jacobians, and Coriolis torques
     core::RobotModel::JointVector q, dq;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         q(static_cast<int>(i)) = state_interfaces_[2 * i].get_value();
@@ -226,36 +250,49 @@ controller_interface::return_type CartesianImpedanceController::update(
     }
     robot_model_->update(q, dq);
 
+    // 3. Lock-free read of raw target pose from real-time buffer
     const auto& raw_target = *target_pose_buffer_.readFromRT();
     Eigen::Vector3d raw_pos(raw_target.pose.position.x, raw_target.pose.position.y, raw_target.pose.position.z);
     Eigen::Quaterniond raw_quat(raw_target.pose.orientation.w, raw_target.pose.orientation.x,
                                  raw_target.pose.orientation.y, raw_target.pose.orientation.z);
     raw_quat.normalize();
 
-    if (!alignment_captured_) {
-        position_offset_ = activation_ee_position_ - raw_pos;
-        orientation_offset_ = activation_ee_orientation_ * raw_quat.conjugate();
-        alignment_captured_ = true;
-        RCLCPP_INFO(get_node()->get_logger(),
-                    "Captured DMP->robot alignment: position offset = [%.3f, %.3f, %.3f] m",
-                    position_offset_.x(), position_offset_.y(), position_offset_.z());
-    }
+    // 4. Align raw target to robot base frame using rigid offset
+    auto logger = get_node()->get_logger();
+    Eigen::Vector3d target_pos;
+    Eigen::Quaterniond target_quat;
+    frame_aligner_.align(raw_pos, raw_quat, target_pos, target_quat, &logger);
 
-    Eigen::Vector3d target_pos = position_offset_ + raw_pos;
-    Eigen::Quaterniond target_quat = (orientation_offset_ * raw_quat).normalized();
-
+    // 5. Compute 6D Cartesian Error (linear translation + Lie algebra orientation)
     core::CartesianError err = core::computePoseError(
         robot_model_->eePosition(), robot_model_->eeOrientation(), target_pos, target_quat);
 
+    // 6. Compute total commanded torque: Task-Space + Nullspace + Coriolis [+ Gravity]
     core::RobotModel::JointVector tau = impedance_solver_.computeTorque(
         *robot_model_, err, q, dq, tau_prev_);
 
+    // Diagnostic-only: quantify how much the (kinematically-projected) nullspace torque
+    // leaks into task-space acceleration through the anisotropic mass matrix M(q).
+    // leak = J * M(q)^-1 * tau_nullspace ; does NOT feed back into tau/command.
+    if (enable_nullspace_leak_diagnostics_ && rt_nullspace_leak_pub_ && rt_nullspace_leak_pub_->trylock()) {
+        const auto& M = robot_model_->massMatrix();
+        const auto& tau_ns = impedance_solver_.lastNullspaceTorque();
+        core::RobotModel::JointVector qdd_leak = M.ldlt().solve(tau_ns);
+        Eigen::Matrix<double, 6, 1> leak = robot_model_->jacobian() * qdd_leak;
+
+        auto& msg = rt_nullspace_leak_pub_->msg_;
+        msg.data.resize(6);
+        for (int i = 0; i < 6; ++i) msg.data[i] = leak(i);
+        rt_nullspace_leak_pub_->unlockAndPublish();
+    }
+
+    // 7. Command torques to hardware effort interfaces
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         command_interfaces_[i].set_value(tau(static_cast<int>(i)));
     }
     tau_prev_ = tau;
 
-    // debug publish (same pattern as CartesianVelocityController)
+    // 8. Publish telemetry (lock-free non-blocking trylock)
     if (rt_actual_pose_pub_->trylock()) {
         auto& msg = rt_actual_pose_pub_->msg_;
         msg.header.stamp = time;
@@ -289,5 +326,6 @@ controller_interface::return_type CartesianImpedanceController::update(
 }  // namespace ros_wrapper
 }  // namespace franka_cartesian_control
 
+// Register as dynamically loadable controller plugin
 PLUGINLIB_EXPORT_CLASS(franka_cartesian_control::ros_wrapper::CartesianImpedanceController,
                         controller_interface::ControllerInterface)

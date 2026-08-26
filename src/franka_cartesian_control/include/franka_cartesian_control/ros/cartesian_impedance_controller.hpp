@@ -8,11 +8,13 @@
 #include <controller_interface/controller_interface.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 #include <realtime_tools/realtime_publisher.hpp>
 
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "franka_cartesian_control/core/impedance_solver.hpp"
+#include "franka_cartesian_control/ros/ros_utils.hpp"
 
 namespace franka_cartesian_control {
 namespace ros_wrapper {
@@ -45,6 +47,7 @@ private:
     std::vector<std::string> joint_names_;
     std::string ee_frame_name_;
     std::string target_pose_topic_;
+    bool enable_nullspace_leak_diagnostics_ = false;
 
     // core objects
     std::unique_ptr<core::RobotModel> robot_model_;
@@ -53,24 +56,22 @@ private:
     // rate-saturation state: torque commanded in the previous cycle
     core::RobotModel::JointVector tau_prev_ = core::RobotModel::JointVector::Zero();
 
-    // target pose, realtime-safe (same pattern as CartesianVelocityController)
+    // target pose
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_sub_;
     realtime_tools::RealtimeBuffer<geometry_msgs::msg::PoseStamped> target_pose_buffer_;
     std::atomic<bool> target_received_{false};
 
-    // DMP-frame -> robot-frame rigid alignment (same mechanism as
-    // CartesianVelocityController - see that class for rationale).
-    bool alignment_captured_ = false;
-    Eigen::Vector3d position_offset_ = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond orientation_offset_ = Eigen::Quaterniond::Identity();
-    Eigen::Vector3d activation_ee_position_;
-    Eigen::Quaterniond activation_ee_orientation_;
+    // frame aligner
+    FrameAligner frame_aligner_;
 
-    // debug publishers (same pattern as CartesianVelocityController)
+    // debug publishers
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr aligned_target_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr actual_pose_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_aligned_target_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_actual_pose_pub_;
+
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr nullspace_leak_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Float64MultiArray>> rt_nullspace_leak_pub_;
 };
 
 }  // namespace ros_wrapper

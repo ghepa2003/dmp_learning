@@ -15,6 +15,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 include_directories(include)
 
@@ -45,6 +46,7 @@ ament_target_dependencies(haptic_dmp_wrapper_node
   rclcpp
   geometry_msgs
   sensor_msgs
+  ament_index_cpp
 )
 
 # ---- DMP Gazebo executor node executable ----
@@ -58,6 +60,7 @@ target_link_libraries(dmp_gazebo_executor_node
 ament_target_dependencies(dmp_gazebo_executor_node
   rclcpp
   geometry_msgs
+  ament_index_cpp
 )
 
 # ---- CSV master pose player node executable (stand-in for the Geomagic
@@ -73,6 +76,7 @@ ament_target_dependencies(csv_master_pose_player_node
   rclcpp
   geometry_msgs
   sensor_msgs
+  ament_index_cpp
 )
 
 # ---- Live demo recorder node executable (downstream: visualize + learn) ----
@@ -87,6 +91,7 @@ ament_target_dependencies(live_demo_recorder_node
   rclcpp
   geometry_msgs
   sensor_msgs
+  ament_index_cpp
 )
 
 install(TARGETS
@@ -113,6 +118,16 @@ install(DIRECTORY launch/
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_dmp test/test_dmp.cpp)
+  target_link_libraries(test_dmp ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_quaternion_dmp test/test_quaternion_dmp.cpp)
+  target_link_libraries(test_quaternion_dmp ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_dmp_io test/test_dmp_io.cpp)
+  target_link_libraries(test_dmp_io ${PROJECT_NAME}_core)
 endif()
 
 ament_package()
