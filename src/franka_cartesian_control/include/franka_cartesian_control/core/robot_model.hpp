@@ -35,6 +35,7 @@ public:
     using JointVector = Eigen::Matrix<double, kNumJoints, 1>;
     using Jacobian6x7 = Eigen::Matrix<double, 6, kNumJoints>;
     using Matrix7d = Eigen::Matrix<double, kNumJoints, kNumJoints>;
+    using Matrix6d = Eigen::Matrix<double, 6, 6>;
 
     /**
      * @brief Constructs the robot model from URDF XML content.
@@ -76,6 +77,61 @@ public:
 
     /// @brief Returns the joint names in the active order.
     const std::vector<std::string>& jointNames() const { return joint_names_; }
+
+    /**
+     * @brief Reflected Cartesian (operational-space) inertia matrix Lambda(q), Khatib formulation.
+     *
+     * @details
+     * Physical meaning:
+     * @code
+     *   Lambda(q) = ( J(q) * M(q)^-1 * J(q)^T )^-1        in R^{6x6}
+     * @endcode
+     * Lambda(q) is the apparent inertia the end-effector presents at its frame: it maps a
+     * Cartesian acceleration of the EE to the equivalent Cartesian wrench for the free
+     * (unconstrained) arm, f = Lambda(q) * a_ee. It is the quantity evaluated in the
+     * Variable Impedance Matching (VIM) condition of Yoshida & Nakanishi: a desired
+     * task-space impedance is only physically realizable if the reflected inertia along
+     * the interaction direction stays within bounds.
+     *
+     * Numerics:
+     * - Reuses the M(q) (CRBA) and J(q) (LOCAL_WORLD_ALIGNED, base frame fer_link0) cached
+     *   by the last update(); nothing is recomputed here.
+     * - M^-1 * J^T is obtained with an LDLT solve on the SPD mass matrix, the same
+     *   M-inverse robustness approach used elsewhere in this package.
+     * - The final 6x6 inversion uses a complete orthogonal decomposition (pseudo-inverse),
+     *   which degrades gracefully to a least-squares result near kinematic singularities
+     *   instead of diverging like a direct .inverse().
+     *
+     * @warning NOT real-time safe. Performs dense decompositions; must never be called from
+     *          the 1 kHz update()/control path. Intended for low-rate monitoring nodes that
+     *          check the VIM condition.
+     *
+     * @return 6x6 reflected Cartesian inertia Lambda(q), ordered [linear (3); angular (3)]
+     *         consistently with jacobian().
+     */
+    Matrix6d reflectedCartesianInertia() const;
+
+    /**
+     * @brief Reflected mass seen by the end-effector along a given Cartesian direction.
+     *
+     * @details
+     * Projects the translational 3x3 block of Lambda(q) onto a unit direction:
+     * @code
+     *   m_i = u^T * Lambda_tt(q) * u ,   u = direction / ||direction||
+     * @endcode
+     * where Lambda_tt is the upper-left 3x3 (translational) block of
+     * reflectedCartesianInertia(). This scalar is the effective mass entering the 1-D VIM
+     * criterion of Yoshida & Nakanishi along the contact/approach axis. The direction is
+     * normalized internally; callers need not pass a unit vector.
+     *
+     * @warning NOT real-time safe. Wraps reflectedCartesianInertia(); use only from
+     *          low-rate monitoring code, never from the 1 kHz control loop.
+     *
+     * @param direction Non-zero Cartesian direction in the robot base frame (fer_link0).
+     * @return Reflected mass m_i along the normalized direction (kg). Returns 0 if
+     *         @p direction has (near) zero norm.
+     */
+    double reflectedMassAlongDirection(const Eigen::Vector3d& direction) const;
 
 private:
     std::vector<std::string> joint_names_;

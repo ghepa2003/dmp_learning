@@ -18,7 +18,7 @@ velocity_cartesian_controller:
       - fer_joint5
       - fer_joint6
       - fer_joint7
-    ee_frame_name: fer_link8
+    ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
     kp_linear: 1.0
     kp_angular: 1.0
@@ -37,14 +37,16 @@ cartesian_impedance_controller:
       - fer_joint5
       - fer_joint6
       - fer_joint7
-    ee_frame_name: fer_link8
+    ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
-    translational_stiffness: 1000.0
-    rotational_stiffness: 150.0
-    translational_damping: 44.5
-    rotational_damping: 7.0
-    nullspace_stiffness: 0.2
-    joint1_nullspace_stiffness: 100.0
-    delta_tau_max: 1.0
-    nullspace_pinv_damping: 0.05
-    compensate_gravity_internally: false
+    translational_stiffness: 200.0   # Translational virtual spring stiffness K_p (N/m)
+    rotational_stiffness: 150.0      # Rotational virtual spring stiffness K_o (Nm/rad)
+    translational_damping: 10.0      # Translational virtual damper D_p (Ns/m)
+    rotational_damping: 1.0          # Rotational virtual damper D_o (Nms/rad)
+    nullspace_stiffness: 0.2         # Nullspace posture stiffness K_ns (Nm/rad)
+    joint1_nullspace_stiffness: 100.0 # High stiffness dedicated to base yaw joint to prevent drift
+    delta_tau_max: 1.0               # Maximum torque rate of change per iteration (Nm/ms)
+    nullspace_pinv_damping: 0.05     # Damping for Jacobian transpose nullspace pseudoinverse
+    compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
+    enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics
+    enable_contact_force_estimation: true

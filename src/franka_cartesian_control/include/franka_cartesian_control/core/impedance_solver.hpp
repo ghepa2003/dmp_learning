@@ -76,6 +76,10 @@ public:
     /// Diagnostic accessor only — does not affect the commanded torque output.
     const JointVector& lastNullspaceTorque() const { return tau_nullspace_last_; }
 
+    /// @brief Returns the sensorless contact wrench estimate computed during the last computeTorque() call.
+    /// Diagnostic accessor only — does not affect the commanded torque output. See DESIGN_NOTES.md.
+    const Vector6d& lastEstimatedContactWrench() const { return estimated_contact_wrench_last_; }
+
     /**
      * @brief Computes commanded joint torques for the current control cycle.
      * @param model Updated robot kinematic and dynamic model.
@@ -96,6 +100,7 @@ private:
     Params params_;
     JointVector q_d_nullspace_ = JointVector::Zero();
     JointVector tau_nullspace_last_ = JointVector::Zero();
+    Vector6d estimated_contact_wrench_last_ = Vector6d::Zero();
 
     Matrix6d stiffnessMatrix() const;
     Matrix6d dampingMatrix() const;

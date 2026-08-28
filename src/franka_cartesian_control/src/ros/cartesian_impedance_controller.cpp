@@ -62,6 +62,12 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         enable_nullspace_leak_diagnostics_ =
             node->get_parameter("enable_nullspace_leak_diagnostics").as_bool();
 
+        if (!node->has_parameter("enable_contact_force_estimation")) {
+            node->declare_parameter<bool>("enable_contact_force_estimation", false);
+        }
+        enable_contact_force_estimation_ =
+            node->get_parameter("enable_contact_force_estimation").as_bool();
+
         impedance_solver_ = core::CartesianImpedanceSolver(params);
 
         std::ostringstream joint_names_str;
@@ -178,6 +184,14 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_configure(
                 nullspace_leak_pub_);
     }
 
+    if (enable_contact_force_estimation_) {
+        contact_wrench_pub_ = node->create_publisher<geometry_msgs::msg::WrenchStamped>(
+            "~/contact_wrench_estimate", rclcpp::QoS(10));
+        rt_contact_wrench_pub_ =
+            std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>>(
+                contact_wrench_pub_);
+    }
+
     return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -284,6 +298,24 @@ controller_interface::return_type CartesianImpedanceController::update(
         msg.data.resize(6);
         for (int i = 0; i < 6; ++i) msg.data[i] = leak(i);
         rt_nullspace_leak_pub_->unlockAndPublish();
+    }
+
+    // Diagnostic-only: sensorless contact wrench estimate from the quasi-static impedance law.
+    // Agnostic to reference source (DMP replay or live haptic streaming) and to the sim/real split —
+    // this topic is meant to be fed by the native Franka O_F_ext_hat_K estimate on real hardware
+    // instead of this computation. See DESIGN_NOTES.md.
+    if (enable_contact_force_estimation_ && rt_contact_wrench_pub_ && rt_contact_wrench_pub_->trylock()) {
+        const auto& wrench_est = impedance_solver_.lastEstimatedContactWrench();
+        auto& msg = rt_contact_wrench_pub_->msg_;
+        msg.header.stamp = time;
+        msg.header.frame_id = "fer_link0";
+        msg.wrench.force.x = wrench_est(0);
+        msg.wrench.force.y = wrench_est(1);
+        msg.wrench.force.z = wrench_est(2);
+        msg.wrench.torque.x = wrench_est(3);
+        msg.wrench.torque.y = wrench_est(4);
+        msg.wrench.torque.z = wrench_est(5);
+        rt_contact_wrench_pub_->unlockAndPublish();
     }
 
     // 7. Command torques to hardware effort interfaces

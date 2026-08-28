@@ -51,6 +51,13 @@ CartesianImpedanceSolver::JointVector CartesianImpedanceSolver::computeTorque(
     // Generates compliant restoring force proportional to Cartesian displacement and dissipative damping
     JointVector tau_task = J.transpose() * (stiffnessMatrix() * e - dampingMatrix() * (J * dq));
 
+    // Diagnostic-only: sensorless contact wrench estimate from the quasi-static Cartesian impedance
+    // law F_ext ~= -(K * delta_x + D * delta_x_dot), reusing the same task-space error/twist terms and
+    // gains already used above for tau_task, negated to report the external reaction wrench rather than
+    // the wrench the controller commands toward the target. Read-only tap; does not feed back into
+    // tau/command. See DESIGN_NOTES.md for validity conditions (quasi-static assumption).
+    estimated_contact_wrench_last_ = -(stiffnessMatrix() * e - dampingMatrix() * (J * dq));
+
     // 3. Damped Nullspace Projection Matrix: N^T = I - J^T * (J^T)^#
     // Uses regularized pseudo-inverse (J^T)^# = (J * J^T + lambda^2 * I)^-1 * J
     Eigen::Matrix<double, 7, 7> JJt_pinv_proj;

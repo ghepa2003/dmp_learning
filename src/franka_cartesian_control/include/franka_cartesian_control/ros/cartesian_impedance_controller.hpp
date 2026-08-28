@@ -7,6 +7,7 @@
 
 #include <controller_interface/controller_interface.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
@@ -48,6 +49,7 @@ private:
     std::string ee_frame_name_;
     std::string target_pose_topic_;
     bool enable_nullspace_leak_diagnostics_ = false;
+    bool enable_contact_force_estimation_ = false;
 
     // core objects
     std::unique_ptr<core::RobotModel> robot_model_;
@@ -72,6 +74,9 @@ private:
 
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr nullspace_leak_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Float64MultiArray>> rt_nullspace_leak_pub_;
+
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr contact_wrench_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>> rt_contact_wrench_pub_;
 };
 
 }  // namespace ros_wrapper

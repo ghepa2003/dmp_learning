@@ -131,5 +131,42 @@ void RobotModel::update(const JointVector& q, const JointVector& dq) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reflected Cartesian inertia (Khatib operational-space inertia) for VIM checks.
+// Low-rate diagnostic helpers only: NOT called from update() or the 1 kHz path.
+// ---------------------------------------------------------------------------
+
+RobotModel::Matrix6d RobotModel::reflectedCartesianInertia() const {
+    // Reuse the quantities cached by the last update(): SPD joint-space mass matrix
+    // M(q) (CRBA) and the 6x7 LOCAL_WORLD_ALIGNED frame Jacobian J(q). Nothing is
+    // recomputed here.
+    const Matrix7d& M = mass_matrix_;
+    const Jacobian6x7& J = jacobian_;
+
+    // M^-1 * J^T (7x6) via an LDLT solve on the SPD mass matrix, matching the
+    // M-inverse robustness approach used elsewhere in this package.
+    const Eigen::Matrix<double, kNumJoints, 6> Minv_Jt = M.ldlt().solve(J.transpose());
+
+    // Cartesian mobility matrix Omega(q) = J * M^-1 * J^T (6x6, symmetric PSD).
+    Matrix6d Omega = J * Minv_Jt;
+    Omega = 0.5 * (Omega + Omega.transpose());  // symmetrize against round-off
+
+    // Lambda(q) = Omega(q)^-1. Use a complete orthogonal decomposition instead of a
+    // direct inverse so the result stays finite (least-squares pseudo-inverse) when
+    // Omega loses rank near a kinematic singularity.
+    return Omega.completeOrthogonalDecomposition().pseudoInverse();
+}
+
+double RobotModel::reflectedMassAlongDirection(const Eigen::Vector3d& direction) const {
+    const double norm = direction.norm();
+    if (norm < 1e-12) {
+        return 0.0;
+    }
+    const Eigen::Vector3d u = direction / norm;
+    const Matrix6d Lambda = reflectedCartesianInertia();
+    const Eigen::Matrix3d Lambda_translational = Lambda.topLeftCorner<3, 3>();
+    return (u.transpose() * Lambda_translational * u).value();
+}
+
 }  // namespace core
 }  // namespace franka_cartesian_control

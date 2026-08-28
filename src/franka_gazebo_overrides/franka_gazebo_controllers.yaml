@@ -80,7 +80,7 @@ velocity_cartesian_controller:
       - fer_joint5
       - fer_joint6
       - fer_joint7
-    ee_frame_name: fer_link8
+    ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
     kp_linear: 1.0              # Proportional gain for translational task-space error (s^-1)
     kp_angular: 1.0             # Proportional gain for rotational task-space error (s^-1)
@@ -100,9 +100,9 @@ cartesian_impedance_controller:
       - fer_joint5
       - fer_joint6
       - fer_joint7
-    ee_frame_name: fer_link8
+    ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
-    translational_stiffness: 2000.0   # Translational virtual spring stiffness K_p (N/m)
+    translational_stiffness: 200.0   # Translational virtual spring stiffness K_p (N/m)
     rotational_stiffness: 150.0      # Rotational virtual spring stiffness K_o (Nm/rad)
     translational_damping: 10.0      # Translational virtual damper D_p (Ns/m)
     rotational_damping: 1.0          # Rotational virtual damper D_o (Nms/rad)
@@ -112,3 +112,4 @@ cartesian_impedance_controller:
     nullspace_pinv_damping: 0.05     # Damping for Jacobian transpose nullspace pseudoinverse
     compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
     enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics
+    enable_contact_force_estimation: true
