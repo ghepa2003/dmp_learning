@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+<!--
+  free_target_object.sdf.xacro
+
+  A SINGLE rigid link, completely free in the Gazebo (Ignition Fortress) world:
+    * no <joint> to the world, no fixed/prismatic/revolute chain
+    * no <ros2_control>, no motion/force plugin
+    * <gravity>0</gravity> on the link (space scenario, same approach as
+      testing_plane's physical box link)
+
+  It therefore obeys only its own rigid-body dynamics: F = m*a and
+  I*omega_dot = tau. With the default arguments (zero initial twist) nothing
+  drives it after spawn -> ideal "body at rest" target for VIM validation.
+
+  Pose + twist readout on ROS 2: the model carries an OdometryPublisher plugin
+  (observation only, applies no force) that publishes ignition.msgs.Odometry on
+  /model/<name>/odometry; the launch file bridges it to nav_msgs/msg/Odometry
+  on /<name>/odometry. This gives a properly sim-time-stamped world pose (frame
+  world -> <name>) AND the body's linear/angular twist.
+  (Earlier attempts were dropped: a model PosePublisher - publish_model_pose is
+  a no-op in gz-sim6 6.18.0, publish_link_pose is only model-relative; then a
+  dynamic_pose/info -> TFMessage bridge - the SceneBroadcaster Pose_V has no
+  per-entity header, so every bridged transform had a zero stamp / empty
+  frame_id.)
+
+  Parametrisable via xacro args (all overridable at expand time):
+    name              model name in Gazebo                 (default free_target_object)
+    mass              link mass [kg]                        (default 5.0)
+    size_x/y/z        box edge lengths [m]                  (default 0.2 each)
+    ixx/iyy/izz       principal inertia [kg m^2]; 0 => use  (default 0 -> homogeneous
+                      the solid-homogeneous-box formula      solid box from mass+size)
+    use_velocity_control  emit the VelocityControl plugin   (default false)
+    initial_linear    "vx vy vz" [m/s]   (only if use_velocity_control=true)
+    initial_angular   "wx wy wz" [rad/s] (only if use_velocity_control=true)
+
+  NOTE on the rotating case: VelocityControl (shipped with Fortress, no extra
+  setup) is the only velocity mechanism that loads on an already-running
+  server. It CONTINUOUSLY re-asserts the commanded twist on the canonical
+  link, so it holds omega constant. For a homogeneous cube (isotropic inertia,
+  the default) torque-free rotation is already constant-omega, so this is
+  exact. For a deliberately anisotropic inertia it suppresses nutation
+  (I*omega_dot = tau is not integrated). Leave use_velocity_control=false for
+  a genuinely free body.
+-->
+<sdf xmlns:xacro="http://www.ros.org/wiki/xacro" version="1.9">
+
+  <xacro:arg name="name" default="free_target_object"/>
+  <xacro:arg name="mass" default="5.0"/>
+  <xacro:arg name="size_x" default="0.2"/>
+  <xacro:arg name="size_y" default="0.2"/>
+  <xacro:arg name="size_z" default="0.2"/>
+  <xacro:arg name="ixx" default="0"/>
+  <xacro:arg name="iyy" default="0"/>
+  <xacro:arg name="izz" default="0"/>
+  <xacro:arg name="use_velocity_control" default="false"/>
+  <xacro:arg name="initial_linear" default="0 0 0"/>
+  <xacro:arg name="initial_angular" default="0 0 0"/>
+
+  <!-- Bind args as numbers -->
+  <xacro:property name="m"  value="${float('$(arg mass)')}"/>
+  <xacro:property name="sx" value="${float('$(arg size_x)')}"/>
+  <xacro:property name="sy" value="${float('$(arg size_y)')}"/>
+  <xacro:property name="sz" value="${float('$(arg size_z)')}"/>
+  <xacro:property name="ixx_arg" value="${float('$(arg ixx)')}"/>
+  <xacro:property name="iyy_arg" value="${float('$(arg iyy)')}"/>
+  <xacro:property name="izz_arg" value="${float('$(arg izz)')}"/>
+
+  <!-- Solid homogeneous box inertia about the centre of mass -->
+  <xacro:property name="box_ixx" value="${m * (sy*sy + sz*sz) / 12.0}"/>
+  <xacro:property name="box_iyy" value="${m * (sx*sx + sz*sz) / 12.0}"/>
+  <xacro:property name="box_izz" value="${m * (sx*sx + sy*sy) / 12.0}"/>
+
+  <!-- An explicit i** arg > 0 overrides the formula -->
+  <xacro:property name="final_ixx" value="${ixx_arg if ixx_arg > 0.0 else box_ixx}"/>
+  <xacro:property name="final_iyy" value="${iyy_arg if iyy_arg > 0.0 else box_iyy}"/>
+  <xacro:property name="final_izz" value="${izz_arg if izz_arg > 0.0 else box_izz}"/>
+
+  <model name="$(arg name)">
+    <!-- Spawn pose is supplied by the spawner (`ros_gz_sim create -x -y -z ...`);
+         keep the model's own pose at the origin. -->
+    <pose>0 0 0 0 0 0</pose>
+    <static>false</static>
+    <self_collide>false</self_collide>
+
+    <link name="body">
+      <!-- Space scenario: no weight force on the body. -->
+      <gravity>0</gravity>
+
+      <inertial>
+        <mass>${m}</mass>
+        <inertia>
+          <ixx>${final_ixx}</ixx>
+          <ixy>0.0</ixy>
+          <ixz>0.0</ixz>
+          <iyy>${final_iyy}</iyy>
+          <iyz>0.0</iyz>
+          <izz>${final_izz}</izz>
+        </inertia>
+      </inertial>
+
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>${sx} ${sy} ${sz}</size>
+          </box>
+        </geometry>
+      </collision>
+
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>${sx} ${sy} ${sz}</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.10 0.45 0.90 1</ambient>
+          <diffuse>0.10 0.45 0.90 1</diffuse>
+          <specular>0.10 0.10 0.10 1</specular>
+        </material>
+      </visual>
+    </link>
+
+    <!-- Pose + twist readout for ROS 2. OdometryPublisher ships with Fortress
+         (default plugin dir) and publishes ignition.msgs.Odometry on
+         /model/$(arg name)/odometry with a real sim-time stamp and proper
+         frame ids (odom_frame -> robot_base_frame). Observation only: it
+         reports the model's world pose and its linear + angular twist, and
+         applies no force. <dimensions>3</dimensions> is mandatory here - the
+         default is 2 (planar), wrong for a free 3D body. Publish rate matches
+         this project's other pose streams (/target_pose is 200 Hz). -->
+    <plugin filename="ignition-gazebo-odometry-publisher-system"
+            name="ignition::gazebo::systems::OdometryPublisher">
+      <dimensions>3</dimensions>
+      <odom_frame>world</odom_frame>
+      <robot_base_frame>$(arg name)</robot_base_frame>
+      <odom_publish_frequency>200</odom_publish_frequency>
+    </plugin>
+
+    <!-- Optional: seed an initial twist. Emitted only when explicitly asked
+         for; with use_velocity_control=false the model carries only the
+         observation-only OdometryPublisher above. -->
+    <xacro:if value="${'$(arg use_velocity_control)'.lower() == 'true'}">
+      <plugin filename="ignition-gazebo-velocity-control-system"
+              name="ignition::gazebo::systems::VelocityControl">
+        <initial_linear>$(arg initial_linear)</initial_linear>
+        <initial_angular>$(arg initial_angular)</initial_angular>
+      </plugin>
+    </xacro:if>
+
+  </model>
+</sdf>

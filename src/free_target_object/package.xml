@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>free_target_object</name>
+  <version>0.1.0</version>
+  <description>
+    Minimal free-floating rigid target object for Gazebo (Ignition Fortress).
+    A single passive link with no joint to the world: subject only to its own
+    rigid-body physics (F = m a, I omega_dot = tau). Replaces the use of
+    testing_plane as a servo-positioned "satellite" target. No ros2_control,
+    no controllers.
+  </description>
+  <maintainer email="ghessi2003@gmail.com">lorenzo</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Runtime only: xacro to expand the model, ros_gz_sim for the `create`
+       spawner, launch machinery. No dependency on franka_cartesian_control
+       or haptic_dmp_learning. -->
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

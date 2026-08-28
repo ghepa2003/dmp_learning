@@ -12,6 +12,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -22,11 +23,14 @@ def generate_launch_description():
         "xacro",
         "testing_plane.xacro"
     ])
-    testing_plane_xacro_urdf = Command([
-        PathJoinSubstitution([FindExecutable(name="xacro")]),
-        " ",
-        testing_plane_xacro_file
-    ])
+    testing_plane_xacro_urdf = ParameterValue(
+        Command([
+            PathJoinSubstitution([FindExecutable(name="xacro")]),
+            " ",
+            testing_plane_xacro_file
+        ]),
+        value_type=str
+    )
 
     ns = "testing_plane"
 
