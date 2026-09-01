@@ -25,8 +25,9 @@ include_directories(include)
 add_library(${PROJECT_NAME}_core
   src/core/demonstration_recorder.cpp
   src/core/dmp.cpp
-  src/core/quaternion_dmp.cpp  
+  src/core/quaternion_dmp.cpp
   src/core/dmp_io.cpp
+  src/core/grasp_state_machine.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -117,6 +118,9 @@ add_executable(grasp_state_machine_node
   src/ros/grasp_state_machine_node.cpp
   src/ros/grasp_state_machine_main.cpp
 )
+target_link_libraries(grasp_state_machine_node
+  ${PROJECT_NAME}_core
+)
 ament_target_dependencies(grasp_state_machine_node
   rclcpp
   std_msgs
@@ -173,6 +177,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_dmp_io test/test_dmp_io.cpp)
   target_link_libraries(test_dmp_io ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_grasp_state_machine test/test_grasp_state_machine.cpp)
+  target_link_libraries(test_grasp_state_machine ${PROJECT_NAME}_core)
 endif()
 
 ament_package()
