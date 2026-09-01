@@ -47,7 +47,7 @@
   (`ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock`)
   was added to `franka_gazebo_overrides/gazebo_cartesian_impedance_control.launch.py`
   (inherited by the `_headless` wrapper; propagated into `franka_ws` verbatim by
-  `scripts/setup_cartesian_control.sh` / `setup_franka_cartesian_control.sh`). It
+  `scripts/full_reset_franka_container.sh`). It
   is a hard prerequisite for anything depending on sim time:
   `demo_replay_sync_orchestrator_node` (which aborts if `/clock` is silent) and
   the sim-time conversion of `dmp_gazebo_executor_node` /
