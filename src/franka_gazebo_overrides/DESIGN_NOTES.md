@@ -8,7 +8,7 @@ is re-run — an accepted risk.
 
 | Override file | Overwrites (in `$FRANKA_WS`) | Propagated by |
 |---|---|---|
-| `franka_gazebo_overrides/gazebo_*_control*.launch.py`, `franka_gazebo_controllers.yaml` | `franka_gazebo/franka_gazebo_bringup/{launch,config}/` | `setup_cartesian_control.sh`, `setup_franka_cartesian_control.sh` |
+| `franka_gazebo_overrides/gazebo_*_control*.launch.py`, `franka_gazebo_controllers.yaml` | `franka_gazebo/franka_gazebo_bringup/{launch,config}/` | `full_reset_franka_container.sh` (add `--no-haptic` for the reduced perimeter) |
 | `franka_description_overrides/franka_hand.xacro` | `franka_description/end_effectors/common/franka_hand.xacro` | `setup_franka_description_overrides.sh` |
 
 ## Gripper: actuated fingers via **software mimic** in `gz_ros2_control`

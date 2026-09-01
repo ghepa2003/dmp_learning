@@ -5,7 +5,7 @@
 # This launch file only starts the two haptic_dmp_learning nodes below. It
 # does NOT bring up Gazebo or velocity_cartesian_controller: those run in a
 # separate container/workspace (franka_ws -> franka_gazebo_bringup, see
-# scripts/setup_velocity_cartesian_control.sh) and are assumed to already be
+# scripts/full_reset_franka_container.sh) and are assumed to already be
 # active - "ros2 launch franka_gazebo_bringup gazebo_velocity_cartesian_control.launch.py".
 #
 # use_csv_playback:=true (default): csv_master_pose_player_node stands in for
