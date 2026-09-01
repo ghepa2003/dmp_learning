@@ -51,6 +51,7 @@ private:
     bool recording_;
     rclcpp::Time record_start_time_;
     std::vector<int32_t> prev_buttons_;  ///< Previous button state for rising-edge detection
+    bool gripper_trigger_pending_ = false;
 
     // Parameters
     std::string master_pose_topic_;

@@ -40,7 +40,7 @@ from launch.actions import (
     OpaqueFunction,
     RegisterEventHandler,
 )
-from launch.conditions import UnlessCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -137,6 +137,42 @@ def prepare_launch_description():
         output='screen',
     )
 
+    # Bridge Gazebo's /clock to ROS 2. The stock Franka Gazebo bringup does NOT
+    # do this: neither gz_sim.launch.py nor gz_ros2_control exposes a /clock
+    # bridge in this configuration, so every ROS-side node started with
+    # use_sim_time:=true (controller_manager, the controllers, and downstream
+    # haptic_dmp_learning nodes) gets a clock that never advances. Confirmed only
+    # at runtime (`ros2 topic info /clock --verbose` -> Publisher count: 0).
+    # gz-side topic is the plain /clock (Ignition Clock system, global under
+    # `-r`); there is no per-world /world/<name>/clock reference anywhere in this
+    # file. See franka_cartesian_control/DESIGN_NOTES.md.
+    clock_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='clock_bridge',
+        output='screen',
+        arguments=[
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock'
+        ],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    # ROS2 -> Ignition bridge for gripper position command (workaround for a bug
+    # in franka_ign_ros2_control where joint_position_cmd never updates for
+    # fer_finger_joint1 via the standard ros2_control chain; diagnosed via
+    # RCLCPP_INFO_THROTTLE instrumentation, see thesis notes). Direction is
+    # ROS2 -> Gazebo only (']'), opposite of clock_bridge above.
+    gripper_position_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='gripper_position_bridge',
+        output='screen',
+        arguments=[
+            '/gripper_position_cmd@std_msgs/msg/Float64]ignition.msgs.Double'
+        ],
+        parameters=[{'use_sim_time': True}],
+    )
+
     # Visualize in RViz (only if not headless)
     rviz_file = os.path.join(get_package_share_directory('franka_description'), 'rviz',
                              'visualize_franka.rviz')
@@ -160,12 +196,22 @@ def prepare_launch_description():
         output='screen'
     )
 
+    # Gripper: NON piu' via ros2_control/gripper_controller (ForwardCommandController).
+    # Bug non risolto in franka_ign_ros2_control: joint_position_cmd non si
+    # aggiorna mai per fer_finger_joint1 attraverso questa catena, nonostante
+    # interfaccia dichiarata/esportata/reclamata correttamente (diagnosi via
+    # RCLCPP_INFO_THROTTLE instrumentation, vedi thesis notes). Workaround:
+    # ignition::gazebo::systems::JointPositionController (plugin nativo, vedi
+    # franka_arm.ros2_control.xacro) + gripper_position_bridge sopra.
+
     return LaunchDescription([
         load_gripper_launch_argument,
         franka_hand_launch_argument,
         arm_id_launch_argument,
         headless_launch_argument,
         gazebo_empty_world,
+        clock_bridge,
+        gripper_position_bridge,
         robot_state_publisher,
         rviz,
         spawn,

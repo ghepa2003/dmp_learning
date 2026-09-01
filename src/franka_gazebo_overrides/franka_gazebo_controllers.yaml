@@ -36,6 +36,15 @@ controller_manager:
     cartesian_impedance_controller:
       type: franka_cartesian_control/CartesianImpedanceController
 
+    # Gripper: forward position commands to the LEADER finger joint only.
+    # fer_finger_joint2 follows in software via <mimic> (gz_ros2_control), so it
+    # exposes no command_interface and is not driven by any controller.
+    # gripper_controller (ForwardCommandController) rimosso: fer_finger_joint1
+    # ora comandato via ignition::gazebo::systems::JointPositionController
+    # (plugin nativo) + ros_gz_bridge su /gripper_position_cmd, non piu' via
+    # ros2_control (bug non risolto in franka_ign_ros2_control: joint_position_cmd
+    # non si aggiorna mai per questo giunto, vedi thesis notes).
+
 # --- Controller Specific Parameter Blocks ---
 
 joint_position_example_controller:
@@ -113,3 +122,7 @@ cartesian_impedance_controller:
     compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
     enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics
     enable_contact_force_estimation: true
+
+# Parameters for the gripper forward-command controller.
+# Only the leader joint is listed: fer_finger_joint2 mimics fer_finger_joint1 in
+# software (gz_ros2_control) and has no command_interface.

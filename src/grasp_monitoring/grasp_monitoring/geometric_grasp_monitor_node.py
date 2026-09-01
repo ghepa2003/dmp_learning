@@ -90,7 +90,7 @@ class GeometricGraspMonitor(Node):
         # plus a 0.02 m grasp margin. EXPLICIT PARAMETER: update this when the
         # real target geometry changes (do NOT rely on the default).
         self.epsilon_pos = float(
-            self.declare_parameter('epsilon_pos', 0.12).value)
+            self.declare_parameter('epsilon_pos', 0.035).value)
 
         # Approach-axis alignment half-cone [deg]. Default 30 deg (cos ~ 0.866).
         self.approach_axis_angle_deg = float(

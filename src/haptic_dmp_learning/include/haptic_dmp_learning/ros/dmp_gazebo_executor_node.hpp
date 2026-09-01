@@ -3,6 +3,7 @@
 #include <string>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/float64.hpp>
 
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
@@ -32,6 +33,7 @@ private:
 
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
     rclcpp::TimerBase::SharedPtr startup_timer_;
     rclcpp::TimerBase::SharedPtr step_timer_;
 
@@ -43,9 +45,12 @@ private:
     double dt_;
     double elapsed_;
     bool finished_;
+    double gripper_trigger_t_ = -1.0;
+    bool gripper_trigger_sent_ = false;
 
     // Parameters
     std::string weights_yaml_path_;
+    std::string demo_csv_path_;
     std::string target_pose_topic_;
     std::string frame_id_;
     double control_rate_hz_;

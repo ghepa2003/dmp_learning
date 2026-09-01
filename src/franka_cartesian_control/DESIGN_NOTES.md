@@ -34,3 +34,21 @@
   the two reference sources; a single shared threshold will either miss
   contacts in the DMP case or false-trigger on tracking noise in the haptic
   case.
+
+- **The vendored Gazebo impedance bringup now bridges `/clock` explicitly.**
+  The stock Franka Gazebo bringup did **not** bridge `/clock` from Gazebo to
+  ROS 2 in this configuration — `gz_sim.launch.py` / `gz_ros2_control` do not
+  expose it — so every ROS-side node started with `use_sim_time:=true`
+  (`controller_manager`, the controllers, and the downstream
+  `haptic_dmp_learning` nodes) ran against a clock that never advanced. This is
+  invisible to static inspection of the workspace and was found only at runtime
+  (`ros2 topic info /clock --verbose` → `Publisher count: 0` while three nodes
+  were already subscribed). A dedicated `clock_bridge` node
+  (`ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock`)
+  was added to `franka_gazebo_overrides/gazebo_cartesian_impedance_control.launch.py`
+  (inherited by the `_headless` wrapper; propagated into `franka_ws` verbatim by
+  `scripts/setup_cartesian_control.sh` / `setup_franka_cartesian_control.sh`). It
+  is a hard prerequisite for anything depending on sim time:
+  `demo_replay_sync_orchestrator_node` (which aborts if `/clock` is silent) and
+  the sim-time conversion of `dmp_gazebo_executor_node` /
+  `csv_master_pose_player_node`.

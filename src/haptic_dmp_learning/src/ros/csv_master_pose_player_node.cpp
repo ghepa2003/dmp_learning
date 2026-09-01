@@ -6,6 +6,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <rclcpp/create_timer.hpp>
+
 using namespace std::chrono_literals;
 
 namespace haptic_dmp_learning {
@@ -46,14 +48,24 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
                 demo_csv_path_.c_str(), rows_.size(), master_pose_topic_.c_str(),
                 startup_delay_sec_, buttons_topic_.c_str());
 
-    // 4. Initial delay timer: emits baseline idle joy message before triggering start edge
-    startup_timer_ = this->create_wall_timer(
-        std::chrono::duration<double>(startup_delay_sec_), [this]() {
+    // 4. Initial delay timer: emits baseline idle joy message before triggering start edge.
+    //    Sim-time timers: rclcpp::create_timer bound to the node clock (get_clock())
+    //    honours use_sim_time; create_wall_timer would stay on steady_clock
+    //    regardless. This node is a documented stand-in for the Geomagic Touch
+    //    driver (see DESIGN_NOTES.md), converted for consistency with the replay
+    //    path. Launch it with use_sim_time:=true.
+    //    NOTE: the CSV rows' t column and thus tau are wall-clock quantities
+    //    (core/dmp.cpp:79-84); a DMP re-learned from a sim-time run supersedes any
+    //    weights recorded before this conversion.
+    startup_timer_ = rclcpp::create_timer(
+        this, this->get_clock(),
+        rclcpp::Duration::from_seconds(startup_delay_sec_), [this]() {
             startup_timer_->cancel();
             // Publish idle baseline [0, 0] so downstream rising-edge detector initializes
             publishButtons(0, 0);
-            start_edge_timer_ = this->create_wall_timer(
-                std::chrono::duration<double>(kStartEdgeDelaySec),
+            start_edge_timer_ = rclcpp::create_timer(
+                this, this->get_clock(),
+                rclcpp::Duration::from_seconds(kStartEdgeDelaySec),
                 [this]() {
                     start_edge_timer_->cancel();
                     beginPlayback();
@@ -78,7 +90,7 @@ void CsvMasterPosePlayerNode::loadCsv(const std::string& path) {
         while (std::getline(ss, field, ',')) {
             values.push_back(std::stod(field));
         }
-        if (values.size() != 8) {
+        if (values.size() < 8) {
             throw std::runtime_error("CsvMasterPosePlayerNode: malformed row in " + path);
         }
 
@@ -123,15 +135,19 @@ void CsvMasterPosePlayerNode::beginPlayback() {
     next_row_idx_ = 0;
     finished_ = false;
 
-    playback_timer_ = this->create_wall_timer(
-        std::chrono::duration<double>(dt_),
+    // Sim-time timer (see note on startup_timer_): playback rate advances on the
+    // node clock so row pacing is deterministic w.r.t. the real-time factor.
+    playback_timer_ = rclcpp::create_timer(
+        this, this->get_clock(),
+        rclcpp::Duration::from_seconds(dt_),
         std::bind(&CsvMasterPosePlayerNode::playbackCallback, this));
 }
 
 void CsvMasterPosePlayerNode::playbackCallback() {
     if (finished_) return;
 
-    // Advance to latest CSV row matching elapsed wall-clock time
+    // Advance to latest CSV row matching elapsed time on the node clock
+    // (sim time when use_sim_time:=true, system time otherwise).
     double elapsed = (this->now() - playback_start_time_).seconds();
     while (next_row_idx_ + 1 < rows_.size() && rows_[next_row_idx_ + 1].t <= elapsed) {
         ++next_row_idx_;

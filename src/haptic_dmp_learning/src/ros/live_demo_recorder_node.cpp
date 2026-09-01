@@ -85,6 +85,13 @@ void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStam
     Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
                               msg->pose.orientation.y, msg->pose.orientation.z);
     s.orientation = orient.normalized();
+
+    if (gripper_trigger_pending_) {
+        s.gripper_trigger = true;
+        gripper_trigger_pending_ = false;
+        RCLCPP_INFO(this->get_logger(), "Captured gripper trigger in sample at t=%.4f s", s.t);
+    }
+
     recorder_.addSample(s);
 }
 
@@ -112,11 +119,16 @@ void LiveDemoRecorderNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPt
     } else if (rising1 && recording_) {
         stopRecordingAndLearn();
     }
+
+    if (msg->buttons.size() >= 3 && msg->buttons[2] != 0) {
+        gripper_trigger_pending_ = true;
+    }
 }
 
 void LiveDemoRecorderNode::startRecording() {
     recorder_.clear();
     recording_ = true;
+    gripper_trigger_pending_ = false;
     record_start_time_ = this->now();
     RCLCPP_INFO(this->get_logger(), "Recording started.");
 }
@@ -173,10 +185,11 @@ void LiveDemoRecorderNode::saveDemoToCsv(const std::string& path) const {
     if (!f.is_open()) {
         throw std::runtime_error("saveDemoToCsv: cannot open file for writing: " + path);
     }
-    f << "t,x,y,z,qw,qx,qy,qz\n";
+    f << "t,x,y,z,qw,qx,qy,qz,gripper_trigger\n";
     for (const auto& s : recorder_.samples()) {
         f << s.t << "," << s.position.x() << "," << s.position.y() << "," << s.position.z() << ","
-          << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << "\n";
+          << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << ","
+          << (s.gripper_trigger ? 1 : 0) << "\n";
     }
 }
 

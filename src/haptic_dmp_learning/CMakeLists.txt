@@ -13,6 +13,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(rosgraph_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
@@ -60,6 +63,7 @@ target_link_libraries(dmp_gazebo_executor_node
 ament_target_dependencies(dmp_gazebo_executor_node
   rclcpp
   geometry_msgs
+  std_msgs
   ament_index_cpp
 )
 
@@ -94,12 +98,53 @@ ament_target_dependencies(live_demo_recorder_node
   ament_index_cpp
 )
 
+# ---- Per-demo contact-force calibration / verification node ----
+add_executable(grasp_force_calibration_node
+  src/ros/grasp_force_calibration_node.cpp
+  src/ros/grasp_force_calibration_main.cpp
+)
+target_link_libraries(grasp_force_calibration_node
+  yaml-cpp
+)
+ament_target_dependencies(grasp_force_calibration_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+)
+
+# ---- Grasp state machine (fuses geometric + force-verified signals) ----
+add_executable(grasp_state_machine_node
+  src/ros/grasp_state_machine_node.cpp
+  src/ros/grasp_state_machine_main.cpp
+)
+ament_target_dependencies(grasp_state_machine_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+)
+
+# ---- Demo/replay time-sync orchestrator ----
+add_executable(demo_replay_sync_orchestrator_node
+  src/ros/demo_replay_sync_orchestrator_node.cpp
+  src/ros/demo_replay_sync_orchestrator_main.cpp
+)
+ament_target_dependencies(demo_replay_sync_orchestrator_node
+  rclcpp
+  std_msgs
+  sensor_msgs
+  nav_msgs
+  rosgraph_msgs
+)
+
 install(TARGETS
   ${PROJECT_NAME}_core
   haptic_dmp_wrapper_node
   dmp_gazebo_executor_node
   csv_master_pose_player_node
   live_demo_recorder_node
+  grasp_force_calibration_node
+  grasp_state_machine_node
+  demo_replay_sync_orchestrator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

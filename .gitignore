@@ -10,6 +10,8 @@ log/
 # dati generati da sessioni reali
 dmp_weights.yaml
 demo_raw.csv
+dmp_weights_*.yaml
+demo_raw_*.csv
 *.png
 
 # dati generati da sessioni di test
