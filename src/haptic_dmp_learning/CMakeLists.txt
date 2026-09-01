@@ -27,6 +27,7 @@ add_library(${PROJECT_NAME}_core
   src/core/dmp.cpp
   src/core/quaternion_dmp.cpp
   src/core/dmp_io.cpp
+  src/core/demo_csv_io.cpp
   src/core/grasp_state_machine.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
@@ -177,6 +178,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_dmp_io test/test_dmp_io.cpp)
   target_link_libraries(test_dmp_io ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_demo_csv_io test/test_demo_csv_io.cpp)
+  target_link_libraries(test_demo_csv_io ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_grasp_state_machine test/test_grasp_state_machine.cpp)
   target_link_libraries(test_grasp_state_machine ${PROJECT_NAME}_core)

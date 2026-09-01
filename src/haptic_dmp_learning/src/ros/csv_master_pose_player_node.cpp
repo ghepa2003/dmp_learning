@@ -2,11 +2,10 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
 
 #include <rclcpp/create_timer.hpp>
+
+#include "haptic_dmp_learning/core/demo_csv_io.hpp"
 
 using namespace std::chrono_literals;
 
@@ -34,7 +33,7 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
     dt_ = 1.0 / publish_rate_hz_;
 
     // 2. Load demo trajectory from CSV
-    loadCsv(demo_csv_path_);
+    rows_ = core::demo_csv_io::readDemoCsv(demo_csv_path_);
 
     // 3. Create publishers for pose and button events
     pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -73,39 +72,6 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
         });
 }
 
-void CsvMasterPosePlayerNode::loadCsv(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        throw std::runtime_error("CsvMasterPosePlayerNode: cannot open demo CSV: " + path);
-    }
-
-    std::string line;
-    std::getline(f, line);  // Discard header line: t,x,y,z,qw,qx,qy,qz
-
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        std::istringstream ss(line);
-        std::string field;
-        std::vector<double> values;
-        while (std::getline(ss, field, ',')) {
-            values.push_back(std::stod(field));
-        }
-        if (values.size() < 8) {
-            throw std::runtime_error("CsvMasterPosePlayerNode: malformed row in " + path);
-        }
-
-        CsvRow row;
-        row.t = values[0];
-        row.position = Eigen::Vector3d(values[1], values[2], values[3]);
-        row.orientation = Eigen::Quaterniond(values[4], values[5], values[6], values[7]).normalized();
-        rows_.push_back(row);
-    }
-
-    if (rows_.empty()) {
-        throw std::runtime_error("CsvMasterPosePlayerNode: no rows loaded from " + path);
-    }
-}
-
 void CsvMasterPosePlayerNode::publishButtons(int32_t button0, int32_t button1) {
     sensor_msgs::msg::Joy msg;
     msg.header.stamp = this->now();
@@ -113,7 +79,7 @@ void CsvMasterPosePlayerNode::publishButtons(int32_t button0, int32_t button1) {
     buttons_pub_->publish(msg);
 }
 
-void CsvMasterPosePlayerNode::publishRow(const CsvRow& row) {
+void CsvMasterPosePlayerNode::publishRow(const core::Sample& row) {
     geometry_msgs::msg::PoseStamped msg;
     msg.header.stamp = this->now();
     msg.header.frame_id = frame_id_;
