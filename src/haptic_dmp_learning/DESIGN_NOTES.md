@@ -106,17 +106,20 @@ this class of regression from recurring silently:
   `live_demo_recorder_node` let this exception propagate out of the
   constructor; `main()` in each catches it, logs via `RCLCPP_FATAL`, and
   exits with status 1 instead of calling `rclcpp::spin()`.
-- **`haptic_dmp_wrapper_node` requires `--ros-args --params-file
-  <config/params.yaml>` at launch.** `n_basis`, `alpha_x`, `alpha_z`, and
-  `beta_z` are declared as *mandatory* ROS2 parameters (no default value), so
-  `declare_parameter<T>(name)` itself throws if they were not supplied
-  externally - there is deliberately no code path left that silently reads
-  `params.yaml` by hand or falls back to the ROS-default `n_basis=20`. This
-  node has no launch file (it targets the real Geomagic Touch device inside
-  the `geomagic_touch` container, run directly via `ros2 run`), so this is
-  the only guard against forgetting `--params-file`. `live_demo_recorder_node`
-  is not required to do this the same way because `launch/live_demo.launch.py`
-  always passes `params_file` explicitly.
+- **`haptic_dmp_wrapper_node` and `live_demo_recorder_node` both require
+  `--ros-args --params-file <config/params.yaml>` at launch.** `n_basis`,
+  `alpha_x`, `alpha_z`, and `beta_z` are declared as *mandatory* ROS2
+  parameters (no default value), so `declare_parameter<T>(name)` itself throws
+  if they were not supplied externally - there is deliberately no code path
+  left that silently reads `params.yaml` by hand or falls back to the
+  ROS-default `n_basis=20`. `haptic_dmp_wrapper_node` has no launch file (it
+  targets the real Geomagic Touch device inside the `geomagic_touch`
+  container, run directly via `ros2 run`), so this is its only guard against
+  forgetting `--params-file`. `live_demo_recorder_node` is always launched via
+  `launch/live_demo.launch.py` / `launch/demo_replay_sync.launch.py`, which do
+  pass `params_file` explicitly - but the mandatory declaration makes a bare
+  `ros2 run haptic_dmp_learning live_demo_recorder_node` fail loudly instead of
+  silently training a bad DMP.
 - **Output/weights/feature-config paths default to absolute
   (`$HOME/thesis_ws/...`) paths**, not relative ones, in `config/params.yaml`
   and in the three nodes' `declare_parameter` defaults

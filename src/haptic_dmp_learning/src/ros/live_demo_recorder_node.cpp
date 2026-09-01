@@ -3,6 +3,7 @@
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cstdlib>
+#include <stdexcept>
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -12,11 +13,26 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
       dmp_(20, 4.6, 25.0, 6.25, false),
       recording_(false) {
 
-    // 1. Declare DMP hyper-parameters
-    n_basis_ = this->declare_parameter<int>("n_basis", 20);
-    alpha_x_ = this->declare_parameter<double>("alpha_x", 4.6);
-    alpha_z_ = this->declare_parameter<double>("alpha_z", 25.0);
-    beta_z_ = this->declare_parameter<double>("beta_z", 6.25);
+    // 1. Declare DMP hyper-parameters as MANDATORY (no default), fail-loud.
+    // Launched without --params-file, this node would otherwise start silently
+    // with n_basis=20 instead of the validated 200 (config/params.yaml): on real
+    // teleoperated demo data that degrades the learned trajectory from ~0.23mm
+    // RMSE to ~72mm RMSE / ~60deg mean orientation error, with no error message
+    // (see DESIGN_NOTES.md). Same pattern as haptic_dmp_wrapper_node and
+    // demo_replay_sync_orchestrator_node.
+    try {
+        n_basis_ = this->declare_parameter<int>("n_basis");
+        alpha_x_ = this->declare_parameter<double>("alpha_x");
+        alpha_z_ = this->declare_parameter<double>("alpha_z");
+        beta_z_ = this->declare_parameter<double>("beta_z");
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            "live_demo_recorder_node: required parameters (n_basis, alpha_x, alpha_z, beta_z) "
+            "were not provided. This node must be launched with "
+            "--ros-args --params-file <path/to/haptic_dmp_learning/config/params.yaml> "
+            "so the validated DMP hyper-parameters are used instead of silently falling back "
+            "to hardcoded ROS defaults. Underlying error: " + std::string(e.what()));
+    }
 
     // 2. Declare topic names and output file paths
     master_pose_topic_ = this->declare_parameter<std::string>("master_pose_topic", "/master_pose_raw");
