@@ -1,12 +1,10 @@
 #include "haptic_dmp_learning/ros/dmp_gazebo_executor_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
+#include "haptic_dmp_learning/core/demo_csv_io.hpp"
 
 #include <cstdlib>
 #include <chrono>
 #include <cmath>
-#include <fstream>
-#include <sstream>
-#include <vector>
 
 #include <rclcpp/create_timer.hpp>
 
@@ -54,54 +52,14 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     // 2b. Parse demo CSV for gripper trigger timestamp if provided
     demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "");
     if (!demo_csv_path_.empty()) {
-        std::ifstream f(demo_csv_path_);
-        if (f.is_open()) {
-            std::string line;
-            if (std::getline(f, line)) {
-                std::stringstream ss(line);
-                std::string col;
-                int trigger_col_idx = -1;
-                int curr_idx = 0;
-                while (std::getline(ss, col, ',')) {
-                    while (!col.empty() && (col.back() == '\r' || col.back() == ' ')) col.pop_back();
-                    if (col == "gripper_trigger") {
-                        trigger_col_idx = curr_idx;
-                        break;
-                    }
-                    curr_idx++;
-                }
-
-                if (trigger_col_idx >= 0) {
-                    while (std::getline(f, line)) {
-                        if (line.empty()) continue;
-                        std::stringstream lss(line);
-                        std::string field;
-                        std::vector<std::string> fields;
-                        while (std::getline(lss, field, ',')) {
-                            while (!field.empty() && (field.back() == '\r' || field.back() == ' ')) field.pop_back();
-                            fields.push_back(field);
-                        }
-                        if (static_cast<int>(fields.size()) > trigger_col_idx) {
-                            try {
-                                if (std::stoi(fields[trigger_col_idx]) == 1) {
-                                    gripper_trigger_t_ = std::stod(fields[0]);
-                                    RCLCPP_INFO(this->get_logger(),
-                                                "Found gripper trigger in CSV at t = %.4f s",
-                                                gripper_trigger_t_);
-                                    break;
-                                }
-                            } catch (...) {}
-                        }
-                    }
-                } else {
-                    RCLCPP_INFO(this->get_logger(),
-                                "No 'gripper_trigger' column in %s; replay without gripper trigger.",
-                                demo_csv_path_.c_str());
-                }
-            }
+        gripper_trigger_t_ = core::demo_csv_io::readGripperTriggerTime(demo_csv_path_);
+        if (gripper_trigger_t_ >= 0.0) {
+            RCLCPP_INFO(this->get_logger(),
+                        "Found gripper trigger in CSV at t = %.4f s", gripper_trigger_t_);
         } else {
-            RCLCPP_WARN(this->get_logger(),
-                        "Could not open demo CSV at %s; replay without gripper trigger.",
+            RCLCPP_INFO(this->get_logger(),
+                        "No gripper trigger from %s (missing file, no 'gripper_trigger' "
+                        "column, or no trigger row); replay without gripper trigger.",
                         demo_csv_path_.c_str());
         }
     }

@@ -28,18 +28,11 @@ public:
     CsvMasterPosePlayerNode();
 
 private:
-    void loadCsv(const std::string& path);
     void beginPlayback();
     void playbackCallback();
 
-    struct CsvRow {
-        double t;
-        Eigen::Vector3d position;
-        Eigen::Quaterniond orientation;
-    };
-
     void publishButtons(int32_t button0, int32_t button1);
-    void publishRow(const CsvRow& row);
+    void publishRow(const core::Sample& row);
 
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
@@ -49,7 +42,7 @@ private:
     rclcpp::TimerBase::SharedPtr playback_timer_;
 
     // In-memory trajectory buffer
-    std::vector<CsvRow> rows_;
+    std::vector<core::Sample> rows_;
 
     // Playback state
     rclcpp::Time playback_start_time_;

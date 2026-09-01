@@ -1,8 +1,8 @@
 #include "haptic_dmp_learning/ros/live_demo_recorder_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
+#include "haptic_dmp_learning/core/demo_csv_io.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cstdlib>
-#include <fstream>
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -145,7 +145,7 @@ void LiveDemoRecorderNode::stopRecordingAndLearn() {
     // Save demonstration trajectory to CSV
     if (!output_demo_csv_path_.empty()) {
         try {
-            saveDemoToCsv(output_demo_csv_path_);
+            core::demo_csv_io::writeDemoCsv(output_demo_csv_path_, recorder_.samples());
             RCLCPP_INFO(this->get_logger(), "Raw demo saved to %s", output_demo_csv_path_.c_str());
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Saving raw demo failed: %s", e.what());
@@ -177,19 +177,6 @@ void LiveDemoRecorderNode::stopRecordingAndLearn() {
         RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Learning/saving failed: %s", e.what());
-    }
-}
-
-void LiveDemoRecorderNode::saveDemoToCsv(const std::string& path) const {
-    std::ofstream f(path);
-    if (!f.is_open()) {
-        throw std::runtime_error("saveDemoToCsv: cannot open file for writing: " + path);
-    }
-    f << "t,x,y,z,qw,qx,qy,qz,gripper_trigger\n";
-    for (const auto& s : recorder_.samples()) {
-        f << s.t << "," << s.position.x() << "," << s.position.y() << "," << s.position.z() << ","
-          << s.orientation.w() << "," << s.orientation.x() << "," << s.orientation.y() << "," << s.orientation.z() << ","
-          << (s.gripper_trigger ? 1 : 0) << "\n";
     }
 }
 

@@ -35,7 +35,6 @@ private:
 
     void startRecording();
     void stopRecordingAndLearn();
-    void saveDemoToCsv(const std::string& path) const;
 
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
