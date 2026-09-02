@@ -191,6 +191,14 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
                     dmp_diag.initial_vel_norm, dmp_diag.final_vel_norm, dmp_diag.initial_z_norm,
                     qdmp_diag.initial_eta_norm, qdmp_diag.final_eta_norm);
 
+        if (dmp_diag.dropped_non_monotonic_samples > 0) {
+            RCLCPP_WARN(this->get_logger(),
+                        "%d demo sample(s) had non-increasing timestamps and were dropped "
+                        "before DMP fitting - check the recording clock (a coarse sim-time "
+                        "/clock can stamp consecutive samples identically).",
+                        dmp_diag.dropped_non_monotonic_samples);
+        }
+
         // Serialize learned parameters to destination YAML
         core::dmp_io::saveToYaml(dmp_, quat_dmp_, output_yaml_path_);
         RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());

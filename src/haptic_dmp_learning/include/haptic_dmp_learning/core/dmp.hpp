@@ -162,6 +162,7 @@ public:
         double final_vel_norm = 0.0;
         double initial_z_norm = 0.0;
         double final_z_norm = 0.0;
+        int dropped_non_monotonic_samples = 0;  ///< samples removed for non-increasing timestamp
     };
     const Diagnostics& diagnostics() const { return diag_; }
 

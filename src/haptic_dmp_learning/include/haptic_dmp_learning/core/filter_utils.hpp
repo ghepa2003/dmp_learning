@@ -5,9 +5,45 @@
 #include <algorithm>
 #include <Eigen/Dense>
 
+#include "haptic_dmp_learning/core/types.hpp"
+
 namespace haptic_dmp_learning {
 namespace core {
 namespace filter_utils {
+
+/**
+ * @brief Drop demonstration samples whose timestamp does not strictly increase.
+ *
+ * @details
+ * DMP / QuaternionDMP learning estimate velocity and acceleration with central
+ * finite differences that divide by (t[k+1] - t[k-1]). A repeated or backwards
+ * timestamp makes that denominator zero (or negative); the learners then clamp
+ * it to a tiny 1e-6 s, which turns the step into an enormous spurious
+ * velocity/acceleration spike and inflates the fitted weights. Such rows appear
+ * when a recorder stamps samples with a coarse sim-time /clock, collapsing
+ * consecutive callbacks onto the same tick.
+ *
+ * This keeps the first sample and every later sample strictly newer than the
+ * last kept one, preserving order and values otherwise.
+ *
+ * @param samples  Input demonstration (any ordering of timestamps).
+ * @param dropped  If non-null, receives how many samples were removed.
+ * @return Filtered demonstration, size == samples.size() - dropped.
+ */
+inline std::vector<Sample> dropNonIncreasingTimeSamples(
+    const std::vector<Sample>& samples, int* dropped = nullptr) {
+    std::vector<Sample> out;
+    out.reserve(samples.size());
+    for (const auto& s : samples) {
+        if (out.empty() || s.t > out.back().t) {
+            out.push_back(s);
+        }
+    }
+    if (dropped != nullptr) {
+        *dropped = static_cast<int>(samples.size() - out.size());
+    }
+    return out;
+}
 
 /**
  * @brief Zero-phase symmetric moving average filter for multi-dimensional time series.

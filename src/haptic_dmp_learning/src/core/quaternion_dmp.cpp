@@ -78,7 +78,16 @@ std::vector<Eigen::Vector3d> QuaternionDMP::unwrapRotationVector(const std::vect
     return r;
 }
 
-void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo) {
+void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo_in) {
+    // 0. Defence in depth: drop samples with a non-increasing timestamp before
+    // any finite differencing (see DMP::learnFromDemonstration and
+    // filter_utils::dropNonIncreasingTimeSamples). dt=0 rows would otherwise be
+    // clamped to 1e-6 s below and blow up the angular velocity estimate.
+    int dropped_samples = 0;
+    const std::vector<Sample> demo =
+        filter_utils::dropNonIncreasingTimeSamples(demo_in, &dropped_samples);
+    diag_.dropped_non_monotonic_samples = dropped_samples;
+
     if (demo.size() < 5) {
         throw std::runtime_error("QuaternionDMP::learnFromDemonstration: demonstration too short.");
     }

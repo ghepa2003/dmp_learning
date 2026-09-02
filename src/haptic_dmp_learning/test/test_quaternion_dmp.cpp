@@ -69,3 +69,53 @@ TEST(QuaternionDMPCoreTest, RotationRolloutConvergence) {
     double final_err = q.angularDistance(q_goal);
     EXPECT_LT(final_err, 0.05);
 }
+
+/**
+ * @brief QuaternionDMP must also drop non-increasing-timestamp samples before
+ * differencing the orientation trajectory. Exact duplicate rows carry no new
+ * information, so the fit must match the clean one and report the drop count.
+ */
+TEST(QuaternionDMPCoreTest, DropsNonIncreasingTimestampSamples) {
+    const int N = 80;
+    const double dt = 0.02;
+
+    Eigen::Quaterniond q0 = Eigen::Quaterniond::Identity();
+    Eigen::Quaterniond q_goal(Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitY()));
+
+    std::vector<Sample> clean;
+    for (int i = 0; i < N; ++i) {
+        double s = static_cast<double>(i) / (N - 1);
+        Sample smp;
+        smp.t = i * dt;
+        smp.position = Eigen::Vector3d::Zero();
+        smp.orientation = q0.slerp(s, q_goal);
+        clean.push_back(smp);
+    }
+
+    std::vector<Sample> with_dups;
+    const int inject_after[] = {15, 30, 31, 55};
+    for (int i = 0; i < N; ++i) {
+        with_dups.push_back(clean[i]);
+        for (int idx : inject_after) {
+            if (i == idx) with_dups.push_back(clean[i]);  // dt = 0 vs previous
+        }
+    }
+    ASSERT_EQ(with_dups.size(), clean.size() + 4);
+
+    QuaternionDMP clean_qdmp(25);
+    clean_qdmp.learnFromDemonstration(clean);
+    EXPECT_EQ(clean_qdmp.diagnostics().dropped_non_monotonic_samples, 0);
+
+    QuaternionDMP dup_qdmp(25);
+    dup_qdmp.learnFromDemonstration(with_dups);
+
+    EXPECT_EQ(dup_qdmp.diagnostics().dropped_non_monotonic_samples, 4);
+    EXPECT_NEAR(dup_qdmp.tau(), (N - 1) * dt, 1e-9);
+
+    for (int d = 0; d < 3; ++d) {
+        for (int i = 0; i < 25; ++i) {
+            EXPECT_NEAR(dup_qdmp.weights()[d](i), clean_qdmp.weights()[d](i), 1e-9)
+                << "weight mismatch at dim " << d << " basis " << i;
+        }
+    }
+}

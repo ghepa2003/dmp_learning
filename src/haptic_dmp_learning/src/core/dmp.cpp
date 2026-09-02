@@ -69,7 +69,18 @@ double DMP::basisFunction(int i, double x) const {
     return std::exp(-widths_(i) * d * d);
 }
 
-void DMP::learnFromDemonstration(const std::vector<Sample>& demo) {
+void DMP::learnFromDemonstration(const std::vector<Sample>& demo_in) {
+    // 0. Defence in depth: drop samples with a non-increasing timestamp before
+    // any finite differencing. A repeated t (dt=0) would otherwise be clamped
+    // to 1e-6 s below and produce a huge spurious velocity/acceleration spike
+    // that the regression fits into oversized weights. The recorder is meant to
+    // never emit such rows; if it does, diag_.dropped_non_monotonic_samples
+    // makes it visible in the learning logs instead of only in anomalous weights.
+    int dropped_samples = 0;
+    const std::vector<Sample> demo =
+        filter_utils::dropNonIncreasingTimeSamples(demo_in, &dropped_samples);
+    diag_.dropped_non_monotonic_samples = dropped_samples;
+
     // 1. Validation of demonstration length and temporal monotonicity
     if (demo.size() < 5) {
         throw std::runtime_error(

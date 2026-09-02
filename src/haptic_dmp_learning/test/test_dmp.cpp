@@ -116,3 +116,57 @@ TEST(DMPCoreTest, MovingAverageFilterSmoothing) {
     EXPECT_NEAR(filtered[25].y(), 2.0, 0.05);
     EXPECT_NEAR(filtered[25].z(), 3.0, 0.05);
 }
+
+/**
+ * @brief Samples with a non-increasing timestamp (dt<=0) must be dropped before
+ * fitting, not fed through the finite differences with a clamped 1e-6 s step.
+ *
+ * A clean min-jerk demo is fitted, then re-fitted after inserting exact
+ * duplicate-timestamp rows. The learner must report the dropped count and, since
+ * the duplicates carry no new information, recover the clean fit exactly.
+ */
+TEST(DMPCoreTest, DropsNonIncreasingTimestampSamples) {
+    const int N = 80;
+    const double dt = 0.02;
+    Eigen::Vector3d p_start(0.0, 0.0, 0.0);
+    Eigen::Vector3d p_goal(0.25, -0.1, 0.15);
+
+    std::vector<Sample> clean;
+    for (int i = 0; i < N; ++i) {
+        double s = static_cast<double>(i) / (N - 1);
+        double poly = s * s * s * (10.0 - 15.0 * s + 6.0 * s * s);
+        Sample smp;
+        smp.t = i * dt;
+        smp.position = p_start + poly * (p_goal - p_start);
+        smp.orientation = Eigen::Quaterniond::Identity();
+        clean.push_back(smp);
+    }
+
+    // Same trajectory, but with exact duplicate-timestamp rows spliced in.
+    std::vector<Sample> with_dups;
+    const int inject_after[] = {12, 25, 40, 41, 63};
+    for (int i = 0; i < N; ++i) {
+        with_dups.push_back(clean[i]);
+        for (int idx : inject_after) {
+            if (i == idx) with_dups.push_back(clean[i]);  // dt = 0 vs previous
+        }
+    }
+    ASSERT_EQ(with_dups.size(), clean.size() + 5);
+
+    DMP clean_dmp(25, 1.0, 25.0, 6.25, false);
+    clean_dmp.learnFromDemonstration(clean);
+    EXPECT_EQ(clean_dmp.diagnostics().dropped_non_monotonic_samples, 0);
+
+    DMP dup_dmp(25, 1.0, 25.0, 6.25, false);
+    dup_dmp.learnFromDemonstration(with_dups);
+
+    EXPECT_EQ(dup_dmp.diagnostics().dropped_non_monotonic_samples, 5);
+    EXPECT_NEAR(dup_dmp.tau(), (N - 1) * dt, 1e-9);
+
+    for (int d = 0; d < 3; ++d) {
+        for (int i = 0; i < 25; ++i) {
+            EXPECT_NEAR(dup_dmp.weights()[d](i), clean_dmp.weights()[d](i), 1e-9)
+                << "weight mismatch at dim " << d << " basis " << i;
+        }
+    }
+}
