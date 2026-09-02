@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,18 @@ private:
     rclcpp::Time record_start_time_;
     std::vector<int32_t> prev_buttons_;  ///< Previous button state for rising-edge detection
     bool gripper_trigger_pending_ = false;
+
+    // Quaternion double-cover continuity. The Geomagic Touch driver sometimes
+    // reports a physically identical rotation as -q, a representation sign flip
+    // that becomes a ~pi jump in QuaternionDMP's log-map increments. A negative
+    // dot product between consecutive raw orientations is such a transition:
+    // toggle a running sign and apply it to every later sample so the recorded
+    // track stays continuous. Compared raw-to-raw so the count is the number of
+    // transitions, not the number of negated samples.
+    bool has_last_orientation_ = false;
+    Eigen::Quaterniond last_raw_orientation_ = Eigen::Quaterniond::Identity();
+    bool quat_negate_parity_ = false;
+    std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
 
     // Parameters
     std::string master_pose_topic_;

@@ -113,9 +113,29 @@ void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::S
     core::Sample s;
     s.t = (now - record_start_time_).seconds();
     s.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+
+    // Quaternion double-cover fix. The Geomagic Touch driver occasionally
+    // reports the same physical rotation with the whole quaternion negated
+    // (q vs -q). That is a representation discontinuity, not motion, and it
+    // becomes a ~pi jump in the log-map increments QuaternionDMP accumulates,
+    // producing an absurd forcing term at that point and an unstable replay.
+    // A negative dot product between consecutive raw orientations is such a
+    // transition: toggle a running sign (q and -q are the same rotation, so it
+    // is loss-free) and apply it to this and every later sample.
     Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
                               msg->pose.orientation.y, msg->pose.orientation.z);
-    s.orientation = orient.normalized();
+    orient.normalize();
+    if (has_last_orientation_ && last_raw_orientation_.dot(orient) < 0.0) {
+        quat_negate_parity_ = !quat_negate_parity_;
+        ++quat_sign_flips_corrected_;
+    }
+    last_raw_orientation_ = orient;
+    has_last_orientation_ = true;
+    if (quat_negate_parity_) {
+        orient.coeffs() = -orient.coeffs();
+    }
+    s.orientation = orient;
+
     recorder_.addSample(s);
 }
 
@@ -148,6 +168,9 @@ void HapticDmpWrapperNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPt
 void HapticDmpWrapperNode::startRecording() {
     recorder_.clear();
     recording_ = true;
+    has_last_orientation_ = false;
+    quat_negate_parity_ = false;
+    quat_sign_flips_corrected_ = 0;
     record_start_time_ = this->now();
     RCLCPP_INFO(this->get_logger(), "Recording started.");
 }
@@ -155,6 +178,13 @@ void HapticDmpWrapperNode::startRecording() {
 void HapticDmpWrapperNode::stopRecordingAndLearn() {
     recording_ = false;
     RCLCPP_INFO(this->get_logger(), "Recording stopped. %zu samples collected.", recorder_.size());
+
+    if (quat_sign_flips_corrected_ > 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "%zu quaternion double-cover sign transition(s) (q vs -q) were corrected during "
+                    "recording - a Geomagic Touch driver artifact.",
+                    quat_sign_flips_corrected_);
+    }
 
     if (recorder_.size() < 5) {
         RCLCPP_WARN(this->get_logger(), "Too few samples, discarding this demonstration.");
