@@ -107,16 +107,16 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
         "/gripper_position_cmd", rclcpp::QoS(10));
 
-    // One-shot wall-timer (1.0 s) to publish initial gripper position (0.04 - open)
+    // One-shot wall-timer (1.0 s) to publish initial gripper position (0.06 - open)
     // allowing the ROS2 <-> Ignition bridge time to subscribe before the message.
     gripper_init_timer_ = this->create_wall_timer(
         std::chrono::seconds(1), [this]() {
             gripper_init_timer_->cancel();
             std_msgs::msg::Float64 cmd;
-            cmd.data = 0.04;
+            cmd.data = 0.06;
             gripper_pub_->publish(cmd);
             RCLCPP_INFO(this->get_logger(),
-                        "Initial gripper open command (0.04) published on /gripper_position_cmd");
+                        "Initial gripper open command (0.06) published on /gripper_position_cmd");
         });
 
     // Non-blocking keyboard reading setup via termios

@@ -233,7 +233,8 @@ def prepare_launch_description():
             name='joint_state_publisher',
             parameters=[
                 {'source_list': ['joint_states'],
-                 'rate': 30}],
+                 'rate': 30,
+                 'use_sim_time': True}],
         ),
     ])
 
