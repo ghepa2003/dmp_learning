@@ -121,6 +121,7 @@ public:
         double initial_eta_norm = 0.0;
         double final_eta_norm = 0.0;
         int dropped_non_monotonic_samples = 0;  ///< samples removed for non-increasing timestamp
+        int quat_sign_flips_corrected = 0;      ///< quaternion double-cover sign transitions corrected
     };
     const Diagnostics& diagnostics() const { return diag_; }
 

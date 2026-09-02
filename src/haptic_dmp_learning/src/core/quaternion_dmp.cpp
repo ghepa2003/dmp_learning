@@ -79,14 +79,24 @@ std::vector<Eigen::Vector3d> QuaternionDMP::unwrapRotationVector(const std::vect
 }
 
 void QuaternionDMP::learnFromDemonstration(const std::vector<Sample>& demo_in) {
-    // 0. Defence in depth: drop samples with a non-increasing timestamp before
+    // 0a. Defence in depth: drop samples with a non-increasing timestamp before
     // any finite differencing (see DMP::learnFromDemonstration and
     // filter_utils::dropNonIncreasingTimeSamples). dt=0 rows would otherwise be
     // clamped to 1e-6 s below and blow up the angular velocity estimate.
     int dropped_samples = 0;
-    const std::vector<Sample> demo =
+    std::vector<Sample> demo =
         filter_utils::dropNonIncreasingTimeSamples(demo_in, &dropped_samples);
     diag_.dropped_non_monotonic_samples = dropped_samples;
+
+    // 0b. Defence in depth: undo quaternion double-cover sign flips (q vs -q)
+    // before any log-map differencing. A flip is a ~pi discontinuity in the
+    // local increments accumulated below and injects an absurd forcing term at
+    // that point. q and -q are the same rotation so the correction is loss-free
+    // (see filter_utils::enforceQuaternionContinuity). Protects demos already
+    // saved with the artifact, and any future pose source that reintroduces it.
+    int quat_transitions = 0;
+    demo = filter_utils::enforceQuaternionContinuity(demo, &quat_transitions);
+    diag_.quat_sign_flips_corrected = quat_transitions;
 
     if (demo.size() < 5) {
         throw std::runtime_error("QuaternionDMP::learnFromDemonstration: demonstration too short.");

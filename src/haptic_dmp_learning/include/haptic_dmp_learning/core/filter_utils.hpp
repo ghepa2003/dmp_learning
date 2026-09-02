@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -41,6 +42,48 @@ inline std::vector<Sample> dropNonIncreasingTimeSamples(
     }
     if (dropped != nullptr) {
         *dropped = static_cast<int>(samples.size() - out.size());
+    }
+    return out;
+}
+
+/**
+ * @brief Force sign continuity on a demonstration's quaternion track (double cover).
+ *
+ * @details
+ * A unit quaternion and its negation represent the same rotation (SU(2) double
+ * covers SO(3)), but a sign flip between consecutive samples is a ~pi jump for
+ * the local log-map increments QuaternionDMP accumulates, which injects an
+ * absurd forcing-term spike at that point and destabilises the replay. Such
+ * flips appear when a pose source (e.g. the Geomagic Touch driver) emits the
+ * same physical orientation alternating between q and -q.
+ *
+ * Walks the sequence comparing consecutive *original* orientations: a negative
+ * dot product is a genuine double-cover transition, so it toggles a running
+ * sign and is counted once. Every later sample is emitted with the running sign
+ * applied, yielding a globally continuous track. Positions and timestamps are
+ * untouched.
+ *
+ * @param samples     Input demonstration.
+ * @param transitions If non-null, receives the number of sign transitions found
+ *                    (i.e. flip events, not the count of negated samples).
+ * @return Corrected copy, same size as @p samples.
+ */
+inline std::vector<Sample> enforceQuaternionContinuity(
+    const std::vector<Sample>& samples, int* transitions = nullptr) {
+    std::vector<Sample> out = samples;
+    int n = 0;
+    bool negate = false;
+    for (std::size_t k = 1; k < out.size(); ++k) {
+        if (samples[k - 1].orientation.dot(samples[k].orientation) < 0.0) {
+            negate = !negate;
+            ++n;
+        }
+        if (negate) {
+            out[k].orientation.coeffs() = -out[k].orientation.coeffs();
+        }
+    }
+    if (transitions != nullptr) {
+        *transitions = n;
     }
     return out;
 }

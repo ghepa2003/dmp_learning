@@ -229,6 +229,13 @@ void HapticDmpWrapperNode::stopRecordingAndLearn() {
                         dmp_diag.dropped_non_monotonic_samples);
         }
 
+        if (qdmp_diag.quat_sign_flips_corrected > 0) {
+            RCLCPP_WARN(this->get_logger(),
+                        "%d quaternion double-cover sign transition(s) (q vs -q) were corrected "
+                        "before QuaternionDMP fitting.",
+                        qdmp_diag.quat_sign_flips_corrected);
+        }
+
         // Serialize learned parameters to destination YAML
         core::dmp_io::saveToYaml(dmp_, quat_dmp_, output_yaml_path_);
         RCLCPP_INFO(this->get_logger(), "DMP + Quaternion DMP learned and saved to %s", output_yaml_path_.c_str());
