@@ -1,11 +1,19 @@
 #include "haptic_dmp_learning/ros/haptic_dmp_wrapper_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
+
+namespace {
+// A single demonstration is never this long; a gap this large between a pose
+// stamp and record_start_time_ means the two are on different clocks (typically
+// a wall-clock hardware driver while recording under use_sim_time).
+constexpr double kMaxPlausibleDemoSeconds = 3600.0;
+}  // namespace
 
 HapticDmpWrapperNode::HapticDmpWrapperNode()
     : Node("haptic_dmp_wrapper_node"),
@@ -75,14 +83,31 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
 void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     if (!recording_) return;
 
-    // NOTE: msg->header.stamp is NOT trustworthy for relative timing here - it
-    // may come from a real-hardware driver (e.g. Geomagic Touch) stamped in
-    // wall-clock time, while record_start_time_ (captured via this->now() in
-    // startRecording()) is in sim-time when use_sim_time:=true. Mixing the two
-    // bases produces a nonsensical huge "t" value instead of a small relative
-    // one, corrupting demo CSV output. Always use this->now() for consistency
-    // with record_start_time_'s time base.
-    rclcpp::Time now = this->now();
+    // Sample time base. Prefer msg->header.stamp: it carries the publisher's
+    // full timing resolution and is immune to sim-time /clock quantization,
+    // which - when we fall back to this->now() under a coarse /clock - collapses
+    // consecutive samples onto the same tick, i.e. dt=0 rows that blow up the
+    // learned DMP weights. Use the stamp only while it shares
+    // record_start_time_'s time base: a stamp from a real-hardware driver
+    // (wall-clock) recorded under use_sim_time lands ~1.7e9 s away from the
+    // sim-time start, so guard on a plausible delta and fall back to this->now()
+    // (loudly, once) otherwise. A zero stamp means "unset" -> also fall back.
+    rclcpp::Time now;
+    const rclcpp::Time stamp(msg->header.stamp, record_start_time_.get_clock_type());
+    if (msg->header.stamp.sec != 0 || msg->header.stamp.nanosec != 0) {
+        const double delta_from_start = std::abs((stamp - record_start_time_).seconds());
+        if (delta_from_start < kMaxPlausibleDemoSeconds) {
+            now = stamp;
+        } else {
+            RCLCPP_WARN_ONCE(this->get_logger(),
+                "pose header.stamp is in a different time base than the recording "
+                "clock (delta=%.1f s) - falling back to this->now(); sample timing "
+                "resolution may be reduced.", delta_from_start);
+            now = this->now();
+        }
+    } else {
+        now = this->now();
+    }
 
     // Assemble Sample object and buffer it into recorder
     core::Sample s;
