@@ -89,10 +89,15 @@ void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStam
     // Immediately forward pose onto /target_pose for live visualization in Gazebo
     target_pose_pub_->publish(*msg);
 
-    rclcpp::Time now = msg->header.stamp;
-    if (now.nanoseconds() == 0) {
-        now = this->now();
-    }
+    // NOTE: msg->header.stamp is NOT trustworthy for relative timing here - it
+    // may come from a real-hardware driver (e.g. Geomagic Touch) stamped in
+    // wall-clock time, while record_start_time_ (captured via this->now() in
+    // startRecording()) is in sim-time when use_sim_time:=true. Mixing the two
+    // bases produces a nonsensical huge "t" value instead of a small relative
+    // one, corrupting demo_raw_<run_id>.csv and breaking the gripper-trigger
+    // replay comparison (elapsed_ >= gripper_trigger_t_ never true). Always use
+    // this->now() for consistency with record_start_time_'s time base.
+    rclcpp::Time now = this->now();
 
     // Record sample
     core::Sample s;
