@@ -83,10 +83,13 @@ private:
     void publishSyncedButtons(int b0, int b1);
     void publishGripperTrigger();
     void checkKeyboard();
+    void gripperRampTick();
     pid_t launchChild(const std::vector<std::string>& argv, const std::string& tag);
     void stopChildren();
     std::string weightsPathForRunId() const;
     std::string demoCsvPathForRunId() const;
+    std::string graspMonitorParamsPath() const;
+    std::string hapticDmpParamsPath() const;
 
     // Parameters
     Mode mode_;
@@ -101,6 +104,11 @@ private:
     std::string buttons_synced_topic_;
     bool use_csv_playback_;
     double hard_force_limit_n_;  // forwarded to grasp_state_machine (replay)
+    // Gripper close ramp (see core/gripper_ramp.hpp); defaults reproduce the
+    // previous single-step endpoints (0.06 = open, 0.0 = closed).
+    double gripper_open_position_;
+    double gripper_closed_position_;
+    double gripper_close_ramp_duration_sec_;
 
     // ROS interfaces
     rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr clock_sub_;
@@ -111,12 +119,14 @@ private:
     rclcpp::TimerBase::SharedPtr tick_timer_;
     rclcpp::TimerBase::SharedPtr gripper_init_timer_;
     rclcpp::TimerBase::SharedPtr keyboard_timer_;
+    rclcpp::TimerBase::SharedPtr gripper_ramp_timer_;  // dedicated, self-cancelling
 
     // State
     Phase phase_ = Phase::kCheckClock;
     bool failed_ = false;
     std::chrono::steady_clock::time_point node_start_;
     std::chrono::steady_clock::time_point phase_entered_;
+    std::chrono::steady_clock::time_point gripper_ramp_start_;
 
     bool clock_seen_ = false;
     double last_clock_sec_ = 0.0;

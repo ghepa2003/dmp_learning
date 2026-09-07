@@ -1,6 +1,7 @@
 #include "haptic_dmp_learning/ros/dmp_gazebo_executor_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
+#include "haptic_dmp_learning/core/gripper_ramp.hpp"
 
 #include <cstdlib>
 #include <chrono>
@@ -31,6 +32,13 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
     control_rate_hz_ = this->declare_parameter<double>("control_rate_hz", 200.0);
     startup_delay_sec_ = this->declare_parameter<double>("startup_delay_sec", 1.0);
+
+    // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
+    // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
+    gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
+    gripper_closed_position_ = this->declare_parameter<double>("gripper_closed_position", 0.0);
+    gripper_close_ramp_duration_sec_ =
+        this->declare_parameter<double>("gripper_close_ramp_duration_sec", 2.0);
 
     dt_ = 1.0 / control_rate_hz_;
 
@@ -123,14 +131,41 @@ void DmpGazeboExecutorNode::startTimer() {
 void DmpGazeboExecutorNode::stepCallback() {
     if (finished_) return;
 
-    if (gripper_trigger_t_ >= 0.0 && !gripper_trigger_sent_ && elapsed_ >= gripper_trigger_t_) {
-        std_msgs::msg::Float64 cmd;
-        cmd.data = 0.0;
-        gripper_pub_->publish(cmd);
-        gripper_trigger_sent_ = true;
-        RCLCPP_INFO(this->get_logger(),
-                    "Replay: gripper trigger published at elapsed=%.4f s (target t=%.4f s)",
-                    elapsed_, gripper_trigger_t_);
+    // Gripper close ramp. A single step command slams the fingers shut and
+    // ejects the object; instead walk core::gripper_ramp::interpolateGripperPosition
+    // from open to closed over gripper_close_ramp_duration_sec_. No dedicated
+    // timer: stepCallback already ticks at control_rate_hz_ and elapsed_ is a
+    // monotonic sim-time base. Three states, gated by the same
+    // gripper_trigger_t_ >= 0 && !gripper_trigger_sent_ guard as before.
+    if (gripper_trigger_t_ >= 0.0 && !gripper_trigger_sent_) {
+        if (!gripper_ramp_active_ && elapsed_ >= gripper_trigger_t_) {
+            gripper_ramp_active_ = true;
+            gripper_ramp_start_elapsed_ = elapsed_;
+            RCLCPP_INFO(this->get_logger(),
+                        "Replay: starting %.1f s gripper close ramp at elapsed=%.4f s "
+                        "(target t=%.4f s)",
+                        gripper_close_ramp_duration_sec_, elapsed_, gripper_trigger_t_);
+        }
+        if (gripper_ramp_active_) {
+            const double ramp_elapsed = elapsed_ - gripper_ramp_start_elapsed_;
+            std_msgs::msg::Float64 cmd;
+            if (ramp_elapsed >= gripper_close_ramp_duration_sec_) {
+                // Exact closed value regardless of tick granularity, then stop
+                // ramping (matches the old one-shot guard: block never re-runs).
+                cmd.data = gripper_closed_position_;
+                gripper_pub_->publish(cmd);
+                gripper_ramp_active_ = false;
+                gripper_trigger_sent_ = true;
+                RCLCPP_INFO(this->get_logger(),
+                            "Replay: gripper close ramp complete (%.3f) at elapsed=%.4f s",
+                            gripper_closed_position_, elapsed_);
+            } else {
+                cmd.data = core::gripper_ramp::interpolateGripperPosition(
+                    ramp_elapsed, gripper_close_ramp_duration_sec_,
+                    gripper_open_position_, gripper_closed_position_);
+                gripper_pub_->publish(cmd);
+            }
+        }
     }
 
     geometry_msgs::msg::PoseStamped msg;

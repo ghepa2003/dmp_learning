@@ -48,6 +48,14 @@ private:
     double gripper_trigger_t_ = -1.0;
     bool gripper_trigger_sent_ = false;
 
+    // Gripper close ramp state. Instead of one step command at gripper_trigger_t_,
+    // the position setpoint is walked from open to closed over
+    // gripper_close_ramp_duration_sec_ (see core/gripper_ramp.hpp). elapsed_ is
+    // reused as the monotonic sim-time base - no second clock, no extra timer
+    // (stepCallback already ticks at control_rate_hz_).
+    bool gripper_ramp_active_ = false;
+    double gripper_ramp_start_elapsed_ = -1.0;
+
     // Parameters
     std::string weights_yaml_path_;
     std::string demo_csv_path_;
@@ -55,6 +63,9 @@ private:
     std::string frame_id_;
     double control_rate_hz_;
     double startup_delay_sec_;
+    double gripper_open_position_;
+    double gripper_closed_position_;
+    double gripper_close_ramp_duration_sec_;
 };
 
 }  // namespace ros_wrapper

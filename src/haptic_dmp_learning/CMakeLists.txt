@@ -139,6 +139,7 @@ ament_target_dependencies(demo_replay_sync_orchestrator_node
   sensor_msgs
   nav_msgs
   rosgraph_msgs
+  ament_index_cpp
 )
 
 install(TARGETS
@@ -187,6 +188,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_frame_correction test/test_frame_correction.cpp)
   target_link_libraries(test_frame_correction ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_gripper_ramp test/test_gripper_ramp.cpp)
+  target_link_libraries(test_gripper_ramp ${PROJECT_NAME}_core)
 endif()
 
 ament_package()

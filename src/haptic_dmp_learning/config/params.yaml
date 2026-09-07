@@ -32,3 +32,23 @@ live_demo_recorder_node:
     buttons_topic: "/touch0/buttons"
     output_yaml_path: "/root/thesis_ws/live_demo_dmp_weights.yaml"
     output_demo_csv_path: "/root/thesis_ws/live_demo_raw.csv"
+
+# ROS node name is "demo_replay_sync_orchestrator" (the executable is
+# demo_replay_sync_orchestrator_node); the key below must match the node name.
+demo_replay_sync_orchestrator:
+  ros__parameters:
+    # Gripper position command [m] treated as fully open (ramp start / initial cmd).
+    gripper_open_position: 0.06
+    # Gripper position command [m] treated as fully closed (ramp end).
+    gripper_closed_position: 0.0
+    # Duration [s] of the SPACE-triggered linear close ramp (slow approach, no bounce).
+    gripper_close_ramp_duration_sec: 2.0
+
+dmp_gazebo_executor_node:
+  ros__parameters:
+    # Gripper position command [m] treated as fully open (ramp start).
+    gripper_open_position: 0.06
+    # Gripper position command [m] treated as fully closed (ramp end).
+    gripper_closed_position: 0.0
+    # Duration [s] of the CSV-triggered linear close ramp during autonomous replay.
+    gripper_close_ramp_duration_sec: 2.0

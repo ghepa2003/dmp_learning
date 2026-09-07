@@ -19,9 +19,14 @@ Two conditions, each thresholded by a documented ROS parameter:
      TCP frame), rotated into the world frame by the EE orientation, must point
      towards the target: dot(a_world_hat, (p_target - p_ee)_hat) >= cos(theta),
      with theta = approach_axis_angle_deg (default 30 deg -> cos ~ 0.866).
+     Gated by enable_alignment_check (default False): with a rotationally
+     symmetric target (cylinder) the approach angle is not discriminative, so
+     b) is computed for logging only and does not enter the confirmed signal
+     unless the flag is set.
 
 Output:
-  * <topic> confirmed_topic  (std_msgs/Bool)  -- True IFF both a) and b) hold.
+  * <topic> confirmed_topic  (std_msgs/Bool)  -- True IFF a) holds (and b) too
+                             when enable_alignment_check is True).
                              Published every cycle; False whenever data or the
                              tf lookup is missing (conservative gate).
   * <topic> debug_topic  (std_msgs/Float64MultiArray) -- raw values for manual
@@ -102,6 +107,16 @@ class GeometricGraspMonitor(Node):
         self.tool_approach_axis = list(self.declare_parameter(
             'tool_approach_axis', [0.0, 0.0, -1.0]).value)
 
+        # Whether the approach-axis alignment constraint (b) enters the final
+        # confirmed signal. Disabled by design (default False): the real target
+        # is a cylinder, whose rotational symmetry about its principal axis
+        # makes the approach angle non-discriminative for grasp quality. The
+        # alignment math (align_dot / align_ok) is still computed for
+        # logging/debug; only its use in `confirmed` is gated. Flip to True to
+        # reinstate the constraint for a target of a different shape.
+        self.enable_alignment_check = bool(self.declare_parameter(
+            'enable_alignment_check', False).value)
+
         # Output topics (private by default).
         confirmed_topic = self.declare_parameter(
             'confirmed_topic', '~/geometric_grasp_confirmed').value
@@ -149,6 +164,7 @@ class GeometricGraspMonitor(Node):
             f'  approach_axis_angle_deg   = {self.approach_axis_angle_deg:.1f} '
             f'(cos = {self.cos_threshold:.4f})\n'
             f'  tool_approach_axis (unit) = {self.tool_approach_axis}\n'
+            f'  enable_alignment_check    = {self.enable_alignment_check}\n'
             f'  confirmed_topic           = {self.pub_confirmed.topic_name}\n'
             f'  debug_topic               = {self.pub_debug.topic_name}')
 
@@ -158,12 +174,27 @@ class GeometricGraspMonitor(Node):
 
     def _publish(self, confirmed, dist, align_dot, pos_ok, align_ok, data_ok):
         self.pub_confirmed.publish(Bool(data=bool(confirmed)))
+
+        # Keep the 7-element debug layout stable for existing consumers:
+        # [dist, align_dot, epsilon_pos, cos_threshold, pos_ok, align_ok, data_ok].
+        # When the alignment gate is disabled its three fields (align_dot,
+        # cos_threshold, align_ok) are zeroed rather than filled with the real
+        # values, so an observer sees at a glance they do not feed `confirmed`.
+        if self.enable_alignment_check:
+            align_dot_dbg = float(align_dot)
+            cos_threshold_dbg = float(self.cos_threshold)
+            align_ok_dbg = 1.0 if align_ok else 0.0
+        else:
+            align_dot_dbg = 0.0
+            cos_threshold_dbg = 0.0
+            align_ok_dbg = 0.0
+
         dbg = Float64MultiArray()
         dbg.data = [
-            float(dist), float(align_dot),
-            float(self.epsilon_pos), float(self.cos_threshold),
+            float(dist), align_dot_dbg,
+            float(self.epsilon_pos), cos_threshold_dbg,
             1.0 if pos_ok else 0.0,
-            1.0 if align_ok else 0.0,
+            align_ok_dbg,
             1.0 if data_ok else 0.0,
         ]
         self.pub_debug.publish(dbg)
@@ -172,11 +203,15 @@ class GeometricGraspMonitor(Node):
         if (now - self._last_log_t) >= Duration(seconds=self.debug_log_period_s):
             self._last_log_t = now
             if data_ok:
+                if self.enable_alignment_check:
+                    align_str = (f'align={align_dot:.4f}/{self.cos_threshold:.3f} '
+                                 f'(align_ok={align_ok})')
+                else:
+                    align_str = 'align=disabled'
                 self.get_logger().info(
                     f'dist={dist:.4f}/{self.epsilon_pos:.3f} '
                     f'(pos_ok={pos_ok})  '
-                    f'align={align_dot:.4f}/{self.cos_threshold:.3f} '
-                    f'(align_ok={align_ok})  -> confirmed={confirmed}')
+                    f'{align_str}  -> confirmed={confirmed}')
             else:
                 self.get_logger().warn(
                     'geometric grasp NOT evaluated (missing target odom or tf '
@@ -245,7 +280,13 @@ class GeometricGraspMonitor(Node):
                          + a_world[2] * d_hat[2])
         align_ok = align_dot >= self.cos_threshold
 
-        confirmed = pos_ok and align_ok
+        # Alignment gate is optional (see enable_alignment_check): when off, the
+        # geometric signal is the position condition alone. align_dot/align_ok
+        # stay computed above for the debug topic / log.
+        if self.enable_alignment_check:
+            confirmed = pos_ok and align_ok
+        else:
+            confirmed = pos_ok
         self._publish(confirmed, dist, align_dot, pos_ok, align_ok, data_ok=True)
 
 

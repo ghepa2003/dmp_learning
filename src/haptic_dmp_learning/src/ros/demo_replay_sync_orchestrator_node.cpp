@@ -1,5 +1,8 @@
 #include "haptic_dmp_learning/ros/demo_replay_sync_orchestrator_node.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include "haptic_dmp_learning/core/gripper_ramp.hpp"
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/select.h>
@@ -91,6 +94,12 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     buttons_synced_topic_ = this->declare_parameter<std::string>(
         "buttons_synced_topic", "/touch0/buttons_synced");
     use_csv_playback_ = this->declare_parameter<bool>("use_csv_playback", true);
+    // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
+    // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
+    gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
+    gripper_closed_position_ = this->declare_parameter<double>("gripper_closed_position", 0.0);
+    gripper_close_ramp_duration_sec_ =
+        this->declare_parameter<double>("gripper_close_ramp_duration_sec", 2.0);
     // Forwarded to grasp_state_machine in replay mode; mandatory there (absolute
     // safety limit, no silent default), unused in demo mode.
     hard_force_limit_n_ = this->declare_parameter<double>("hard_force_limit_n", -1.0);
@@ -107,16 +116,18 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
         "/gripper_position_cmd", rclcpp::QoS(10));
 
-    // One-shot wall-timer (1.0 s) to publish initial gripper position (0.06 - open)
-    // allowing the ROS2 <-> Ignition bridge time to subscribe before the message.
+    // One-shot wall-timer (1.0 s) to publish the initial gripper position
+    // (gripper_open_position_), allowing the ROS2 <-> Ignition bridge time to
+    // subscribe before the message.
     gripper_init_timer_ = this->create_wall_timer(
         std::chrono::seconds(1), [this]() {
             gripper_init_timer_->cancel();
             std_msgs::msg::Float64 cmd;
-            cmd.data = 0.06;
+            cmd.data = gripper_open_position_;
             gripper_pub_->publish(cmd);
             RCLCPP_INFO(this->get_logger(),
-                        "Initial gripper open command (0.06) published on /gripper_position_cmd");
+                        "Initial gripper open command (%.3f) published on /gripper_position_cmd",
+                        gripper_open_position_);
         });
 
     // Non-blocking keyboard reading setup via termios
@@ -342,13 +353,16 @@ void DemoReplaySyncOrchestratorNode::tick() {
         case Phase::kLaunchReplay: {  // replay only
             launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
                          "--ros-args",
+                         "--params-file", hapticDmpParamsPath(),
                          "-p", "use_sim_time:=true",
                          "-p", "startup_delay_sec:=0.0",
                          "-p", "weights_yaml_path:=" + weightsPathForRunId(),
                          "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
                         "dmp_executor");
             launchChild({"ros2", "run", "grasp_monitoring", "geometric_grasp_monitor",
-                         "--ros-args", "-p", "use_sim_time:=true"},
+                         "--ros-args",
+                         "--params-file", graspMonitorParamsPath(),
+                         "-p", "use_sim_time:=true"},
                         "geometric_grasp_monitor");
             launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_force_calibration_node",
                          "--ros-args",
@@ -418,6 +432,38 @@ std::string DemoReplaySyncOrchestratorNode::demoCsvPathForRunId() const {
     return ws_root + "/demo_raw_" + run_id_ + ".csv";
 }
 
+std::string DemoReplaySyncOrchestratorNode::graspMonitorParamsPath() const {
+    // grasp_monitoring/config/params.yaml carries geometric_grasp_monitor's
+    // parameters (enable_alignment_check, ...). Passed with --params-file so the
+    // node does not silently run on its hardcoded defaults. Resolve the installed
+    // share copy, falling back to the source tree (same idiom as the feature
+    // flags path in live_demo_recorder_node / haptic_dmp_wrapper_node).
+    try {
+        return ament_index_cpp::get_package_share_directory("grasp_monitoring") +
+               "/config/params.yaml";
+    } catch (const std::exception&) {
+        const char* home = std::getenv("HOME");
+        const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+        return ws_root + "/src/grasp_monitoring/config/params.yaml";
+    }
+}
+
+std::string DemoReplaySyncOrchestratorNode::hapticDmpParamsPath() const {
+    // haptic_dmp_learning/config/params.yaml is a single file with one section
+    // per node name (dmp_gazebo_executor_node, demo_replay_sync_orchestrator,
+    // ...); a node only reads its own section, so the same file is passed to
+    // every haptic_dmp_learning child. Same resolve-share-then-source idiom as
+    // graspMonitorParamsPath().
+    try {
+        return ament_index_cpp::get_package_share_directory("haptic_dmp_learning") +
+               "/config/params.yaml";
+    } catch (const std::exception&) {
+        const char* home = std::getenv("HOME");
+        const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+        return ws_root + "/src/haptic_dmp_learning/config/params.yaml";
+    }
+}
+
 void DemoReplaySyncOrchestratorNode::publishSyncedButtons(int b0, int b1) {
     sensor_msgs::msg::Joy msg;
     msg.header.stamp = this->now();
@@ -444,17 +490,47 @@ void DemoReplaySyncOrchestratorNode::checkKeyboard() {
         char c = 0;
         if (read(STDIN_FILENO, &c, 1) == 1) {
             if (c == ' ' && phase_ == Phase::kRunning && !gripper_trigger_sent_) {
-                std_msgs::msg::Float64 cmd;
-                cmd.data = 0.0;
-                gripper_pub_->publish(cmd);
-
+                // 1. Mark the instant of intent on the synced buttons topic.
                 publishGripperTrigger();
+                // 2. Lock out repeat presses immediately.
                 gripper_trigger_sent_ = true;
+                // 3. Close along a timed ramp instead of one step command (a
+                //    step slams the fingers shut and ejects the object). A
+                //    dedicated 20 ms wall timer (same period as keyboard_timer_)
+                //    walks core::gripper_ramp::interpolateGripperPosition from
+                //    open to closed, then cancels itself.
+                gripper_ramp_start_ = std::chrono::steady_clock::now();
+                gripper_ramp_timer_ = this->create_wall_timer(
+                    std::chrono::milliseconds(20),
+                    std::bind(&DemoReplaySyncOrchestratorNode::gripperRampTick, this));
                 RCLCPP_INFO(this->get_logger(),
-                            "SPACE pressed: sent gripper close cmd (0.0) and trigger Joy [0,0,1] on %s",
-                            buttons_synced_topic_.c_str());
+                            "SPACE pressed: starting %.1fs gripper close ramp and trigger "
+                            "Joy [0,0,1] on %s",
+                            gripper_close_ramp_duration_sec_, buttons_synced_topic_.c_str());
             }
         }
+    }
+}
+
+void DemoReplaySyncOrchestratorNode::gripperRampTick() {
+    const double elapsed = secElapsed(gripper_ramp_start_);
+    const bool done = elapsed >= gripper_close_ramp_duration_sec_;
+
+    std_msgs::msg::Float64 cmd;
+    // interpolateGripperPosition already clamps to the closed value once elapsed
+    // reaches the duration; publish that exact value on the final tick so timer
+    // drift cannot leave the gripper a hair open.
+    cmd.data = done ? gripper_closed_position_
+                    : core::gripper_ramp::interpolateGripperPosition(
+                          elapsed, gripper_close_ramp_duration_sec_,
+                          gripper_open_position_, gripper_closed_position_);
+    gripper_pub_->publish(cmd);
+
+    if (done) {
+        gripper_ramp_timer_->cancel();
+        gripper_ramp_timer_.reset();
+        RCLCPP_INFO(this->get_logger(),
+                    "gripper close ramp complete (%.3f).", gripper_closed_position_);
     }
 }
 

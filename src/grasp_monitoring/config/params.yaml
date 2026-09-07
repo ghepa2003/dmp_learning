@@ -1,0 +1,35 @@
+geometric_grasp_monitor:
+  ros__parameters:
+    # Topic carrying the target object pose (nav_msgs/Odometry, expressed in world_frame).
+    target_odom_topic: "/free_target_object/odometry"
+    # tf reference frame for the comparison; must match the target Odometry header.frame_id.
+    world_frame: "world"
+    # tf end-effector frame, looked up as world_frame -> ee_frame (the TCP).
+    ee_frame: "fer_hand_tcp"
+    # Evaluation rate [Hz]; non-real-time, 10-20 Hz is plenty.
+    check_rate_hz: 15.0
+    # Position gate [m]: confirmed requires || p_ee - p_target || <= this. Retune to the real target size.
+    epsilon_pos: 0.035
+    # Approach-axis alignment half-cone [deg] (only used when enable_alignment_check is true).
+    approach_axis_angle_deg: 30.0
+    # Tool local approach axis in ee_frame (default -Z of the TCP); used for the alignment check.
+    tool_approach_axis: [0.0, 0.0, -1.0]
+    # Output topic (std_msgs/Bool) for the geometric grasp signal; "~/" = node-private.
+    confirmed_topic: "~/geometric_grasp_confirmed"
+    # Output topic (std_msgs/Float64MultiArray) with the 7 raw tuning values; "~/" = node-private.
+    debug_topic: "~/geometric_grasp_debug"
+    # Period [s] of the throttled INFO tuning log.
+    debug_log_period_s: 1.0
+
+    # Approach-axis alignment constraint (b): the 30 deg cone around the
+    # EE->target direction. DISABLED by design.
+    #
+    # The real target is a cylinder. Its rotational symmetry about the
+    # principal axis makes the approach angle non-discriminative for grasp
+    # quality: any azimuth around that axis is an equally valid approach, so
+    # requiring a particular approach direction would only add false negatives.
+    #
+    # The check is kept in the code (align_dot / align_ok are still computed and
+    # logged) and can be reinstated by setting this to true if a target of a
+    # different, non-symmetric shape is used.
+    enable_alignment_check: false
