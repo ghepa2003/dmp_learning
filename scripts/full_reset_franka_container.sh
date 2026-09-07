@@ -9,9 +9,13 @@
 #                                               #   franka_cartesian_control
 #                                               #   franka_gazebo_bringup
 #                                               #   haptic_dmp_learning
+#                                               #   free_target_object
+#                                               #   grasp_monitoring
 #   full_reset_franka_container.sh --no-haptic  # perimetro ridotto: salta
 #                                               #   symlink e build di
-#                                               #   haptic_dmp_learning
+#                                               #   haptic_dmp_learning,
+#                                               #   free_target_object,
+#                                               #   grasp_monitoring
 set -euo pipefail
 
 WITH_HAPTIC=1
@@ -23,8 +27,10 @@ for arg in "$@"; do
         -h|--help)
             echo "Uso: $0 [--no-haptic]"
             echo "  (nessun flag)  Perimetro completo: franka_cartesian_control,"
-            echo "                 franka_gazebo_bringup, haptic_dmp_learning."
-            echo "  --no-haptic    Salta symlink e build di haptic_dmp_learning"
+            echo "                 franka_gazebo_bringup, haptic_dmp_learning,"
+            echo "                 free_target_object, grasp_monitoring."
+            echo "  --no-haptic    Salta symlink e build di haptic_dmp_learning,"
+            echo "                 free_target_object, grasp_monitoring"
             echo "                 (solo franka_cartesian_control + bringup)."
             exit 0
             ;;
@@ -55,8 +61,8 @@ fi
 # Perimetro di build (haptic_dmp_learning solo se non --no-haptic).
 BUILD_PACKAGES=(franka_cartesian_control franka_gazebo_bringup)
 if [ "$WITH_HAPTIC" -eq 1 ]; then
-    BUILD_PACKAGES+=(haptic_dmp_learning)
-    echo "=== Perimetro: completo (franka_cartesian_control + bringup + haptic_dmp_learning) ==="
+    BUILD_PACKAGES+=(haptic_dmp_learning free_target_object grasp_monitoring)
+    echo "=== Perimetro: completo (franka_cartesian_control + bringup + haptic_dmp_learning + free_target_object + grasp_monitoring) ==="
 else
     echo "=== Perimetro: ridotto --no-haptic (franka_cartesian_control + bringup) ==="
 fi
@@ -75,8 +81,12 @@ mkdir -p "$FRANKA_WS/src"
 if [ "$WITH_HAPTIC" -eq 1 ]; then
     [ -L "$FRANKA_WS/src/haptic_dmp_learning" ] || \
         ln -s "$THESIS_WS/src/haptic_dmp_learning" "$FRANKA_WS/src/haptic_dmp_learning"
+    [ -L "$FRANKA_WS/src/free_target_object" ] || \
+        ln -s "$THESIS_WS/src/free_target_object" "$FRANKA_WS/src/free_target_object"
+    [ -L "$FRANKA_WS/src/grasp_monitoring" ] || \
+        ln -s "$THESIS_WS/src/grasp_monitoring" "$FRANKA_WS/src/grasp_monitoring"
 else
-    echo "  (--no-haptic: symlink haptic_dmp_learning saltato)"
+    echo "  (--no-haptic: symlink haptic_dmp_learning, free_target_object, grasp_monitoring saltati)"
 fi
 
 echo "=== [3/6] Verifico che il plugin XML contenga entrambe le classi ==="
@@ -110,6 +120,8 @@ echo "=== [6/6] Verifico che i pacchetti siano risolvibili ==="
 ros2 pkg prefix franka_cartesian_control > /dev/null && echo "  OK: franka_cartesian_control"
 if [ "$WITH_HAPTIC" -eq 1 ]; then
     ros2 pkg prefix haptic_dmp_learning > /dev/null && echo "  OK: haptic_dmp_learning"
+    ros2 pkg prefix free_target_object > /dev/null && echo "  OK: free_target_object"
+    ros2 pkg prefix grasp_monitoring > /dev/null && echo "  OK: grasp_monitoring"
 fi
 
 echo ""
