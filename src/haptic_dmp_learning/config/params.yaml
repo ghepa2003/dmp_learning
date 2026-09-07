@@ -4,6 +4,7 @@ haptic_dmp_wrapper_node:
     alpha_x: 4.6
     alpha_z: 25.0
     beta_z: 6.25
+    master_pose_topic: "/master_pose_raw"
     output_yaml_path: "/root/thesis_ws/dmp_weights.yaml"
     output_demo_csv_path: "/root/thesis_ws/demo_raw.csv"
 
@@ -12,7 +13,11 @@ csv_master_pose_player_node:
     demo_csv_path: "/root/thesis_ws/real_demo/reach_task_baseline.csv"
     master_pose_topic: "/master_pose_raw"
     buttons_topic: "/touch0/buttons"
-    frame_id: "panda_link0"
+    # Raw Geomagic base frame. The player republishes CSV rows verbatim with no
+    # transform, so the data is still in omni_base; the fixed omni_base ->
+    # fer_link0 correction is applied by the consumer nodes (see
+    # core/frame_correction.hpp), not here.
+    frame_id: "omni_base"
     publish_rate_hz: 200.0
     startup_delay_sec: 1.0
 

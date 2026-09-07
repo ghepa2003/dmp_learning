@@ -20,7 +20,8 @@ namespace ros_wrapper {
  *
  * @details
  * Workflow & Operation:
- * 1. Teleoperation Tracking: Subscribes to `/touch0/pose` from the Geomagic Touch haptic stylus driver (SensorData QoS, ~1 kHz).
+ * 1. Teleoperation Tracking: Subscribes to the master pose topic (ROS parameter `master_pose_topic`,
+ *    default `/master_pose_raw`) fed by the Geomagic Touch driver or the CSV stand-in (SensorData QoS, ~1 kHz).
  * 2. State Machine Triggering: Subscribes to `/touch0/buttons` (Joy message) and listens for rising-edge transitions:
  *    - Button 0 (Front Grey Button): Starts recording a demonstration, resetting the sample buffer.
  *    - Button 1 (Rear White Button): Stops recording, saves raw CSV, fits 3D position and SO(3) quaternion DMPs,
@@ -60,13 +61,14 @@ private:
     // track stays continuous. Compared raw-to-raw so the count is the number of
     // transitions, not the number of negated samples.
     bool has_last_orientation_ = false;
-    Eigen::Quaterniond last_raw_orientation_ = Eigen::Quaterniond::Identity();
+    Eigen::Quaterniond last_corrected_orientation_ = Eigen::Quaterniond::Identity();
     bool quat_negate_parity_ = false;
     std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
 
     // ROS Parameters
+    std::string pose_topic_;  ///< master pose input topic (declared, not remap-dependent)
     std::string output_yaml_path_;
-    std::string output_demo_csv_path_; 
+    std::string output_demo_csv_path_;
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
     std::string feature_flags_path_;

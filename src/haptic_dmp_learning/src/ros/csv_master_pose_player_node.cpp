@@ -26,7 +26,11 @@ CsvMasterPosePlayerNode::CsvMasterPosePlayerNode()
     demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "reach_task_baseline.csv");
     master_pose_topic_ = this->declare_parameter<std::string>("master_pose_topic", "/master_pose_raw");
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
-    frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
+    // Raw Geomagic base frame: this node republishes CSV rows verbatim with no
+    // transform, so the data is in omni_base, not panda_link0/fer_link0. The
+    // fixed omni_base -> fer_link0 correction is the consumer nodes'
+    // responsibility (see core/frame_correction.hpp), not the player's.
+    frame_id_ = this->declare_parameter<std::string>("frame_id", "omni_base");
     publish_rate_hz_ = this->declare_parameter<double>("publish_rate_hz", 200.0);
     startup_delay_sec_ = this->declare_parameter<double>("startup_delay_sec", 1.0);
 

@@ -1,6 +1,7 @@
 #include "haptic_dmp_learning/ros/live_demo_recorder_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
+#include "haptic_dmp_learning/core/frame_correction.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
 #include <cstdlib>
@@ -94,8 +95,36 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
 void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     if (!recording_) return;
 
-    // Immediately forward pose onto /target_pose for live visualization in Gazebo
-    target_pose_pub_->publish(*msg);
+    // Fixed Geomagic -> Franka base-frame correction. The master pose arrives
+    // expressed in the Geomagic base frame (omni_base), which is mounted +90
+    // deg about z relative to the Franka base frame (fer_link0). Re-express it
+    // NOW, before anything else looks at it - in particular before the
+    // quaternion sign-continuity fix below, before the sample is buffered for
+    // DMP fitting, and before the pose is mirrored to /target_pose. The single
+    // definition of this rotation (and its hardware-verification status) lives
+    // in core/frame_correction.hpp.
+    const Eigen::Vector3d position = core::frame_correction::rotatePosition(
+        Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z));
+    Eigen::Quaterniond orient = core::frame_correction::rotateOrientation(
+        Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x,
+                           msg->pose.orientation.y, msg->pose.orientation.z));
+    orient.normalize();
+
+    // Mirror the frame-corrected pose (not the raw message) onto /target_pose
+    // for live visualization in Gazebo. The payload is now expressed in the
+    // Franka base frame, so the header frame_id must say so too (same
+    // metadata-vs-content fix as the CSV player's frame_id); "fer_link0" is the
+    // base frame name used across the project (FrameAligner / franka URDF).
+    geometry_msgs::msg::PoseStamped corrected = *msg;
+    corrected.header.frame_id = "fer_link0";
+    corrected.pose.position.x = position.x();
+    corrected.pose.position.y = position.y();
+    corrected.pose.position.z = position.z();
+    corrected.pose.orientation.w = orient.w();
+    corrected.pose.orientation.x = orient.x();
+    corrected.pose.orientation.y = orient.y();
+    corrected.pose.orientation.z = orient.z();
+    target_pose_pub_->publish(corrected);
 
     // Sample time base. Prefer msg->header.stamp: it carries the publisher's
     // full timing resolution and is immune to sim-time /clock quantization,
@@ -126,24 +155,22 @@ void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStam
     // Record sample
     core::Sample s;
     s.t = (now - record_start_time_).seconds();
-    s.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    s.position = position;
 
-    // Quaternion double-cover fix. The Geomagic Touch driver occasionally
+    // Quaternion double-cover fix, now operating on the frame-corrected
+    // orientation computed above. The Geomagic Touch driver occasionally
     // reports the same physical rotation with the whole quaternion negated
     // (q vs -q). That is a representation discontinuity, not motion, and it
     // becomes a ~pi jump in the log-map increments QuaternionDMP accumulates,
     // producing an absurd forcing term at that point and an unstable replay.
-    // A negative dot product between consecutive raw orientations is such a
+    // A negative dot product between consecutive orientations is such a
     // transition: toggle a running sign (q and -q are the same rotation, so it
     // is loss-free) and apply it to this and every later sample.
-    Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
-                              msg->pose.orientation.y, msg->pose.orientation.z);
-    orient.normalize();
-    if (has_last_orientation_ && last_raw_orientation_.dot(orient) < 0.0) {
+    if (has_last_orientation_ && last_corrected_orientation_.dot(orient) < 0.0) {
         quat_negate_parity_ = !quat_negate_parity_;
         ++quat_sign_flips_corrected_;
     }
-    last_raw_orientation_ = orient;
+    last_corrected_orientation_ = orient;
     has_last_orientation_ = true;
     if (quat_negate_parity_) {
         orient.coeffs() = -orient.coeffs();

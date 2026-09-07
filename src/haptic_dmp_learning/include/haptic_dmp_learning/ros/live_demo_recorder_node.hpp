@@ -61,7 +61,7 @@ private:
     // track stays continuous. Compared raw-to-raw so the count is the number of
     // transitions, not the number of negated samples.
     bool has_last_orientation_ = false;
-    Eigen::Quaterniond last_raw_orientation_ = Eigen::Quaterniond::Identity();
+    Eigen::Quaterniond last_corrected_orientation_ = Eigen::Quaterniond::Identity();
     bool quat_negate_parity_ = false;
     std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
 

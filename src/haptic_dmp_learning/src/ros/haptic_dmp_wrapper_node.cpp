@@ -1,5 +1,6 @@
 #include "haptic_dmp_learning/ros/haptic_dmp_wrapper_node.hpp"
 #include "haptic_dmp_learning/core/dmp_io.hpp"
+#include "haptic_dmp_learning/core/frame_correction.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
 #include <cstdlib>
@@ -57,6 +58,13 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
     }
     feature_flags_path_ = this->declare_parameter<std::string>("feature_flags_path", default_features_path);
 
+    // 3b. Master pose input topic. Declared as a ROS parameter (same pattern as
+    // live_demo_recorder_node) instead of a hardcoded "/touch0/pose" that had
+    // to be rewired with an external CLI remap: a forgotten remap made the node
+    // subscribe to a dead topic and fail silently. Default matches the pipeline
+    // convention ("/master_pose_raw").
+    pose_topic_ = this->declare_parameter<std::string>("master_pose_topic", "/master_pose_raw");
+
     // 4. Instantiate core translational and rotational DMP solvers
     dmp_ = core::DMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
     quat_dmp_ = core::QuaternionDMP(n_basis_, alpha_x_, alpha_z_, beta_z_);
@@ -66,7 +74,7 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
 
     // 6. Subscribe to Geomagic Touch pose (~1 kHz, best-effort sensor QoS)
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-        "/touch0/pose", rclcpp::SensorDataQoS(),
+        pose_topic_, rclcpp::SensorDataQoS(),
         std::bind(&HapticDmpWrapperNode::poseCallback, this, std::placeholders::_1));
 
     // 7. Subscribe to stylus physical buttons (joy message)
@@ -75,13 +83,28 @@ HapticDmpWrapperNode::HapticDmpWrapperNode()
         std::bind(&HapticDmpWrapperNode::buttonsCallback, this, std::placeholders::_1));
 
     RCLCPP_INFO(this->get_logger(),
-                "haptic_dmp_wrapper_node ready. Press button 0 to start recording a demo, "
-                "button 1 to stop and learn the DMP. DMP output: %s | Demo CSV: %s",
-                output_yaml_path_.c_str(), output_demo_csv_path_.c_str());
+                "haptic_dmp_wrapper_node ready. Master pose input: %s | Press button 0 to "
+                "start recording a demo, button 1 to stop and learn the DMP. "
+                "DMP output: %s | Demo CSV: %s",
+                pose_topic_.c_str(), output_yaml_path_.c_str(), output_demo_csv_path_.c_str());
 }
 
 void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     if (!recording_) return;
+
+    // Fixed Geomagic -> Franka base-frame correction. The master pose arrives
+    // expressed in the Geomagic base frame (omni_base), which is mounted +90
+    // deg about z relative to the Franka base frame (fer_link0). Re-express it
+    // NOW, before anything else looks at it - in particular before the
+    // quaternion sign-continuity fix below and before the sample is buffered
+    // for DMP fitting. The single definition of this rotation (and its
+    // hardware-verification status) lives in core/frame_correction.hpp.
+    const Eigen::Vector3d position = core::frame_correction::rotatePosition(
+        Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z));
+    Eigen::Quaterniond orient = core::frame_correction::rotateOrientation(
+        Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x,
+                           msg->pose.orientation.y, msg->pose.orientation.z));
+    orient.normalize();
 
     // Sample time base. Prefer msg->header.stamp: it carries the publisher's
     // full timing resolution and is immune to sim-time /clock quantization,
@@ -112,24 +135,22 @@ void HapticDmpWrapperNode::poseCallback(const geometry_msgs::msg::PoseStamped::S
     // Assemble Sample object and buffer it into recorder
     core::Sample s;
     s.t = (now - record_start_time_).seconds();
-    s.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    s.position = position;
 
-    // Quaternion double-cover fix. The Geomagic Touch driver occasionally
+    // Quaternion double-cover fix, now operating on the frame-corrected
+    // orientation computed above. The Geomagic Touch driver occasionally
     // reports the same physical rotation with the whole quaternion negated
     // (q vs -q). That is a representation discontinuity, not motion, and it
     // becomes a ~pi jump in the log-map increments QuaternionDMP accumulates,
     // producing an absurd forcing term at that point and an unstable replay.
-    // A negative dot product between consecutive raw orientations is such a
+    // A negative dot product between consecutive orientations is such a
     // transition: toggle a running sign (q and -q are the same rotation, so it
     // is loss-free) and apply it to this and every later sample.
-    Eigen::Quaterniond orient(msg->pose.orientation.w, msg->pose.orientation.x,
-                              msg->pose.orientation.y, msg->pose.orientation.z);
-    orient.normalize();
-    if (has_last_orientation_ && last_raw_orientation_.dot(orient) < 0.0) {
+    if (has_last_orientation_ && last_corrected_orientation_.dot(orient) < 0.0) {
         quat_negate_parity_ = !quat_negate_parity_;
         ++quat_sign_flips_corrected_;
     }
-    last_raw_orientation_ = orient;
+    last_corrected_orientation_ = orient;
     has_last_orientation_ = true;
     if (quat_negate_parity_) {
         orient.coeffs() = -orient.coeffs();
