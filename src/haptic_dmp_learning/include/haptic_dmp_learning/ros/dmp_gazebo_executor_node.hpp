@@ -4,6 +4,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
@@ -34,6 +35,9 @@ private:
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
+    // One-shot event: the replay gripper close ramp has finished (fingers at
+    // gripper_closed_position_). grasp_force_calibration_node captures force on this.
+    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
     rclcpp::TimerBase::SharedPtr startup_timer_;
     rclcpp::TimerBase::SharedPtr step_timer_;
 

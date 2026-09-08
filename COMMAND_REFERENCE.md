@@ -230,7 +230,9 @@ ros2 topic info /clock --verbose      # Publisher count deve essere > 0
 ### 3.2 Demo orchestrata (stand-in CSV del Geomagic)
 
 ```bash
-ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args -p mode:=demo
+ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
+  -p mode:=demo
 ```
 
 - `run_id` viene **generato** (formato `%Y%m%dT%H%M%S`) e stampato all'avvio;
@@ -265,6 +267,7 @@ use_csv_playback (true)
 
 ```bash
 ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
   -p mode:=replay \
   -p run_id:=<run_id> \
   -p hard_force_limit_n:=<N>
@@ -278,10 +281,13 @@ ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args \
 
 ```
 ros2 run haptic_dmp_learning dmp_gazebo_executor_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
   -p use_sim_time:=true -p startup_delay_sec:=0.0 \
   -p weights_yaml_path:=/root/thesis_ws/dmp_weights_<run_id>.yaml \
   -p demo_csv_path:=/root/thesis_ws/demo_raw_<run_id>.csv
-ros2 run grasp_monitoring geometric_grasp_monitor --ros-args -p use_sim_time:=true
+ros2 run grasp_monitoring geometric_grasp_monitor --ros-args \
+  --params-file /root/thesis_ws/src/grasp_monitoring/config/params.yaml \
+  -p use_sim_time:=true
 ros2 run haptic_dmp_learning grasp_force_calibration_node --ros-args \
   -p use_sim_time:=true -p mode:=verify -p run_id:=<run_id>
 ros2 run haptic_dmp_learning grasp_state_machine_node --ros-args \
@@ -300,6 +306,7 @@ ros2 topic pub --once /grasp_state_machine/reset_limit_action std_msgs/msg/Bool 
 
 ```bash
 ros2 run haptic_dmp_learning dmp_gazebo_executor_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
   -p weights_yaml_path:=<path_yaml> \
   -p demo_csv_path:=<path_csv> \
   -p use_sim_time:=true
@@ -319,13 +326,16 @@ mano durante un run in cui avviene un contatto reale.
 
 ```bash
 ros2 run haptic_dmp_learning grasp_force_calibration_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
   -p use_sim_time:=true -p mode:=calibrate -p run_id:=<run_id>
 ```
 
 Parametri (default): `capture_window_sec` (`0.25`), `calibration_dir`
 (`$HOME/thesis_ws/calibrations`), `tolerance_ratio` (`0.3`), `tolerance_floor_n`
 (`3.0`), `min_valid_force_n` (`3.0`), `geometric_confirmed_topic`
-(`/geometric_grasp_monitor/geometric_grasp_confirmed`), `force_estimate_topic`
+(`/geometric_grasp_monitor/geometric_grasp_confirmed`),
+`gripper_close_complete_topic` (`/gripper_close_complete`, evento one-shot su cui
+scatta la cattura forza, gated dal segnale geometrico), `force_estimate_topic`
 (`/cartesian_impedance_controller/contact_wrench_estimate`). Scrive
 `calibrations/force_calibration_<run_id>.yaml`, che `mode:=verify` poi ricarica.
 

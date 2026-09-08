@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 #include <cerrno>
 #include <cstdlib>
@@ -115,6 +116,10 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
 
     gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
         "/gripper_position_cmd", rclcpp::QoS(10));
+
+    // One-shot announce that the gripper close ramp has finished (see header).
+    gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
+        "/gripper_close_complete", rclcpp::QoS(10));
 
     // One-shot wall-timer (1.0 s) to publish the initial gripper position
     // (gripper_open_position_), allowing the ROS2 <-> Ignition bridge time to
@@ -366,6 +371,7 @@ void DemoReplaySyncOrchestratorNode::tick() {
                         "geometric_grasp_monitor");
             launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_force_calibration_node",
                          "--ros-args",
+                         "--params-file", hapticDmpParamsPath(),
                          "-p", "use_sim_time:=true",
                          "-p", "mode:=verify",
                          "-p", "run_id:=" + run_id_},
@@ -529,6 +535,9 @@ void DemoReplaySyncOrchestratorNode::gripperRampTick() {
     if (done) {
         gripper_ramp_timer_->cancel();
         gripper_ramp_timer_.reset();
+        // Physical command first (above), then announce the ramp is complete so
+        // grasp_force_calibration_node can start its force capture on real contact.
+        gripper_close_complete_pub_->publish(std_msgs::msg::Empty());
         RCLCPP_INFO(this->get_logger(),
                     "gripper close ramp complete (%.3f).", gripper_closed_position_);
     }

@@ -5,6 +5,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 
 namespace haptic_dmp_learning {
@@ -16,18 +17,26 @@ namespace ros_wrapper {
  * @details
  * Two modes selected by the mandatory `mode` parameter:
  *
- * - `calibrate`: on the first rising edge of the geometric-grasp signal, collect
- *   every contact-wrench force-norm sample that arrives within a
- *   `capture_window_sec` time window (node clock; sim time under
- *   use_sim_time:=true), take their MEDIAN, and write it to a companion YAML
- *   `<calibration_dir>/force_calibration_<run_id>.yaml`. Zero messages in the
- *   window is an explicit error, never a median over an empty buffer.
- * - `verify`: load that companion file for the same `run_id`; on each rising edge
+ * The force capture is triggered by the one-shot `/gripper_close_complete` event
+ * (published by the node that runs the gripper close ramp, once the fingers have
+ * reached the closed position and real grasp contact exists), gated by the
+ * geometric-grasp signal being simultaneously true (double confirmation: EE in
+ * position AND close ramp finished). The geometric signal alone no longer arms
+ * anything.
+ *
+ * - `calibrate`: on that gated event, collect every contact-wrench force-norm
+ *   sample that arrives within a `capture_window_sec` time window (node clock;
+ *   sim time under use_sim_time:=true), take their MEDIAN, and write it to a
+ *   companion YAML `<calibration_dir>/force_calibration_<run_id>.yaml`. Zero
+ *   messages in the window is an explicit error, never a median over an empty
+ *   buffer.
+ * - `verify`: load that companion file for the same `run_id`; on that gated event
  *   recompute the median force norm over the capture window and publish
  *   `std_msgs/Bool` on `~/grasp_force_verified` — True iff
  *   |median - f_calib| <= max(tolerance_ratio * f_calib, tolerance_floor_n).
  *   If the companion file is missing the node stays up, warns, and publishes
- *   False (it never blocks).
+ *   False (it never blocks). A steady heartbeat of the last verified value is
+ *   published on every geometric-grasp message.
  *
  * Fail-loud (project convention, see haptic_dmp_learning/DESIGN_NOTES.md):
  * `mode` and `run_id` are mandatory; a missing/invalid value throws out of the
@@ -45,6 +54,7 @@ private:
     enum class Mode { kCalibrate, kVerify };
 
     void geometricCallback(const std_msgs::msg::Bool::SharedPtr msg);
+    void gripperCloseCompleteCallback(const std_msgs::msg::Empty::SharedPtr msg);
     void forceCallback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
     void finishCaptureWindow();  ///< closes the time window, fired by capture_timer_
     void onWindowComplete(double median_force_norm);
@@ -55,6 +65,7 @@ private:
 
     // ROS interfaces
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr geom_sub_;
+    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_sub_;
     rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr verified_pub_;  ///< verify mode only
     rclcpp::TimerBase::SharedPtr capture_timer_;  ///< one-shot, closes the capture window
@@ -63,6 +74,7 @@ private:
     Mode mode_;
     std::string run_id_;
     std::string geometric_confirmed_topic_;
+    std::string gripper_close_complete_topic_;
     std::string force_estimate_topic_;
     double capture_window_sec_;
     std::string calibration_dir_;
@@ -71,10 +83,11 @@ private:
     double min_valid_force_n_;  ///< reject a capture whose median is below this
     std::string calibration_file_path_;
 
-    // Rising-edge detection + one-shot-per-edge debounce
-    bool have_prev_geom_ = false;
-    bool prev_geom_ = false;
-    bool armed_ = true;  ///< false after a trigger, re-armed when the signal drops
+    // Gate for the force capture: last value seen on the geometric-grasp signal.
+    // The capture is triggered by the /gripper_close_complete event, and only
+    // runs while this is true (double confirmation: EE in position AND close
+    // ramp finished).
+    bool geometric_confirmed_ = false;
 
     // Capture window
     bool capturing_ = false;

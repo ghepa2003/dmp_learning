@@ -14,6 +14,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -116,6 +117,10 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr buttons_synced_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
+    // One-shot event: the SPACE-triggered gripper close ramp has finished, i.e.
+    // the fingers have reached gripper_closed_position_ and real grasp contact
+    // (if any) now exists. grasp_force_calibration_node captures force on this.
+    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
     rclcpp::TimerBase::SharedPtr tick_timer_;
     rclcpp::TimerBase::SharedPtr gripper_init_timer_;
     rclcpp::TimerBase::SharedPtr keyboard_timer_;

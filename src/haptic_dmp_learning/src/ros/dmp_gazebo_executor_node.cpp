@@ -92,6 +92,9 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
         target_pose_topic_, rclcpp::QoS(10));
     gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
         "/gripper_position_cmd", rclcpp::QoS(10));
+    // One-shot announce that the gripper close ramp has finished (see header).
+    gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
+        "/gripper_close_complete", rclcpp::QoS(10));
 
     RCLCPP_INFO(this->get_logger(),
                 "dmp_gazebo_executor_node ready. Weights: %s | tau: %.3f s | rate: %.1f Hz | "
@@ -156,6 +159,10 @@ void DmpGazeboExecutorNode::stepCallback() {
                 gripper_pub_->publish(cmd);
                 gripper_ramp_active_ = false;
                 gripper_trigger_sent_ = true;
+                // Physical command first (above), then announce the ramp is
+                // complete so grasp_force_calibration_node captures force on
+                // real contact.
+                gripper_close_complete_pub_->publish(std_msgs::msg::Empty());
                 RCLCPP_INFO(this->get_logger(),
                             "Replay: gripper close ramp complete (%.3f) at elapsed=%.4f s",
                             gripper_closed_position_, elapsed_);

@@ -29,19 +29,9 @@ namespace frame_correction {
 // the consumer nodes do) is equivalent to rotating the delta. FrameAligner
 // itself needs no change.
 //
-// HARDWARE VERIFICATION STATUS - read before touching the angle/axis below:
-//   * x axis: VERIFIED experimentally. Moving the Geomagic along its own x
-//     (lateral) axis moves the robot along its own x (frontal) axis, i.e. the
-//     Geomagic x axis must map onto the Franka y axis. R_z(+90 deg) does
-//     exactly this: [1,0,0] -> [0,1,0].
-//   * y and z axes: ASSUMED, NOT yet verified on hardware. They follow only
-//     from the assumption that the mounting offset is a *pure* +90 deg
-//     rotation about z:
-//         Geomagic y -> Franka -x   ([0,1,0] -> [-1,0,0])
-//         Geomagic z -> Franka  z   ([0,0,1] -> [0,0,1], unchanged)
-//     If a hardware check on y/z contradicts this, THIS FILE is the single
-//     place to fix it: adjust kFrameOffsetAngleRad and/or kFrameOffsetAxis
-//     below and nothing else in the pipeline changes.
+//     Geomagic x -> Franka  y   ([1,0,0] -> [0,1,0])
+//     Geomagic y -> Franka -x   ([0,1,0] -> [-1,0,0])
+//     Geomagic z -> Franka  z   ([0,0,1] -> [0,0,1], unchanged)
 // ---------------------------------------------------------------------------
 
 /// Mounting offset: +90 degrees about the Geomagic base z axis. Single source

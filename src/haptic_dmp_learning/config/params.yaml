@@ -52,3 +52,10 @@ dmp_gazebo_executor_node:
     gripper_closed_position: 0.0
     # Duration [s] of the CSV-triggered linear close ramp during autonomous replay.
     gripper_close_ramp_duration_sec: 2.0
+
+grasp_force_calibration_node:
+  ros__parameters:
+    # One-shot event announcing the gripper close ramp has finished; force capture
+    # triggers on this (gated by the geometric-grasp signal). Identical to the
+    # node's hardcoded default - kept here so it can be retargeted without a rebuild.
+    gripper_close_complete_topic: "/gripper_close_complete"

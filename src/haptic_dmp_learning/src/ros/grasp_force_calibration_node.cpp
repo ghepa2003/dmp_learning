@@ -71,6 +71,12 @@ GraspForceCalibrationNode::GraspForceCalibrationNode()
     // 3. Remaining parameters (documented defaults) ---------------------------
     geometric_confirmed_topic_ = this->declare_parameter<std::string>(
         "geometric_confirmed_topic", "/geometric_grasp_monitor/geometric_grasp_confirmed");
+    // One-shot event published by whichever node ran the gripper close ramp
+    // (demo_replay_sync_orchestrator in demo, dmp_gazebo_executor_node in replay)
+    // once the fingers reached the closed position. This is the capture trigger;
+    // geometric_confirmed_topic_ above is only the gate.
+    gripper_close_complete_topic_ = this->declare_parameter<std::string>(
+        "gripper_close_complete_topic", "/gripper_close_complete");
     // NOTE: the sensorless wrench estimate is published by the *impedance*
     // controller node as "~/contact_wrench_estimate", i.e. the fully-qualified
     // name below (the controller_manager is not namespaced in the Franka Gazebo
@@ -130,15 +136,21 @@ GraspForceCalibrationNode::GraspForceCalibrationNode()
     geom_sub_ = this->create_subscription<std_msgs::msg::Bool>(
         geometric_confirmed_topic_, rclcpp::QoS(10),
         std::bind(&GraspForceCalibrationNode::geometricCallback, this, std::placeholders::_1));
+    gripper_close_complete_sub_ = this->create_subscription<std_msgs::msg::Empty>(
+        gripper_close_complete_topic_, rclcpp::QoS(10),
+        std::bind(&GraspForceCalibrationNode::gripperCloseCompleteCallback, this,
+                  std::placeholders::_1));
     force_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
         force_estimate_topic_, rclcpp::SensorDataQoS(),
         std::bind(&GraspForceCalibrationNode::forceCallback, this, std::placeholders::_1));
 
     RCLCPP_INFO(this->get_logger(),
                 "grasp_force_calibration_node ready | mode=%s | run_id=%s | "
-                "geometric=%s | force=%s | window=%.3f s | file=%s",
+                "geometric=%s | gripper_close_complete=%s | force=%s | window=%.3f s | "
+                "file=%s",
                 (mode_ == Mode::kCalibrate ? "calibrate" : "verify"),
                 run_id_.c_str(), geometric_confirmed_topic_.c_str(),
+                gripper_close_complete_topic_.c_str(),
                 force_estimate_topic_.c_str(), capture_window_sec_,
                 calibration_file_path_.c_str());
 }
@@ -146,33 +158,14 @@ GraspForceCalibrationNode::GraspForceCalibrationNode()
 void GraspForceCalibrationNode::geometricCallback(const std_msgs::msg::Bool::SharedPtr msg) {
     const bool geom = msg->data;
 
-    // Rising edge = current true and (no prior sample OR prior sample false).
-    const bool rising = geom && (!have_prev_geom_ || !prev_geom_);
-    have_prev_geom_ = true;
-    prev_geom_ = geom;
+    // Gate only: remember the latest value. The force capture is triggered by
+    // gripperCloseCompleteCallback, not here.
+    geometric_confirmed_ = geom;
 
     if (!geom) {
-        // Signal dropped: re-arm the one-shot trigger and clear the verify latch.
-        armed_ = true;
+        // Signal dropped: clear the verify latch (verify-latch logic, unrelated
+        // to the capture trigger).
         if (mode_ == Mode::kVerify) last_verified_ = false;
-    }
-
-    if (rising && armed_ && !capturing_) {
-        armed_ = false;
-        capturing_ = true;
-        buffer_.clear();
-        capture_start_time_ = this->now();
-        // One-shot window timer on the node clock (sim time under
-        // use_sim_time:=true). It also guarantees the window closes when the
-        // force topic goes completely silent - forceCallback would otherwise
-        // never fire to end it.
-        capture_timer_ = rclcpp::create_timer(
-            this, this->get_clock(),
-            rclcpp::Duration::from_seconds(capture_window_sec_),
-            std::bind(&GraspForceCalibrationNode::finishCaptureWindow, this));
-        RCLCPP_INFO(this->get_logger(),
-                    "geometric grasp rising edge -> capturing force for %.3f s",
-                    capture_window_sec_);
     }
 
     // verify mode: steady heartbeat so downstream (grasp_state_machine) always has
@@ -182,6 +175,34 @@ void GraspForceCalibrationNode::geometricCallback(const std_msgs::msg::Bool::Sha
         out.data = last_verified_;
         verified_pub_->publish(out);
     }
+}
+
+void GraspForceCalibrationNode::gripperCloseCompleteCallback(
+    const std_msgs::msg::Empty::SharedPtr /*msg*/) {
+    if (capturing_) return;  // already in progress, ignore closely-spaced events
+
+    if (!geometric_confirmed_) {
+        RCLCPP_WARN(this->get_logger(),
+                    "gripper close complete event received but geometric grasp is "
+                    "NOT confirmed (EE not in position) - skipping force capture. "
+                    "No calibration/verification will run for this event.");
+        return;
+    }
+
+    capturing_ = true;
+    buffer_.clear();
+    capture_start_time_ = this->now();
+    // One-shot window timer on the node clock (sim time under
+    // use_sim_time:=true). It also guarantees the window closes when the
+    // force topic goes completely silent - forceCallback would otherwise
+    // never fire to end it.
+    capture_timer_ = rclcpp::create_timer(
+        this, this->get_clock(),
+        rclcpp::Duration::from_seconds(capture_window_sec_),
+        std::bind(&GraspForceCalibrationNode::finishCaptureWindow, this));
+    RCLCPP_INFO(this->get_logger(),
+                "gripper close complete (geometric confirmed) -> capturing "
+                "force for %.3f s", capture_window_sec_);
 }
 
 void GraspForceCalibrationNode::forceCallback(
