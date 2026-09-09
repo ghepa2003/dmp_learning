@@ -110,6 +110,11 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
             "is mandatory - it is forwarded to grasp_state_machine as the absolute "
             "|F| safety limit and must be set explicitly.");
     }
+    // Forwarded to dmp_gazebo_executor_node in replay mode (see kLaunchReplay).
+    target_odom_required_ = this->declare_pamemory_user_editsrameter<bool>("target_odom_required", false);
+    target_odom_topic_ = this->declare_parameter<std::string>(
+        "target_odom_topic", "/free_target_object/odometry");
+    target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
 
     buttons_synced_pub_ = this->create_publisher<sensor_msgs::msg::Joy>(
         buttons_synced_topic_, rclcpp::QoS(10));
@@ -359,6 +364,11 @@ void DemoReplaySyncOrchestratorNode::tick() {
             launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
                          "--ros-args",
                          "--params-file", hapticDmpParamsPath(),
+                         "-p", std::string("target_odom_required:=") +
+                                   (target_odom_required_ ? "true" : "false"),
+                         "-p", "target_odom_topic:=" + target_odom_topic_,
+                         "-p", "target_odom_timeout_sec:=" +
+                                   std::to_string(target_odom_timeout_sec_),
                          "-p", "use_sim_time:=true",
                          "-p", "startup_delay_sec:=0.0",
                          "-p", "weights_yaml_path:=" + weightsPathForRunId(),

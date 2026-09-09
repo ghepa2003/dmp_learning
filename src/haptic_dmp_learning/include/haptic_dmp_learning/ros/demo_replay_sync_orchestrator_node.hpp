@@ -105,6 +105,11 @@ private:
     std::string buttons_synced_topic_;
     bool use_csv_playback_;
     double hard_force_limit_n_;  // forwarded to grasp_state_machine (replay)
+    // Forwarded to dmp_gazebo_executor_node (replay): whether it waits for /
+    // retargets to the live target odometry, and the topic + timeout it uses.
+    bool target_odom_required_;
+    std::string target_odom_topic_;
+    double target_odom_timeout_sec_;
     // Gripper close ramp (see core/gripper_ramp.hpp); defaults reproduce the
     // previous single-step endpoints (0.06 = open, 0.0 = closed).
     double gripper_open_position_;

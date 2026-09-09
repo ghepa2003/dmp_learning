@@ -7,8 +7,13 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <memory>
+#include <stdexcept>
 
 #include <rclcpp/create_timer.hpp>
+#include <tf2/exceptions.h>
+#include <tf2/time.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 using namespace std::chrono_literals;
 
@@ -32,6 +37,29 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
     control_rate_hz_ = this->declare_parameter<double>("control_rate_hz", 200.0);
     startup_delay_sec_ = this->declare_parameter<double>("startup_delay_sec", 1.0);
+
+    // One-shot target retarget (translation only). Same odometry topic the
+    // orchestrator waits on for its sim-time anchor; default matches the
+    // free_target_object launch bridge (/model/<name>/odometry -> /<name>/odometry).
+    target_odom_topic_ = this->declare_parameter<std::string>(
+        "target_odom_topic", "/free_target_object/odometry");
+    // Fail-loud: refuse to replay toward the demo's frozen goal if the live
+    // target position never arrives.
+    target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
+    // When false, skip the target-odometry subscription, wait and retarget
+    // entirely: replay the demonstration's ORIGINAL goal (frozen in the loaded
+    // weights) exactly as-is. Default true preserves the existing behaviour for
+    // every current pipeline use; set false only for a run with no target at all
+    // (e.g. a real-hardware open-loop replay), where there is deliberately
+    // nothing to retarget toward.
+    target_odom_required_ = this->declare_parameter<bool>("target_odom_required", true);
+    // TF frames for the goal-frame correction applied before dmp_.setGoal():
+    // target_position_ arrives in world_frame_, but dmp_.setGoal() expects a goal
+    // in the demo-local frame of dmp_.y0(); the live EE pose (world_frame_ ->
+    // ee_frame_) bridges the two. Same naming/defaults as
+    // grasp_monitoring/geometric_grasp_monitor.
+    world_frame_ = this->declare_parameter<std::string>("world_frame", "world");
+    ee_frame_ = this->declare_parameter<std::string>("ee_frame", "fer_hand_tcp");
 
     // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
     // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
@@ -96,25 +124,198 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
         "/gripper_close_complete", rclcpp::QoS(10));
 
+    // 4b. One-shot target retarget: when required, subscribe to free_target_object
+    // odometry. The first message gives the CURRENT target position; odomCallback
+    // stores it, unsubscribes, and startTimer() applies it via dmp_.setGoal()
+    // before the rollout starts. The odometry pose is in world_frame_, while
+    // dmp_.setGoal() expects the demo-local frame of dmp_.y0(); startTimer()
+    // bridges the two with a world_frame_ -> ee_frame_ TF lookup (tf_buffer_).
+    // Orientation (qdmp_) is left at the demo goal. When target_odom_required_ is
+    // false the subscription and the TF buffer/listener are never created and
+    // startTimer() replays the demo's original goal as-is (no wait, no setGoal(),
+    // no timeout).
+    if (target_odom_required_) {
+        target_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            target_odom_topic_, rclcpp::QoS(10),
+            std::bind(&DmpGazeboExecutorNode::odomCallback, this, std::placeholders::_1));
+        // Needed only for the world -> demo-local goal-frame correction in
+        // startTimer(); pointless when there is no retarget.
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+    }
+
     RCLCPP_INFO(this->get_logger(),
                 "dmp_gazebo_executor_node ready. Weights: %s | tau: %.3f s | rate: %.1f Hz | "
-                "publishing on %s in %.1f s",
+                "publishing on %s in %.1f s | target_odom_required=%s (topic %s, timeout %.1f s)",
                 weights_yaml_path_.c_str(), dmp_.tau(), control_rate_hz_,
-                target_pose_topic_.c_str(), startup_delay_sec_);
+                target_pose_topic_.c_str(), startup_delay_sec_,
+                target_odom_required_ ? "true" : "false",
+                target_odom_topic_.c_str(), target_odom_timeout_sec_);
+
+    // Preventive warning for a common misconfiguration: use_sim_time:=true with
+    // no /clock publisher (e.g. a real-hardware run with no Gazebo) leaves every
+    // timer of this node stalled forever with no error. use_sim_time is the
+    // standard parameter rclcpp auto-declares for every node.
+    if (this->get_parameter("use_sim_time").as_bool()) {
+        RCLCPP_WARN(this->get_logger(),
+                    "use_sim_time=true: this node requires /clock to be actively "
+                    "publishing (typically from Gazebo). If this is a REAL HARDWARE "
+                    "run, launch with use_sim_time:=false or the node will hang "
+                    "waiting for a clock that never arrives.");
+    }
 
     // 5. One-shot startup delay timer to give Gazebo and controller time to stabilize.
     //    Sim-time timer: rclcpp::create_timer bound to the node clock (get_clock())
     //    honours use_sim_time, whereas create_wall_timer is contractually a
     //    steady_clock timer regardless of use_sim_time. Launch this node with
     //    use_sim_time:=true so the startup delay counts sim seconds off /clock.
+    //    When it fires, startTimer() then waits for the one-shot target retarget
+    //    (re-arming this handle as a short poll timer) before starting the rollout.
     startup_timer_ = rclcpp::create_timer(
         this, this->get_clock(),
         rclcpp::Duration::from_seconds(startup_delay_sec_),
         std::bind(&DmpGazeboExecutorNode::startTimer, this));
 }
 
+void DmpGazeboExecutorNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    if (target_odom_received_) return;  // one-shot: ignore every message after the first
+
+    target_position_ = Eigen::Vector3d(msg->pose.pose.position.x,
+                                       msg->pose.pose.position.y,
+                                       msg->pose.pose.position.z);
+    target_odom_received_ = true;
+    // One-shot retarget: no continuous tracking. Drop the subscription so no
+    // further odometry is processed for the rest of the rollout.
+    target_odom_sub_.reset();
+
+    RCLCPP_INFO(this->get_logger(),
+                "Target odometry received (frame '%s'): position [%.4f, %.4f, %.4f]; "
+                "unsubscribed (one-shot retarget).",
+                msg->header.frame_id.c_str(),
+                target_position_.x(), target_position_.y(), target_position_.z());
+}
+
 void DmpGazeboExecutorNode::startTimer() {
-    startup_timer_->cancel();
+    if (startup_timer_) startup_timer_->cancel();
+
+    if (!target_odom_required_) {
+        // No target to retarget toward: replay the demonstration's ORIGINAL goal
+        // (already present in the weights loaded from YAML - dmp_.goal() is left
+        // untouched, setGoal() is never called). No odometry subscription, no
+        // wait/poll, and the fail-loud timeout does not apply - there is nothing
+        // to wait for.
+        RCLCPP_INFO(this->get_logger(),
+                    "target_odom_required=false: replaying with the DEMO'S ORIGINAL "
+                    "GOAL, no retarget applied.");
+        RCLCPP_INFO(this->get_logger(), "Starting DMP rollout.");
+        // Same sim-time step timer as the retarget path below (see note there).
+        step_timer_ = rclcpp::create_timer(
+            this, this->get_clock(),
+            rclcpp::Duration::from_seconds(dt_),
+            std::bind(&DmpGazeboExecutorNode::stepCallback, this));
+        return;
+    }
+
+    // startup_delay_sec_ has elapsed. Do NOT start stepping until the one-shot
+    // target retarget has happened: wait for the first free_target_object
+    // odometry, re-polling on the node clock, subject to a fail-loud timeout.
+    if (!odom_wait_started_) {
+        odom_wait_start_ = this->now();
+        odom_wait_started_ = true;
+    }
+
+    if (!target_odom_received_) {
+        const double waited = (this->now() - odom_wait_start_).seconds();
+        if (waited >= target_odom_timeout_sec_) {
+            RCLCPP_FATAL(this->get_logger(),
+                         "No message on target odometry topic '%s' within %.2f s. "
+                         "Refusing to replay toward the demonstration's frozen goal - "
+                         "the one-shot target retarget is mandatory. Is "
+                         "free_target_object running and bridged?",
+                         target_odom_topic_.c_str(), target_odom_timeout_sec_);
+            throw std::runtime_error(
+                "dmp_gazebo_executor_node: target odometry retarget timed out on '" +
+                target_odom_topic_ + "'");
+        }
+        // Re-poll shortly (node clock, honours use_sim_time like startup_timer_).
+        startup_timer_ = rclcpp::create_timer(
+            this, this->get_clock(),
+            rclcpp::Duration::from_seconds(0.1),
+            std::bind(&DmpGazeboExecutorNode::startTimer, this));
+        return;
+    }
+
+    // Goal-frame correction. target_position_ is in world_frame_, but
+    // dmp_.setGoal() expects a goal in the demo-local frame of dmp_.y0(). Bridge
+    // the two with the live EE pose (world_frame_ -> ee_frame_): the retarget
+    // displacement measured in world is re-applied from y0_ in the demo-local
+    // frame. If the TF is not available yet, re-poll on the SAME overall
+    // odometry timeout (odom_wait_start_ / target_odom_timeout_sec_), exactly
+    // like the "odometry not received" branch above - no separate TF timeout.
+    geometry_msgs::msg::TransformStamped ee_tf;
+    try {
+        ee_tf = tf_buffer_->lookupTransform(world_frame_, ee_frame_, tf2::TimePointZero);
+    } catch (const tf2::TransformException& ex) {
+        const double waited = (this->now() - odom_wait_start_).seconds();
+        if (waited >= target_odom_timeout_sec_) {
+            RCLCPP_FATAL(this->get_logger(),
+                         "TF lookup '%s' -> '%s' still unavailable %.2f s after startup "
+                         "(%s). Cannot compute the goal-frame correction - refusing to "
+                         "replay the retarget. Is the robot state / TF tree being published?",
+                         world_frame_.c_str(), ee_frame_.c_str(),
+                         target_odom_timeout_sec_, ex.what());
+            throw std::runtime_error(
+                "dmp_gazebo_executor_node: TF lookup '" + world_frame_ + "' -> '" +
+                ee_frame_ + "' timed out for the goal-frame correction");
+        }
+        // Re-poll shortly (node clock, honours use_sim_time like startup_timer_).
+        startup_timer_ = rclcpp::create_timer(
+            this, this->get_clock(),
+            rclcpp::Duration::from_seconds(0.1),
+            std::bind(&DmpGazeboExecutorNode::startTimer, this));
+        return;
+    }
+
+    const Eigen::Vector3d ee_now(ee_tf.transform.translation.x,
+                                 ee_tf.transform.translation.y,
+                                 ee_tf.transform.translation.z);
+    // Raw datum for future comparison against the pose the controller's
+    // FrameAligner captures at its own activation (no comparison done here).
+    RCLCPP_INFO(this->get_logger(),
+                "Goal-frame correction: EE pose now (%s -> %s) = [%.4f, %.4f, %.4f] (world).",
+                world_frame_.c_str(), ee_frame_.c_str(),
+                ee_now.x(), ee_now.y(), ee_now.z());
+
+    const Eigen::Vector3d new_dG_world = target_position_ - ee_now;
+    const Eigen::Vector3d goal_corretto = dmp_.y0() + new_dG_world;
+
+    // One-shot translational retarget, BEFORE any stepping. DMP::setGoal() is
+    // self-contained: it recomputes scale_/scale_reliable_ (kMinDG and
+    // amplitude-ratio guards, core/dmp.cpp) and stores goal_; it does NOT touch
+    // the integration state. DMP::reset() does the opposite - it restores
+    // x_/y_/z_/v_ and leaves goal_/scale_ alone. The two are independent, so the
+    // order is not load-bearing; reset() is called last purely to keep an
+    // explicit "rollout starts clean from y0" invariant (it is redundant with
+    // the constructor's reset() since nothing has stepped yet).
+    const Eigen::Vector3d original_goal = dmp_.goal();
+    dmp_.setGoal(goal_corretto);
+    dmp_.reset();
+
+    RCLCPP_INFO(this->get_logger(),
+                "One-shot target retarget: demo goal [%.4f, %.4f, %.4f] -> "
+                "new goal [%.4f, %.4f, %.4f] (demo-local, passed to setGoal) | "
+                "target_position [%.4f, %.4f, %.4f] (world, from '%s') | "
+                "ee_now [%.4f, %.4f, %.4f] (world) | scale reliable x=%d y=%d z=%d "
+                "| orientation goal left unchanged.",
+                original_goal.x(), original_goal.y(), original_goal.z(),
+                goal_corretto.x(), goal_corretto.y(), goal_corretto.z(),
+                target_position_.x(), target_position_.y(), target_position_.z(),
+                target_odom_topic_.c_str(),
+                ee_now.x(), ee_now.y(), ee_now.z(),
+                static_cast<int>(dmp_.isScaleReliable(0)),
+                static_cast<int>(dmp_.isScaleReliable(1)),
+                static_cast<int>(dmp_.isScaleReliable(2)));
+
     RCLCPP_INFO(this->get_logger(), "Starting DMP rollout.");
     // Sim-time timer (see note on startup_timer_): the rollout tick advances on
     // the node clock, so the integration step dt_ is a sim-time step and the
