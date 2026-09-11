@@ -111,7 +111,7 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
             "|F| safety limit and must be set explicitly.");
     }
     // Forwarded to dmp_gazebo_executor_node in replay mode (see kLaunchReplay).
-    target_odom_required_ = this->declare_pamemory_user_editsrameter<bool>("target_odom_required", false);
+    target_odom_required_ = this->declare_parameter<bool>("target_odom_required", false);
     target_odom_topic_ = this->declare_parameter<std::string>(
         "target_odom_topic", "/free_target_object/odometry");
     target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
