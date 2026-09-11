@@ -105,6 +105,8 @@ Eigen::Quaterniond yamlToQuat(const YAML::Node& node) {
     return Eigen::Quaterniond(node[0].as<double>(), node[1].as<double>(), node[2].as<double>(), node[3].as<double>());
 }
 
+}  // namespace
+
 /**
  * @brief Converts a rotational QuaternionDMP instance into a structured YAML node hierarchy.
  */
@@ -142,7 +144,35 @@ YAML::Node quaternionDmpToNode(const QuaternionDMP& qdmp) {
     return node;
 }
 
-}  // namespace
+/**
+ * @brief Reconstructs a QuaternionDMP from a `quaternion_dmp:` YAML node (schema produced by
+ * quaternionDmpToNode() above).
+ */
+QuaternionDMP quaternionDmpFromNode(const YAML::Node& q) {
+    Eigen::Quaterniond q0 = yamlToQuat(q["q0"]), qgoal = yamlToQuat(q["goal"]);
+    Eigen::Vector3d qeta0 = yamlToVec3(q["eta0"]);
+    Eigen::VectorXd qcenters = yamlToVector(q["centers"]), qwidths = yamlToVector(q["widths"]);
+    std::array<Eigen::VectorXd, 3> qweights;
+    for (const auto& wd : q["weights"]) {
+        std::string dim = wd["dim"].as<std::string>();
+        int idx = (dim == "x") ? 0 : (dim == "y") ? 1 : 2;
+        qweights[idx] = yamlToVector(wd["values"]);
+    }
+    QuaternionDMP qdmp(q["n_basis"].as<int>(), q["alpha_x"].as<double>(), q["alpha_z"].as<double>(), q["beta_z"].as<double>());
+    qdmp.setLearnedParameters(q["tau"].as<double>(), q0, qgoal, qcenters, qwidths, qweights, qeta0);
+    if (q["regression_method"]) {
+        bool use_ridge = (q["regression_method"].as<std::string>() == "ridge");
+        double lambda = q["ridge_lambda"] ? q["ridge_lambda"].as<double>() : 1e-6;
+        qdmp.setRidgeRegression(use_ridge, lambda);
+    }
+    if (q["velocity_filter_enabled"]) {
+        bool use_filt = q["velocity_filter_enabled"].as<bool>();
+        double w1 = q["velocity_filter_window_sec_1"] ? q["velocity_filter_window_sec_1"].as<double>() : 0.05;
+        double w2 = q["velocity_filter_window_sec_2"] ? q["velocity_filter_window_sec_2"].as<double>() : 0.05;
+        qdmp.setVelocityFilter(use_filt, w1, w2);
+    }
+    return qdmp;
+}
 
 void saveToYaml(const DMP& dmp, const std::string& filepath) {
     YAML::Node root = dmpToNode(dmp);

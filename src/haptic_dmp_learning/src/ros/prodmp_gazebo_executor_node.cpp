@@ -93,47 +93,65 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     demo_init_vel_ = prodmp_.initVel();
 
     // 2b. Load the orientation (quaternion) model. ProDMP does not model
-    // orientation in this project, so a ProDMP weights file has no
-    // quaternion_dmp section. Fail loud with an explicit explanation unless the
-    // caller points orientation_weights_yaml_path at the classic combined
-    // dmp_weights_<run_id>.yaml. (If a future ProDMP file ever gained a
-    // quaternion_dmp section, it would be picked up from weights_yaml_path_.)
-    bool prodmp_file_has_quaternion = false;
-    try {
-        const YAML::Node probe = YAML::LoadFile(weights_yaml_path_);
-        prodmp_file_has_quaternion = static_cast<bool>(probe["quaternion_dmp"]);
-    } catch (const std::exception&) {
-        // A genuinely unreadable file already made the ProDMP load above throw;
-        // reaching here means the file parsed but simply lacks the section.
-    }
-
+    // orientation in this project by default, so a plain ProDMP weights file
+    // has no quaternion_dmp section. Resolution order (unchanged precedence,
+    // now also supporting the unified single-file format):
+    //   1. orientation_weights_yaml_path explicitly set -> ALWAYS wins,
+    //      unconditionally, even if weights_yaml_path_ also carries an inline
+    //      quaternion_dmp section (explicit beats implicit).
+    //   2. Else, attempt to read an inline `quaternion_dmp:` section from
+    //      weights_yaml_path_ itself (unified ProDMP+orientation file) via
+    //      prodmp_io::loadProDmpFromYaml's orientation-reporting overload.
+    //   3. Else -> fail loud, exactly as before this feature existed (no
+    //      silent identity/zero orientation fabrication).
     std::string orientation_path = orientation_weights_yaml_path_;
-    if (prodmp_file_has_quaternion && orientation_path.empty()) {
-        orientation_path = weights_yaml_path_;
+    bool use_inline_orientation = false;
+    if (orientation_path.empty()) {
+        core::QuaternionDMP inline_qdmp(20, 4.6, 25.0, 6.25);
+        bool has_inline_orientation = false;
+        try {
+            core::prodmp_io::loadProDmpFromYaml(weights_yaml_path_, inline_qdmp,
+                                                has_inline_orientation);
+        } catch (const std::exception&) {
+            // A genuinely unreadable file already made the ProDMP position load
+            // above throw; reaching here just means the file parsed but simply
+            // lacks a quaternion_dmp section (has_inline_orientation stays false).
+        }
+        if (has_inline_orientation) {
+            qdmp_ = inline_qdmp;
+            use_inline_orientation = true;
+            orientation_path = weights_yaml_path_;
+            RCLCPP_INFO(this->get_logger(),
+                        "Loaded orientation (quaternion_dmp) inline from unified ProDMP weights "
+                        "file '%s' (no separate orientation_weights_yaml_path given).",
+                        weights_yaml_path_.c_str());
+        }
     }
     if (orientation_path.empty()) {
         RCLCPP_FATAL(this->get_logger(),
                      "ProDMP weights '%s' carry no orientation (quaternion_dmp) section - "
-                     "ProDMP models POSITION only in this project. Provide "
-                     "'orientation_weights_yaml_path' pointing at the classic combined "
-                     "dmp_weights_<run_id>.yaml; its quaternion_dmp section is used for the "
-                     "orientation channel.",
+                     "ProDMP models POSITION only in this project unless the unified file "
+                     "format is used. Provide 'orientation_weights_yaml_path' pointing at the "
+                     "classic combined dmp_weights_<run_id>.yaml, or save the ProDMP weights "
+                     "with an embedded quaternion_dmp section (unified format).",
                      weights_yaml_path_.c_str());
         throw std::runtime_error(
             "prodmp_gazebo_executor_node: 'orientation_weights_yaml_path' is required "
-            "(ProDMP weights do not contain orientation)");
+            "(ProDMP weights do not contain orientation, inline or separate)");
     }
-    try {
-        // dmp_io::loadFromYaml(path, DMP&, QuaternionDMP&) reads the combined
-        // classic format. We only need the quaternion_dmp half; the position DMP
-        // it also fills is a throwaway (position comes from prodmp_).
-        core::DMP orientation_position_unused(20, 4.6, 25.0, 6.25, false);
-        core::dmp_io::loadFromYaml(orientation_path, orientation_position_unused, qdmp_);
-    } catch (const std::exception& e) {
-        RCLCPP_FATAL(this->get_logger(),
-                     "Failed to load orientation (quaternion) weights from %s: %s",
-                     orientation_path.c_str(), e.what());
-        throw;
+    if (!use_inline_orientation) {
+        try {
+            // dmp_io::loadFromYaml(path, DMP&, QuaternionDMP&) reads the combined
+            // classic format. We only need the quaternion_dmp half; the position DMP
+            // it also fills is a throwaway (position comes from prodmp_).
+            core::DMP orientation_position_unused(20, 4.6, 25.0, 6.25, false);
+            core::dmp_io::loadFromYaml(orientation_path, orientation_position_unused, qdmp_);
+        } catch (const std::exception& e) {
+            RCLCPP_FATAL(this->get_logger(),
+                         "Failed to load orientation (quaternion) weights from %s: %s",
+                         orientation_path.c_str(), e.what());
+            throw;
+        }
     }
 
     if (std::abs(prodmp_.tau() - qdmp_.tau()) > 1e-6) {

@@ -2,6 +2,7 @@
 
 #include <string>
 #include "haptic_dmp_learning/core/prodmp.hpp"
+#include "haptic_dmp_learning/core/quaternion_dmp.hpp"
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -25,6 +26,40 @@ void saveProDmpToYaml(const ProDMP& prodmp, const std::string& filepath);
  * @return ProDMP Reconstructed instance (ready to roll out from its stored start).
  */
 ProDMP loadProDmpFromYaml(const std::string& filepath);
+
+/**
+ * @brief Serializes a ProDMP model, optionally with an embedded orientation QuaternionDMP, to a
+ * YAML file - the "unified" format.
+ *
+ * When @p qdmp is nullptr, the output is BYTE-IDENTICAL to saveProDmpToYaml(prodmp, filepath)
+ * above (no `quaternion_dmp:` key is emitted at all) - this is the default/legacy behaviour.
+ * When @p qdmp is non-null, an additional top-level `quaternion_dmp:` section is appended using
+ * the exact same field names as dmp_io's classic-DMP `quaternion_dmp:` section (see
+ * dmp_io::quaternionDmpToNode, reused here directly) so any consumer already able to parse that
+ * section elsewhere can parse it here unchanged.
+ *
+ * @param prodmp   Trained ProDMP object (position).
+ * @param qdmp     Optional trained QuaternionDMP (orientation); nullptr = position-only output.
+ * @param filepath Destination filesystem path.
+ */
+void saveProDmpToYaml(const ProDMP& prodmp, const QuaternionDMP* qdmp, const std::string& filepath);
+
+/**
+ * @brief Deserializes a ProDMP model from a YAML file, additionally reporting/returning an
+ * embedded `quaternion_dmp:` orientation section if present.
+ *
+ * Does NOT fabricate orientation data: if no `quaternion_dmp:` key exists in the file,
+ * @p has_orientation is set to false and @p qdmp_out is left untouched - callers must check
+ * @p has_orientation before using @p qdmp_out.
+ *
+ * @param filepath        Source YAML filesystem path.
+ * @param[out] qdmp_out   Populated with the parsed QuaternionDMP iff an orientation section
+ *                        was present.
+ * @param[out] has_orientation  True iff a `quaternion_dmp:` section was found and parsed.
+ * @return ProDMP Reconstructed position instance (same as loadProDmpFromYaml above).
+ */
+ProDMP loadProDmpFromYaml(const std::string& filepath, QuaternionDMP& qdmp_out,
+                          bool& has_orientation);
 
 /**
  * @brief Feature-flag values read from config/prodmp_features.yaml (the

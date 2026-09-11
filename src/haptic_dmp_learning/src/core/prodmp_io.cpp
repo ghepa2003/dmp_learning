@@ -1,4 +1,5 @@
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
+#include "haptic_dmp_learning/core/dmp_io.hpp"
 #include <yaml-cpp/yaml.h>
 #include <array>
 #include <cstdlib>
@@ -40,9 +41,12 @@ Eigen::Vector3d yamlToVec3(const YAML::Node& node) {
     return Eigen::Vector3d(node[0].as<double>(), node[1].as<double>(), node[2].as<double>());
 }
 
-}  // namespace
-
-void saveProDmpToYaml(const ProDMP& prodmp, const std::string& filepath) {
+/**
+ * @brief Builds the position-only ProDMP YAML node - identical content/field order to the
+ * original (pre-unified-format) saveProDmpToYaml body. Shared by both the position-only and
+ * unified save entry points so the position section is guaranteed byte-identical either way.
+ */
+YAML::Node prodmpToNode(const ProDMP& prodmp) {
     YAML::Node node;
     node["formulation"] = "prodmp_integral";
     node["num_basis"] = prodmp.numBasis();
@@ -68,18 +72,10 @@ void saveProDmpToYaml(const ProDMP& prodmp, const std::string& filepath) {
         weights.push_back(wd);
     }
     node["weights"] = weights;
-
-    std::ofstream fout(filepath);
-    if (!fout.is_open()) {
-        throw std::runtime_error("prodmp_io::saveProDmpToYaml: cannot open file for writing: " +
-                                 filepath);
-    }
-    fout << node;
+    return node;
 }
 
-ProDMP loadProDmpFromYaml(const std::string& filepath) {
-    YAML::Node root = YAML::LoadFile(filepath);
-
+ProDMP nodeToProdmp(const YAML::Node& root) {
     const int num_basis = root["num_basis"].as<int>();
     const double alpha = root["alpha"].as<double>();
     const double alpha_x = root["alpha_x"].as<double>();
@@ -105,6 +101,46 @@ ProDMP loadProDmpFromYaml(const std::string& filepath) {
     ProDMP prodmp(num_basis, alpha, alpha_x, ridge_lambda);
     prodmp.setLearnedParameters(tau, init_pos, init_vel, goal_param, centers, widths, weights,
                                 relative_goal);
+    return prodmp;
+}
+
+}  // namespace
+
+void saveProDmpToYaml(const ProDMP& prodmp, const std::string& filepath) {
+    saveProDmpToYaml(prodmp, nullptr, filepath);
+}
+
+void saveProDmpToYaml(const ProDMP& prodmp, const QuaternionDMP* qdmp, const std::string& filepath) {
+    YAML::Node node = prodmpToNode(prodmp);
+    if (qdmp != nullptr) {
+        // Reuse dmp_io's exact `quaternion_dmp:` schema (same field names) so any existing
+        // reader of that section (classic-DMP files) parses this identically.
+        node["quaternion_dmp"] = dmp_io::quaternionDmpToNode(*qdmp);
+    }
+
+    std::ofstream fout(filepath);
+    if (!fout.is_open()) {
+        throw std::runtime_error("prodmp_io::saveProDmpToYaml: cannot open file for writing: " +
+                                 filepath);
+    }
+    fout << node;
+}
+
+ProDMP loadProDmpFromYaml(const std::string& filepath) {
+    YAML::Node root = YAML::LoadFile(filepath);
+    return nodeToProdmp(root);
+}
+
+ProDMP loadProDmpFromYaml(const std::string& filepath, QuaternionDMP& qdmp_out,
+                          bool& has_orientation) {
+    YAML::Node root = YAML::LoadFile(filepath);
+    ProDMP prodmp = nodeToProdmp(root);
+
+    has_orientation = false;
+    if (root["quaternion_dmp"]) {
+        qdmp_out = dmp_io::quaternionDmpFromNode(root["quaternion_dmp"]);
+        has_orientation = true;
+    }
     return prodmp;
 }
 
