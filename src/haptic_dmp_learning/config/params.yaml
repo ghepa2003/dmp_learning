@@ -65,6 +65,37 @@ dmp_gazebo_executor_node:
     # as-is - for an open-loop run with no target at all (e.g. real hardware).
     target_odom_required: true
 
+prodmp_gazebo_executor_node:
+  ros__parameters:
+    # Same values as dmp_gazebo_executor_node (see above): world_frame/ee_frame/
+    # control_rate_hz/startup_delay_sec are not overridden there either, so
+    # these mirror that node's code defaults for a like-for-like comparison.
+    world_frame: "world"
+    ee_frame: "fer_hand_tcp"
+    control_rate_hz: 200.0
+    startup_delay_sec: 1.0
+    # Gripper position command [m] treated as fully open (ramp start).
+    gripper_open_position: 0.06
+    # Gripper position command [m] treated as fully closed (ramp end).
+    gripper_closed_position: 0.0
+    # Duration [s] of the CSV-triggered linear close ramp during autonomous replay.
+    gripper_close_ramp_duration_sec: 2.0
+    # One-shot target retarget: the live free_target_object position is read once
+    # from this odometry topic at rollout start and applied via ProDMP setGoal
+    # (translation only; orientation keeps the demo goal).
+    target_odom_topic: "/free_target_object/odometry"
+    # Fail-loud: abort the node if no odometry arrives within this many seconds.
+    target_odom_timeout_sec: 5.0
+    # Whether the target-odometry wait/retarget is mandatory. true (default):
+    # wait for target_odom_topic and retarget the goal to the live target, aborting
+    # on timeout - correct for replay against a simulated target. false: skip the
+    # subscription, wait and retarget entirely and replay the demo's ORIGINAL goal
+    # as-is - for an open-loop run with no target at all (e.g. real hardware).
+    target_odom_required: true
+    # NOTE: weights_yaml_path / orientation_weights_yaml_path are intentionally
+    # NOT set here - they are run_id-dependent and passed via -p by the
+    # orchestrator.
+
 grasp_force_calibration_node:
   ros__parameters:
     # One-shot event announcing the gripper close ramp has finished; force capture

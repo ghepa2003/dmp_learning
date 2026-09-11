@@ -116,6 +116,20 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
         "target_odom_topic", "/free_target_object/odometry");
     target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
 
+    // Which movement-primitive formulation the replay executor uses. Default
+    // "dmp" preserves today's behaviour EXACTLY (same child executable, same
+    // arguments). "prodmp" launches the twin prodmp_gazebo_executor_node with
+    // the ProDMP position weights (prodmp_weights_<run_id>.yaml) and the classic
+    // file only for the orientation channel. Same explicit-default style as
+    // target_odom_required_ above; an unrecognised value is a fail-loud error,
+    // never a silent fallback.
+    mp_formulation_ = this->declare_parameter<std::string>("mp_formulation", "dmp");
+    if (mp_formulation_ != "dmp" && mp_formulation_ != "prodmp") {
+        throw std::runtime_error(
+            "demo_replay_sync_orchestrator: 'mp_formulation' must be 'dmp' or 'prodmp', got '" +
+            mp_formulation_ + "'.");
+    }
+
     buttons_synced_pub_ = this->create_publisher<sensor_msgs::msg::Joy>(
         buttons_synced_topic_, rclcpp::QoS(10));
 
@@ -361,19 +375,42 @@ void DemoReplaySyncOrchestratorNode::tick() {
             break;
 
         case Phase::kLaunchReplay: {  // replay only
-            launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
-                         "--ros-args",
-                         "--params-file", hapticDmpParamsPath(),
-                         "-p", std::string("target_odom_required:=") +
-                                   (target_odom_required_ ? "true" : "false"),
-                         "-p", "target_odom_topic:=" + target_odom_topic_,
-                         "-p", "target_odom_timeout_sec:=" +
-                                   std::to_string(target_odom_timeout_sec_),
-                         "-p", "use_sim_time:=true",
-                         "-p", "startup_delay_sec:=0.0",
-                         "-p", "weights_yaml_path:=" + weightsPathForRunId(),
-                         "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
-                        "dmp_executor");
+            // Only the position executor differs by formulation. "dmp" keeps the
+            // exact child + arguments used before this switch existed; "prodmp"
+            // swaps the executable and its weights path and adds
+            // orientation_weights_yaml_path (the classic combined file, used for
+            // the quaternion channel that ProDMP does not model). Every other
+            // argument is identical between the two branches.
+            if (mp_formulation_ == "dmp") {
+                launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
+                             "--ros-args",
+                             "--params-file", hapticDmpParamsPath(),
+                             "-p", std::string("target_odom_required:=") +
+                                       (target_odom_required_ ? "true" : "false"),
+                             "-p", "target_odom_topic:=" + target_odom_topic_,
+                             "-p", "target_odom_timeout_sec:=" +
+                                       std::to_string(target_odom_timeout_sec_),
+                             "-p", "use_sim_time:=true",
+                             "-p", "startup_delay_sec:=0.0",
+                             "-p", "weights_yaml_path:=" + weightsPathForRunId(),
+                             "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
+                            "dmp_executor");
+            } else {  // mp_formulation_ == "prodmp"
+                launchChild({"ros2", "run", "haptic_dmp_learning", "prodmp_gazebo_executor_node",
+                             "--ros-args",
+                             "--params-file", hapticDmpParamsPath(),
+                             "-p", std::string("target_odom_required:=") +
+                                       (target_odom_required_ ? "true" : "false"),
+                             "-p", "target_odom_topic:=" + target_odom_topic_,
+                             "-p", "target_odom_timeout_sec:=" +
+                                       std::to_string(target_odom_timeout_sec_),
+                             "-p", "use_sim_time:=true",
+                             "-p", "startup_delay_sec:=0.0",
+                             "-p", "weights_yaml_path:=" + prodmpWeightsPathForRunId(),
+                             "-p", "orientation_weights_yaml_path:=" + weightsPathForRunId(),
+                             "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
+                            "prodmp_executor");
+            }
             launchChild({"ros2", "run", "grasp_monitoring", "geometric_grasp_monitor",
                          "--ros-args",
                          "--params-file", graspMonitorParamsPath(),
@@ -392,8 +429,11 @@ void DemoReplaySyncOrchestratorNode::tick() {
                          "-p", numArg("hard_force_limit_n", hard_force_limit_n_)},
                         "grasp_state_machine_node");
             RCLCPP_INFO(this->get_logger(),
-                        "replay stack launched for run_id '%s' (weights: %s).",
-                        run_id_.c_str(), weightsPathForRunId().c_str());
+                        "replay stack launched for run_id '%s' (mp_formulation=%s, weights: %s).",
+                        run_id_.c_str(), mp_formulation_.c_str(),
+                        (mp_formulation_ == "dmp" ? weightsPathForRunId()
+                                                  : prodmpWeightsPathForRunId())
+                            .c_str());
             phase_ = Phase::kRunning;
             phase_entered_ = std::chrono::steady_clock::now();
             break;
@@ -440,6 +480,15 @@ std::string DemoReplaySyncOrchestratorNode::weightsPathForRunId() const {
     const char* home = std::getenv("HOME");
     const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
     return ws_root + "/dmp_weights_" + run_id_ + ".yaml";
+}
+
+std::string DemoReplaySyncOrchestratorNode::prodmpWeightsPathForRunId() const {
+    // Same pattern as weightsPathForRunId(), distinct filename so the classic
+    // DMP file (dmp_weights_<run_id>.yaml) and the ProDMP file
+    // (prodmp_weights_<run_id>.yaml) coexist for the same run_id.
+    const char* home = std::getenv("HOME");
+    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+    return ws_root + "/prodmp_weights_" + run_id_ + ".yaml";
 }
 
 std::string DemoReplaySyncOrchestratorNode::demoCsvPathForRunId() const {

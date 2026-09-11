@@ -1,0 +1,14 @@
+num_basis: 80
+ridge_lambda: 1.0e-10   # ridge term on the learning normal equations - see core::ProDMP
+
+position_filter:
+  enabled: true
+  window_sec: 0.05
+
+# If true, the goal is fixed to the demonstration's final observed position
+# (y_demo(tau)) instead of being estimated jointly with the shape weights in
+# the same least-squares regression - see core::ProDMP::setFixGoalToDemoEndpoint()
+# for the full rationale (Li et al. 2023, Eq. 11: g is a known constant in the
+# classic DMP, not a regressed quantity). Default false = unchanged behaviour
+# (goal estimated via joint regression, as before this flag existed).
+fix_goal_to_demo_endpoint: true

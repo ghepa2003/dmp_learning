@@ -26,8 +26,10 @@ include_directories(include)
 add_library(${PROJECT_NAME}_core
   src/core/demonstration_recorder.cpp
   src/core/dmp.cpp
+  src/core/prodmp.cpp
   src/core/quaternion_dmp.cpp
   src/core/dmp_io.cpp
+  src/core/prodmp_io.cpp
   src/core/demo_csv_io.cpp
   src/core/grasp_state_machine.cpp
 )
@@ -70,6 +72,34 @@ ament_target_dependencies(dmp_gazebo_executor_node
   nav_msgs
   tf2_ros
   ament_index_cpp
+)
+
+# ---- ProDMP Gazebo executor node (twin of dmp_gazebo_executor_node; replays
+#      an integral-form core::ProDMP for position + core::QuaternionDMP for
+#      orientation) ----
+add_executable(prodmp_gazebo_executor_node
+  src/ros/prodmp_gazebo_executor_node.cpp
+  src/ros/prodmp_executor_main.cpp
+)
+target_link_libraries(prodmp_gazebo_executor_node
+  ${PROJECT_NAME}_core
+)
+ament_target_dependencies(prodmp_gazebo_executor_node
+  rclcpp
+  geometry_msgs
+  std_msgs
+  nav_msgs
+  tf2_ros
+  ament_index_cpp
+)
+
+# ---- ProDMP offline fit tool (STANDALONE, no ROS - links only the core
+#      library, which carries Eigen3 + yaml-cpp) ----
+add_executable(fit_prodmp
+  src/tools/fit_prodmp_main.cpp
+)
+target_link_libraries(fit_prodmp
+  ${PROJECT_NAME}_core
 )
 
 # ---- CSV master pose player node executable (stand-in for the Geomagic
@@ -149,6 +179,8 @@ install(TARGETS
   ${PROJECT_NAME}_core
   haptic_dmp_wrapper_node
   dmp_gazebo_executor_node
+  prodmp_gazebo_executor_node
+  fit_prodmp
   csv_master_pose_player_node
   live_demo_recorder_node
   grasp_force_calibration_node
@@ -176,6 +208,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_dmp test/test_dmp.cpp)
   target_link_libraries(test_dmp ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_prodmp test/test_prodmp.cpp)
+  target_link_libraries(test_prodmp ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_quaternion_dmp test/test_quaternion_dmp.cpp)
   target_link_libraries(test_quaternion_dmp ${PROJECT_NAME}_core)

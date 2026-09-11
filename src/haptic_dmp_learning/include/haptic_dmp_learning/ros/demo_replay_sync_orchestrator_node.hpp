@@ -88,6 +88,7 @@ private:
     pid_t launchChild(const std::vector<std::string>& argv, const std::string& tag);
     void stopChildren();
     std::string weightsPathForRunId() const;
+    std::string prodmpWeightsPathForRunId() const;
     std::string demoCsvPathForRunId() const;
     std::string graspMonitorParamsPath() const;
     std::string hapticDmpParamsPath() const;
@@ -110,6 +111,10 @@ private:
     bool target_odom_required_;
     std::string target_odom_topic_;
     double target_odom_timeout_sec_;
+    // Movement-primitive formulation for the replay executor: "dmp" (default,
+    // behaviour unchanged) launches dmp_gazebo_executor_node; "prodmp" launches
+    // the twin prodmp_gazebo_executor_node. Any other value is fail-loud.
+    std::string mp_formulation_;
     // Gripper close ramp (see core/gripper_ramp.hpp); defaults reproduce the
     // previous single-step endpoints (0.06 = open, 0.0 = closed).
     double gripper_open_position_;
