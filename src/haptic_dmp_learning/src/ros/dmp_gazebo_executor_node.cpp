@@ -34,6 +34,7 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     const std::string default_weights_path = std::string(home ? home : "/root") + "/thesis_ws/dmp_weights.yaml";
     weights_yaml_path_ = this->declare_parameter<std::string>("weights_yaml_path", default_weights_path);
     target_pose_topic_ = this->declare_parameter<std::string>("target_pose_topic", "/target_pose");
+    target_twist_topic_ = this->declare_parameter<std::string>("target_twist_topic", "/target_twist");
     frame_id_ = this->declare_parameter<std::string>("frame_id", "panda_link0");
     control_rate_hz_ = this->declare_parameter<double>("control_rate_hz", 200.0);
     startup_delay_sec_ = this->declare_parameter<double>("startup_delay_sec", 1.0);
@@ -118,6 +119,8 @@ DmpGazeboExecutorNode::DmpGazeboExecutorNode()
     // 4. Create publishers
     pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
         target_pose_topic_, rclcpp::QoS(10));
+    twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
+        target_twist_topic_, rclcpp::QoS(10));
     gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
         "/gripper_position_cmd", rclcpp::QoS(10));
     // One-shot announce that the gripper close ramp has finished (see header).
@@ -377,8 +380,14 @@ void DmpGazeboExecutorNode::stepCallback() {
     }
 
     geometry_msgs::msg::PoseStamped msg;
-    msg.header.stamp = this->now();
+    const rclcpp::Time stamp = this->now();
+    msg.header.stamp = stamp;
     msg.header.frame_id = frame_id_;
+
+    geometry_msgs::msg::TwistStamped twist_msg;
+    twist_msg.header.stamp = stamp;  // SAME stamp as msg - lets the consumer detect
+                                      // cross-topic skew between the two samples.
+    twist_msg.header.frame_id = frame_id_;
 
     bool at_end = (elapsed_ + dt_) >= dmp_.tau();
 
@@ -388,6 +397,11 @@ void DmpGazeboExecutorNode::stepCallback() {
         double cc = 0.0;
         Eigen::Vector3d pos = dmp_.step(dt_, ct, cc);
         Eigen::Quaterniond quat = qdmp_.step(dt_);
+        // Analytic velocity state, already integrated inside step() above (see
+        // core::DMP::velocity() / core::QuaternionDMP::omega()) - not a
+        // finite-difference reconstruction.
+        Eigen::Vector3d vel = dmp_.velocity();
+        Eigen::Vector3d omega = qdmp_.omega();
         elapsed_ += dt_;
 
         msg.pose.position.x = pos.x();
@@ -397,6 +411,13 @@ void DmpGazeboExecutorNode::stepCallback() {
         msg.pose.orientation.x = quat.x();
         msg.pose.orientation.y = quat.y();
         msg.pose.orientation.z = quat.z();
+
+        twist_msg.twist.linear.x = vel.x();
+        twist_msg.twist.linear.y = vel.y();
+        twist_msg.twist.linear.z = vel.z();
+        twist_msg.twist.angular.x = omega.x();
+        twist_msg.twist.angular.y = omega.y();
+        twist_msg.twist.angular.z = omega.z();
     } else {
         // Clamp explicitly to goal attractor once tau is reached
         Eigen::Vector3d goal = dmp_.goal();
@@ -409,11 +430,26 @@ void DmpGazeboExecutorNode::stepCallback() {
         msg.pose.orientation.y = qgoal.y();
         msg.pose.orientation.z = qgoal.z();
 
+        // Target is at rest at the goal: feedforward is explicitly zero here,
+        // NOT the last pre-clamp rollout velocity - otherwise a feedforward-fed
+        // controller would keep pushing past the goal for one tick.
+        // twist_msg.twist is already zero-initialized by TwistStamped's default
+        // construction; left explicit (all six fields) so the "target is at
+        // rest" invariant is visible at the call site, not implicit in a
+        // default constructor a future reader might not think to check.
+        twist_msg.twist.linear.x = 0.0;
+        twist_msg.twist.linear.y = 0.0;
+        twist_msg.twist.linear.z = 0.0;
+        twist_msg.twist.angular.x = 0.0;
+        twist_msg.twist.angular.y = 0.0;
+        twist_msg.twist.angular.z = 0.0;
+
         finished_ = true;
         RCLCPP_INFO(this->get_logger(), "DMP rollout completed at goal.");
     }
 
     pose_pub_->publish(msg);
+    twist_pub_->publish(twist_msg);
 
     if (finished_ && step_timer_) {
         step_timer_->cancel();

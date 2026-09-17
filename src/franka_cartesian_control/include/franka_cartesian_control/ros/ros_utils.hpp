@@ -117,6 +117,42 @@ public:
     /// @brief Returns true if the alignment offset has already been locked for the current activation cycle.
     bool isCaptured() const { return alignment_captured_; }
 
+    /**
+     * @brief Transforms a raw feedforward twist (demo-local frame, same frame as
+     *        the raw_pos/raw_quat passed to align()) into the robot base frame.
+     *
+     * @details
+     * Mirrors EXACTLY what align() does to each channel, not "the same rotation
+     * applied to both" - align() treats position and orientation asymmetrically:
+     *   aligned_pos  = position_offset_ + raw_pos       -> PURE TRANSLATION, no rotation
+     *   aligned_quat = orientation_offset_ * raw_quat   -> PURE ROTATION (left-mult)
+     * Differentiating each channel the same way it is composed:
+     *  - Linear: position_offset_ is a constant translation and is never rotated
+     *    by align(), so d(aligned_pos)/dt = d(raw_pos)/dt exactly - the raw linear
+     *    velocity passes through UNCHANGED. (An earlier version of this method
+     *    rotated it by orientation_offset_ by analogy with the angular channel;
+     *    that was wrong - measured ~68-93 deg between v_ff and the true target
+     *    velocity, consistent with a spurious ~93 deg orientation_offset_ rotation
+     *    being applied to a channel align() never rotates in the first place.)
+     *  - Angular: aligned_quat = orientation_offset_ * raw_quat is a constant
+     *    left-multiplication (fixed/base-frame rotation) applied to the whole
+     *    orientation trajectory, so the corresponding angular velocity DOES
+     *    transform: omega_aligned = R(orientation_offset_) * omega_raw (standard
+     *    result for a fixed rotation composed onto a moving frame's world-frame
+     *    angular velocity).
+     *
+     * Requires align() to have captured the offset first (isCaptured() true) -
+     * calling this before the first align() would apply an identity rotation to
+     * the angular channel silently, so callers must gate on isCaptured()
+     * themselves (the controller already does: no velocity command is issued
+     * before target_received_).
+     */
+    void alignVelocity(const Eigen::Vector3d& raw_linear, const Eigen::Vector3d& raw_angular,
+                        Eigen::Vector3d& aligned_linear, Eigen::Vector3d& aligned_angular) const {
+        aligned_linear = raw_linear;
+        aligned_angular = orientation_offset_ * raw_angular;
+    }
+
 private:
     bool alignment_captured_ = false;
     Eigen::Vector3d position_offset_ = Eigen::Vector3d::Zero();

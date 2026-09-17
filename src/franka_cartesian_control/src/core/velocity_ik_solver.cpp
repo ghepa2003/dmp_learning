@@ -7,10 +7,12 @@ namespace core {
 VelocityIkSolver::VelocityIkSolver() : params_(Params()) {}
 VelocityIkSolver::VelocityIkSolver(const Params& params) : params_(params) {}
 
-VelocityIkSolver::Vector6d VelocityIkSolver::desiredTwist(const CartesianError& error) const {
-    // 1. Proportional closed-loop law for linear and angular task-space errors
-    Eigen::Vector3d v_lin = params_.kp_linear * error.linear;
-    Eigen::Vector3d v_ang = params_.kp_angular * error.angular;
+VelocityIkSolver::Vector6d VelocityIkSolver::desiredTwist(
+    const CartesianError& error, const Vector6d& feedforward) const {
+    // 1. Proportional closed-loop law for linear and angular task-space errors,
+    //    plus the (optionally zero) velocity feedforward: v_cmd = v_ff + Kp * e.
+    Eigen::Vector3d v_lin = feedforward.head<3>() + params_.kp_linear * error.linear;
+    Eigen::Vector3d v_ang = feedforward.tail<3>() + params_.kp_angular * error.angular;
 
     // 2. Magnitude saturation for linear velocity vector: preserves directional unit vector
     double lin_norm = v_lin.norm();

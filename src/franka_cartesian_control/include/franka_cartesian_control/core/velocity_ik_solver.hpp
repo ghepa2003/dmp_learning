@@ -50,11 +50,15 @@ public:
     explicit VelocityIkSolver(const Params& params);
 
     /**
-     * @brief Computes proportional desired twist [v; omega] from Cartesian pose error.
+     * @brief Computes desired twist [v; omega] from Cartesian pose error, optionally
+     *        with a velocity feedforward term: v_cmd = v_ff + Kp * e.
      * @param error Struct containing linear error e_p (m) and angular error e_o (rad).
+     * @param feedforward Desired 6D feedforward twist [v_ff; omega_ff], base frame,
+     *                    added to the proportional term BEFORE saturation. Defaults
+     *                    to zero, reproducing the previous Kp-only behaviour exactly.
      * @return Vector6d Saturated desired twist in base frame [v_x, v_y, v_z, w_x, w_y, w_z]^T.
      */
-    Vector6d desiredTwist(const CartesianError& error) const;
+    Vector6d desiredTwist(const CartesianError& error, const Vector6d& feedforward = Vector6d::Zero()) const;
 
     /**
      * @brief Computes joint velocity command dq using Damped Least Squares inversion.

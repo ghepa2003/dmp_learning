@@ -97,6 +97,13 @@ velocity_cartesian_controller:
     max_linear_speed: 0.15      # Translational end-effector velocity clamp (m/s)
     max_angular_speed: 0.5      # Rotational end-effector angular velocity clamp (rad/s)
     max_joint_speed: 1.5        # Joint velocity limit clamp (rad/s)
+    # Velocity feedforward: v_cmd = v_ff + Kp * e. DISABLED by default so the
+    # controller stays byte-identical to the pre-feedforward Kp-only law; flip
+    # to true for the A/B comparison against the same recorded runs (kp_linear/
+    # kp_angular/damping_lambda above are intentionally untouched by this).
+    feedforward_enabled: false
+    target_twist_topic: /target_twist
+    feedforward_tolerance_sec: 0.05   # max age / cross-topic stamp skew accepted for v_ff before falling back to Kp-only
 
 # Parameters for Cartesian Impedance Controller (Task-Space Dynamic Compliance & Nullspace Posture)
 cartesian_impedance_controller:
@@ -111,10 +118,10 @@ cartesian_impedance_controller:
       - fer_joint7
     ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
-    translational_stiffness: 200.0   # Translational virtual spring stiffness K_p (N/m)
-    rotational_stiffness: 150.0      # Rotational virtual spring stiffness K_o (Nm/rad)
-    translational_damping: 10.0      # Translational virtual damper D_p (Ns/m)
-    rotational_damping: 1.0          # Rotational virtual damper D_o (Nms/rad)
+    translational_stiffness: 2000.0
+    rotational_stiffness: 150.0
+    translational_damping: 10.0
+    rotational_damping: 1.0
     nullspace_stiffness: 0.2         # Nullspace posture stiffness K_ns (Nm/rad)
     joint1_nullspace_stiffness: 100.0 # High stiffness dedicated to base yaw joint to prevent drift
     delta_tau_max: 1.0               # Maximum torque rate of change per iteration (Nm/ms)

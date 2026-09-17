@@ -4,6 +4,7 @@
 #include <string>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/empty.hpp>
@@ -45,6 +46,15 @@ private:
 
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+    // Velocity feedforward companion to pose_pub_: dmp_.velocity() / qdmp_.omega()
+    // are native analytic state (see core::DMP::velocity(), core::QuaternionDMP::
+    // omega()), not a finite-difference reconstruction. Published in the SAME
+    // demo-local frame as pose_pub_ (no TF/offset applied here - the downstream
+    // CartesianVelocityController's FrameAligner rotates it into the robot base
+    // frame using the same offset it captures for the pose). Always published,
+    // regardless of whether any consumer has feedforward enabled.
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+    std::string target_twist_topic_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr target_odom_sub_;
     // TF (world -> EE) for the goal-frame correction in startTimer(); created

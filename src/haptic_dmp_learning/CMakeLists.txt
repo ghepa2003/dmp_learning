@@ -229,6 +229,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_gripper_ramp test/test_gripper_ramp.cpp)
   target_link_libraries(test_gripper_ramp ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
+  target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
 endif()
 
 ament_package()

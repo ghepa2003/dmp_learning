@@ -136,6 +136,14 @@ public:
     /// @brief Returns the current integrated 3D position y.
     const Eigen::Vector3d& position() const { return y_; }
 
+    /**
+     * @brief Returns the current instantaneous Cartesian velocity dy/dt, real time
+     *        scale. z_ (transformation-system scaled velocity, z = tau * dy/dt) is
+     *        already integrated as native state on every step() call (core/dmp.cpp);
+     *        this is a plain unscaling, not a numerical derivative.
+     */
+    Eigen::Vector3d velocity() const { return z_ / tau_; }
+
     /// @brief Returns the current phase state x in [0, 1].
     double phase() const { return x_; }
 

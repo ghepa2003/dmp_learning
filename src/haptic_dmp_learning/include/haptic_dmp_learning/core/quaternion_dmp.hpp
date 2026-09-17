@@ -101,6 +101,16 @@ public:
     /// @brief Returns the current integrated unit quaternion orientation q.
     const Eigen::Quaterniond& orientation() const { return q_; }
 
+    /**
+     * @brief Returns the current instantaneous angular velocity omega = eta / tau,
+     *        real time scale, expressed in the same fixed (base/world) frame as
+     *        orientation()/goal() - eta_ is scaled angular velocity (eta = tau *
+     *        omega), already integrated as native state on every step() call
+     *        (core/quaternion_dmp.cpp); this is a plain unscaling, not a
+     *        numerical derivative.
+     */
+    Eigen::Vector3d omega() const { return eta_ / tau_; }
+
     /// @brief Returns true if weights have been successfully learned or loaded.
     bool isLearned() const { return learned_; }
 

@@ -119,12 +119,12 @@ def prepare_launch_description():
         function=get_robot_description,
         args=[arm_id, load_gripper, franka_hand])
 
-    # Gazebo Sim
+    # Gazebo Sim (headless server with -s)
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
     gazebo_empty_world = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
-        launch_arguments={'gz_args': 'empty.sdf -r'}.items(),
+        launch_arguments={'gz_args': '-s -r empty.sdf'}.items(),
     )
 
     # Spawn
@@ -161,16 +161,18 @@ def prepare_launch_description():
         condition=UnlessCondition(headless),
     )
 
-    load_joint_state_broadcaster = ExecuteProcess(
-        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
-             'joint_state_broadcaster'],
-        output='screen'
+    load_joint_state_broadcaster = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster', '--controller-manager-timeout', '60'],
+        output='screen',
     )
 
-    load_velocity_cartesian_controller = ExecuteProcess(
-        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
-             'velocity_cartesian_controller'],
-        output='screen'
+    load_velocity_cartesian_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['velocity_cartesian_controller', '--controller-manager-timeout', '60'],
+        output='screen',
     )
 
     return LaunchDescription([
@@ -183,18 +185,8 @@ def prepare_launch_description():
         rviz,
         clock_bridge,
         spawn,
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=spawn,
-                on_exit=[load_joint_state_broadcaster],
-            )
-        ),
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=load_joint_state_broadcaster,
-                on_exit=[load_velocity_cartesian_controller],
-            )
-        ),
+        load_joint_state_broadcaster,
+        load_velocity_cartesian_controller,
         Node(
             package='joint_state_publisher',
             executable='joint_state_publisher',
