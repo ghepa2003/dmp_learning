@@ -135,6 +135,21 @@ def prepare_launch_description():
         output='screen',
     )
 
+    # Bridge Gazebo's /clock to ROS 2. The stock Franka Gazebo bringup does NOT
+    # do this: neither gz_sim.launch.py nor gz_ros2_control exposes a /clock
+    # bridge in this configuration, so every ROS-side node started with
+    # use_sim_time:=true gets a clock that never advances.
+    clock_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='clock_bridge',
+        output='screen',
+        arguments=[
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock'
+        ],
+        parameters=[{'use_sim_time': True}],
+    )
+
     # Visualize in RViz (only if not headless)
     rviz_file = os.path.join(get_package_share_directory('franka_description'), 'rviz',
                              'visualize_franka.rviz')
@@ -166,6 +181,7 @@ def prepare_launch_description():
         gazebo_empty_world,
         robot_state_publisher,
         rviz,
+        clock_bridge,
         spawn,
         RegisterEventHandler(
             event_handler=OnProcessExit(
