@@ -175,8 +175,21 @@ ament_target_dependencies(demo_replay_sync_orchestrator_node
   ament_index_cpp
 )
 
+# ${PROJECT_NAME}_core is installed separately (top-level lib/, EXPORT set)
+# from the executables below (lib/${PROJECT_NAME}/, ros2-run convention), so
+# it can be consumed as an ordinary ament_cmake dependency by other colcon
+# packages (e.g. satellite_grasp_planner, for core::ProDMP) via
+# ament_target_dependencies(). This does not change any existing behaviour:
+# the executables keep installing exactly where they did before.
 install(TARGETS
   ${PROJECT_NAME}_core
+  EXPORT export_${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(TARGETS
   haptic_dmp_wrapper_node
   dmp_gazebo_executor_node
   prodmp_gazebo_executor_node
@@ -233,5 +246,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
   target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
 endif()
+
+ament_export_include_directories(include)
+ament_export_libraries(${PROJECT_NAME}_core)
+ament_export_targets(export_${PROJECT_NAME})
+ament_export_dependencies(Eigen3 yaml-cpp)
 
 ament_package()

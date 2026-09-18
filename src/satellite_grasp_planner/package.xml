@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="http://download.ros.org/schema/package_format3.xsd"?>
+<package format="3">
+  <name>satellite_grasp_planner</name>
+  <version>0.1.0</version>
+  <description>
+    Phase/goal planner for model-mediated teleoperated grasping of a rotating
+    target satellite: picks the approach start time that maximizes Panda
+    translational manipulability along the ProDMP approach path (Level 1).
+  </description>
+  <maintainer email="lorenzo.ghessi@mail.polimi.it">Lorenzo Ghessi</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>eigen</depend>
+  <depend>pinocchio</depend>
+  <depend>haptic_dmp_learning</depend>
+  <depend>franka_cartesian_control</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
