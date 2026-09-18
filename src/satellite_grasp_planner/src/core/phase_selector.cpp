@@ -87,6 +87,18 @@ PhaseSelector::Candidate PhaseSelector::scoreCandidate(
     cand.goal_position = rotation.transformPointAt(arrival, grasp_pos_body);
     cand.goal_orientation = rotation.transformOrientationAt(arrival, grasp_quat_body);
 
+    const double dist_from_base = cand.goal_position.norm();
+    if (dist_from_base > params_.max_reach_m) {
+        cand.is_feasible = false;
+        cand.score = 0.0;
+        std::cerr << "[PhaseSelector] Candidate at t_start=" << t_start
+                  << "s (goal=[" << cand.goal_position.x() << ", " << cand.goal_position.y()
+                  << ", " << cand.goal_position.z() << "], dist=" << dist_from_base
+                  << "m) exceeds max_reach_m=" << params_.max_reach_m
+                  << "m. Pruned as infeasible without simulation." << std::endl;
+        return cand;
+    }
+
     // Copy the fitted template (value type, cheap) and retarget it to this
     // candidate's fixed arrival goal - see class docs for why the goal is
     // fixed per-candidate rather than tracking the moving target mid-approach
@@ -169,30 +181,37 @@ PhaseSelector::Result PhaseSelector::select(const SatelliteRotationModel& rotati
     }
 
     // --- Fine pass: refine only around the coarse best, only if not
-    // degenerate and budget allows (coarse-to-fine, see class docs). ---
+    // degenerate, budget allows, and at least one feasible candidate was found ---
     if (period > 0.0 && !budget_hit && !evaluated.empty()) {
-        const auto coarse_best_it = std::max_element(
-            evaluated.begin(), evaluated.end(),
-            [](const Candidate& a, const Candidate& b) { return a.score < b.score; });
-        const double best_t = coarse_best_it->t_start;
-        const double half_window = 0.5 * params_.fine_window_fraction * period;
+        const Candidate* coarse_best = nullptr;
+        for (const auto& c : evaluated) {
+            if (c.is_feasible) {
+                if (!coarse_best || c.score > coarse_best->score) {
+                    coarse_best = &c;
+                }
+            }
+        }
+        if (coarse_best) {
+            const double best_t = coarse_best->t_start;
+            const double half_window = 0.5 * params_.fine_window_fraction * period;
 
-        const int n_fine = std::max(1, params_.fine_candidates);
-        for (int i = 0; i < n_fine; ++i) {
-            if (budgetExceeded()) {
-                budget_hit = true;
-                break;
+            const int n_fine = std::max(1, params_.fine_candidates);
+            for (int i = 0; i < n_fine; ++i) {
+                if (budgetExceeded()) {
+                    budget_hit = true;
+                    break;
+                }
+                const double frac =
+                    (n_fine == 1) ? 0.5 : static_cast<double>(i) / static_cast<double>(n_fine - 1);
+                double t_start = best_t - half_window + frac * (2.0 * half_window);
+                // Wrap into [0, period) - the search is over a periodic phase.
+                t_start = std::fmod(t_start, period);
+                if (t_start < 0.0) {
+                    t_start += period;
+                }
+                evaluated.push_back(scoreCandidate(t_start, rotation, grasp_pos_body, grasp_quat_body,
+                                                    q0, ee_init_position, ee_init_orientation));
             }
-            const double frac =
-                (n_fine == 1) ? 0.5 : static_cast<double>(i) / static_cast<double>(n_fine - 1);
-            double t_start = best_t - half_window + frac * (2.0 * half_window);
-            // Wrap into [0, period) - the search is over a periodic phase.
-            t_start = std::fmod(t_start, period);
-            if (t_start < 0.0) {
-                t_start += period;
-            }
-            evaluated.push_back(scoreCandidate(t_start, rotation, grasp_pos_body, grasp_quat_body,
-                                                q0, ee_init_position, ee_init_orientation));
         }
     }
 
@@ -208,24 +227,44 @@ PhaseSelector::Result PhaseSelector::select(const SatelliteRotationModel& rotati
         return result;
     }
 
-    const auto best_it = std::max_element(
-        evaluated.begin(), evaluated.end(),
-        [](const Candidate& a, const Candidate& b) { return a.score < b.score; });
+    int n_infeasible = 0;
+    std::vector<const Candidate*> feasible_ptrs;
+    for (const auto& c : evaluated) {
+        if (!c.is_feasible) {
+            n_infeasible++;
+        } else {
+            feasible_ptrs.push_back(&c);
+        }
+    }
+    result.candidates_evaluated = static_cast<int>(evaluated.size());
+    result.candidates_infeasible = n_infeasible;
+    result.budget_exceeded = budget_hit;
+
+    if (feasible_ptrs.empty()) {
+        result.below_threshold = true;
+        result.message = "PhaseSelector: all " + std::to_string(evaluated.size()) +
+                          " candidates were infeasible (exceeded max_reach_m=" +
+                          std::to_string(params_.max_reach_m) + "m).";
+        std::cerr << "[PhaseSelector] FAIL: " << result.message << std::endl;
+        return result;
+    }
+
+    const auto best_it = *std::max_element(
+        feasible_ptrs.begin(), feasible_ptrs.end(),
+        [](const Candidate* a, const Candidate* b) { return a->score < b->score; });
 
     result.t_start = best_it->t_start;
     result.score = best_it->score;
     result.best_score_lower_bound = result.score * (1.0 - params_.known_branch_uncertainty);
     result.goal_position = best_it->goal_position;
     result.goal_orientation = best_it->goal_orientation;
-    result.candidates_evaluated = static_cast<int>(evaluated.size());
-    result.budget_exceeded = budget_hit;
 
-    // Determine runner-up score among candidates (distinct from best)
-    if (evaluated.size() >= 2) {
+    // Determine runner-up score among feasible candidates (distinct from best)
+    if (feasible_ptrs.size() >= 2) {
         double second_best = 0.0;
-        for (const auto& c : evaluated) {
-            if (&c == &(*best_it)) continue;
-            if (c.score > second_best) second_best = c.score;
+        for (const auto* c : feasible_ptrs) {
+            if (c == best_it) continue;
+            if (c->score > second_best) second_best = c->score;
         }
         result.runner_up_score = second_best;
         if (result.score > 1e-9) {

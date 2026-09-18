@@ -70,6 +70,35 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     world_frame_ = this->declare_parameter<std::string>("world_frame", "world");
     ee_frame_ = this->declare_parameter<std::string>("ee_frame", "fer_hand_tcp");
 
+    // Satellite rotation model (position-only reach test - see startTimer()).
+    // Default disabled: with satellite_rotation_enabled=false every branch
+    // below is identical to today's behaviour byte-for-byte.
+    satellite_rotation_enabled_ =
+        this->declare_parameter<bool>("satellite_rotation_enabled", false);
+    satellite_rotation_mode_ =
+        this->declare_parameter<std::string>("satellite_rotation_mode", "frozen");
+    {
+        std::vector<double> axis_param = this->declare_parameter<std::vector<double>>(
+            "satellite_rotation_axis", std::vector<double>{0.0, 0.0, 1.0});
+        std::vector<double> center_param = this->declare_parameter<std::vector<double>>(
+            "satellite_rotation_center", std::vector<double>{0.0, 0.0, 0.0});
+        if (axis_param.size() != 3 || center_param.size() != 3) {
+            RCLCPP_FATAL(this->get_logger(),
+                         "satellite_rotation_axis and satellite_rotation_center must each have "
+                         "exactly 3 elements (got %zu and %zu).",
+                         axis_param.size(), center_param.size());
+            throw std::runtime_error(
+                "prodmp_gazebo_executor_node: malformed satellite_rotation_axis/center parameter");
+        }
+        satellite_rotation_axis_ = Eigen::Vector3d(axis_param[0], axis_param[1], axis_param[2]);
+        satellite_rotation_center_ =
+            Eigen::Vector3d(center_param[0], center_param[1], center_param[2]);
+    }
+    satellite_rotation_angular_velocity_deg_s_ =
+        this->declare_parameter<double>("satellite_rotation_angular_velocity_deg_s", 2.0);
+    satellite_rotation_frozen_phase_deg_ =
+        this->declare_parameter<double>("satellite_rotation_frozen_phase_deg", 0.0);
+
     // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
     // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
     gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
@@ -92,6 +121,9 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     }
     demo_init_pos_ = prodmp_.initPos();
     demo_init_vel_ = prodmp_.initVel();
+    // p_grasp_demo for the satellite rotation model below - captured now,
+    // before anything else can call setGoal() and overwrite it.
+    demo_grasp_goal_ = prodmp_.goal();
 
     // 2b. Load the orientation (quaternion) model. ProDMP does not model
     // orientation in this project by default, so a plain ProDMP weights file
@@ -214,12 +246,19 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
         "/gripper_close_complete", rclcpp::QoS(10));
 
-    // 4b. One-shot target retarget subscription + TF, created only when required
-    // (identical to dmp_gazebo_executor_node).
+    // 4b. One-shot target retarget subscription, created only when required
+    // (identical to dmp_gazebo_executor_node). The TF listener is created
+    // whenever EITHER feature needs to anchor the ProDMP init position to the
+    // real EE pose - target_odom_required_ (live retarget) or
+    // satellite_rotation_enabled_ (rotation retarget) - so the satellite
+    // rotation branch in startTimer() can rely on tf_buffer_ existing without
+    // also requiring target_odom_required_=true.
     if (target_odom_required_) {
         target_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             target_odom_topic_, rclcpp::QoS(10),
             std::bind(&ProDmpGazeboExecutorNode::odomCallback, this, std::placeholders::_1));
+    }
+    if (target_odom_required_ || satellite_rotation_enabled_) {
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
     }
@@ -232,6 +271,24 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
                 control_rate_hz_, target_pose_topic_.c_str(), startup_delay_sec_,
                 target_odom_required_ ? "true" : "false",
                 target_odom_topic_.c_str(), target_odom_timeout_sec_);
+
+    if (satellite_rotation_enabled_) {
+        RCLCPP_INFO(this->get_logger(),
+                    "satellite_rotation_enabled=true, mode='%s': axis=[%.4f, %.4f, %.4f], "
+                    "center=[%.4f, %.4f, %.4f] (world/base frame), "
+                    "angular_velocity_deg_s=%.3f, frozen_phase_deg=%.3f "
+                    "(demo grasp point p_grasp_demo=[%.4f, %.4f, %.4f]).",
+                    satellite_rotation_mode_.c_str(),
+                    satellite_rotation_axis_.x(), satellite_rotation_axis_.y(),
+                    satellite_rotation_axis_.z(), satellite_rotation_center_.x(),
+                    satellite_rotation_center_.y(), satellite_rotation_center_.z(),
+                    satellite_rotation_angular_velocity_deg_s_,
+                    satellite_rotation_frozen_phase_deg_, demo_grasp_goal_.x(),
+                    demo_grasp_goal_.y(), demo_grasp_goal_.z());
+    } else {
+        RCLCPP_INFO(this->get_logger(),
+                    "satellite_rotation_enabled=false: no rotation model applied.");
+    }
 
     // Preventive warning for use_sim_time:=true with no /clock publisher
     // (identical to dmp_gazebo_executor_node).
@@ -267,8 +324,125 @@ void ProDmpGazeboExecutorNode::odomCallback(const nav_msgs::msg::Odometry::Share
                 target_position_.x(), target_position_.y(), target_position_.z());
 }
 
+bool ProDmpGazeboExecutorNode::lookupEeNowWithRetry(Eigen::Vector3d& ee_now) {
+    if (!odom_wait_started_) {
+        odom_wait_start_ = this->now();
+        odom_wait_started_ = true;
+    }
+
+    geometry_msgs::msg::TransformStamped ee_tf;
+    try {
+        ee_tf = tf_buffer_->lookupTransform(world_frame_, ee_frame_, tf2::TimePointZero);
+    } catch (const tf2::TransformException& ex) {
+        const double waited = (this->now() - odom_wait_start_).seconds();
+        if (waited >= target_odom_timeout_sec_) {
+            RCLCPP_FATAL(this->get_logger(),
+                         "TF lookup '%s' -> '%s' still unavailable %.2f s after startup "
+                         "(%s). Cannot anchor the ProDMP initial position - refusing to "
+                         "replay the retarget. Is the robot state / TF tree being published?",
+                         world_frame_.c_str(), ee_frame_.c_str(),
+                         target_odom_timeout_sec_, ex.what());
+            throw std::runtime_error(
+                "prodmp_gazebo_executor_node: TF lookup '" + world_frame_ + "' -> '" +
+                ee_frame_ + "' timed out for the retarget");
+        }
+        startup_timer_ = rclcpp::create_timer(
+            this, this->get_clock(),
+            rclcpp::Duration::from_seconds(0.1),
+            std::bind(&ProDmpGazeboExecutorNode::startTimer, this));
+        return false;
+    }
+
+    ee_now = Eigen::Vector3d(ee_tf.transform.translation.x, ee_tf.transform.translation.y,
+                              ee_tf.transform.translation.z);
+    return true;
+}
+
 void ProDmpGazeboExecutorNode::startTimer() {
     if (startup_timer_) startup_timer_->cancel();
+
+    if (satellite_rotation_enabled_) {
+        // tf_buffer_/tf_listener_ are constructed in 4b. above whenever
+        // satellite_rotation_enabled_ is true, INDEPENDENTLY of
+        // target_odom_required_ - this branch does not need
+        // target_odom_required_=true for anything (it calls
+        // prodmp_.setRelativeGoal(true) itself below, and never falls through
+        // to the target_odom_required_ branches further down since it always
+        // returns). Run with target_odom_required:=false for a pure static
+        // reach test - it avoids subscribing to the unused
+        // /free_target_object/odometry topic.
+        Eigen::Vector3d ee_now;
+        if (!lookupEeNowWithRetry(ee_now)) {
+            return;  // re-polling scheduled by lookupEeNowWithRetry(); try again in 0.1 s
+        }
+
+        if (satellite_rotation_mode_ != "frozen") {
+            // Fail loud WITHOUT throwing: startTimer() runs off an rclcpp
+            // timer callback, where an uncaught exception is not guaranteed
+            // to surface as clearly as a plain log line. The node stays
+            // alive (matches the empty-capture-buffer pattern in
+            // GraspForceCalibrationNode::finishCaptureWindow()) but never
+            // arms step_timer_, so the rollout simply never starts.
+            RCLCPP_ERROR(this->get_logger(),
+                         "satellite_rotation_mode='%s' not implemented yet - requires Level 1 "
+                         "PhaseSelector integration. Node will not start the rollout.",
+                         satellite_rotation_mode_.c_str());
+            return;
+        }
+
+        // 1. Convert demo grasp goal from local demo frame to world coordinates
+        // using the real end-effector initial anchor (same principle as target_odom_required_):
+        const Eigen::Vector3d p_grasp_demo_world = ee_now + demo_grasp_goal_;
+
+        // 2. Apply satellite rotation model (axis, center, theta) in world frame:
+        const double theta_rad = satellite_rotation_frozen_phase_deg_ * M_PI / 180.0;
+        const Eigen::AngleAxisd rot(theta_rad, satellite_rotation_axis_.normalized());
+        const Eigen::Vector3d p_grasp_rotated_world =
+            satellite_rotation_center_ + rot * (p_grasp_demo_world - satellite_rotation_center_);
+
+        // 3. Hand over to ProDMP in world coordinates with relativeGoal=true.
+        // ProDMP::setGoal(p_grasp_rotated_world) stores internally:
+        //   goal_param_ = p_grasp_rotated_world - ee_now
+        // At theta = 0 (rot = Identity):
+        //   p_grasp_rotated_world == p_grasp_demo_world == ee_now + demo_grasp_goal_
+        //   goal_param_ == demo_grasp_goal_ (ee_now cancels algebraically).
+        prodmp_.setRelativeGoal(true);
+        prodmp_.setInitialConditions(/*init_time=*/0.0, ee_now, Eigen::Vector3d::Zero());
+        prodmp_.setGoal(p_grasp_rotated_world);
+        // Solo la posizione del goal viene ruotata secondo il modello di
+        // rotazione del satellite; l'orientamento resta quello demo-nativo,
+        // coerente con un test di solo reach - la geometria di presa sarà
+        // introdotta con il grasping. qdmp_.reset() qui NON applica nessuna
+        // rotazione: si limita a riportare lo stato dell'integratore
+        // (fase x_, quaternione corrente q_, velocità angolare eta_) alle
+        // condizioni della demo (q0_), esattamente come nel ramo
+        // target_odom_required_ sopra - goal_ dell'orientamento non viene mai
+        // toccato (nessun qdmp_.setGoal() qui, come là), quindi resta quello
+        // caricato dal file dei pesi.
+        qdmp_.reset();
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Satellite rotation retarget (mode=frozen, phase=%.2f deg):\n"
+                    "  1. Local demo goal [%.4f, %.4f, %.4f] + EE anchor [%.4f, %.4f, %.4f] -> demo world grasp [%.4f, %.4f, %.4f]\n"
+                    "  2. Rotated in world (center=[%.4f, %.4f, %.4f], axis=[%.4f, %.4f, %.4f]) -> target world grasp [%.4f, %.4f, %.4f]\n"
+                    "  3. Relative goal parameter passed to ProDMP: [%.4f, %.4f, %.4f] (world, %s -> %s) | orientation demo-native.",
+                    satellite_rotation_frozen_phase_deg_,
+                    demo_grasp_goal_.x(), demo_grasp_goal_.y(), demo_grasp_goal_.z(),
+                    ee_now.x(), ee_now.y(), ee_now.z(),
+                    p_grasp_demo_world.x(), p_grasp_demo_world.y(), p_grasp_demo_world.z(),
+                    satellite_rotation_center_.x(), satellite_rotation_center_.y(), satellite_rotation_center_.z(),
+                    satellite_rotation_axis_.x(), satellite_rotation_axis_.y(), satellite_rotation_axis_.z(),
+                    p_grasp_rotated_world.x(), p_grasp_rotated_world.y(), p_grasp_rotated_world.z(),
+                    (p_grasp_rotated_world - ee_now).x(), (p_grasp_rotated_world - ee_now).y(), (p_grasp_rotated_world - ee_now).z(),
+                    world_frame_.c_str(), ee_frame_.c_str());
+
+        RCLCPP_INFO(this->get_logger(), "Starting ProDMP rollout.");
+        step_timer_ = rclcpp::create_timer(
+            this, this->get_clock(),
+            rclcpp::Duration::from_seconds(dt_),
+            std::bind(&ProDmpGazeboExecutorNode::stepCallback, this));
+        return;
+    }
 
     if (!target_odom_required_) {
         // No target to retarget toward: replay the demonstration's ORIGINAL goal
@@ -322,32 +496,10 @@ void ProDmpGazeboExecutorNode::startTimer() {
     // to where the end-effector actually is now. If the TF is not available yet,
     // re-poll on the SAME overall odometry timeout, exactly like the "odometry
     // not received" branch above - no separate TF timeout.
-    geometry_msgs::msg::TransformStamped ee_tf;
-    try {
-        ee_tf = tf_buffer_->lookupTransform(world_frame_, ee_frame_, tf2::TimePointZero);
-    } catch (const tf2::TransformException& ex) {
-        const double waited = (this->now() - odom_wait_start_).seconds();
-        if (waited >= target_odom_timeout_sec_) {
-            RCLCPP_FATAL(this->get_logger(),
-                         "TF lookup '%s' -> '%s' still unavailable %.2f s after startup "
-                         "(%s). Cannot anchor the ProDMP initial position - refusing to "
-                         "replay the retarget. Is the robot state / TF tree being published?",
-                         world_frame_.c_str(), ee_frame_.c_str(),
-                         target_odom_timeout_sec_, ex.what());
-            throw std::runtime_error(
-                "prodmp_gazebo_executor_node: TF lookup '" + world_frame_ + "' -> '" +
-                ee_frame_ + "' timed out for the retarget");
-        }
-        startup_timer_ = rclcpp::create_timer(
-            this, this->get_clock(),
-            rclcpp::Duration::from_seconds(0.1),
-            std::bind(&ProDmpGazeboExecutorNode::startTimer, this));
-        return;
+    Eigen::Vector3d ee_now;
+    if (!lookupEeNowWithRetry(ee_now)) {
+        return;  // re-polling scheduled by lookupEeNowWithRetry(); try again in 0.1 s
     }
-
-    const Eigen::Vector3d ee_now(ee_tf.transform.translation.x,
-                                 ee_tf.transform.translation.y,
-                                 ee_tf.transform.translation.z);
 
     // Native ProDMP retarget - no manual frame bridging.
     //

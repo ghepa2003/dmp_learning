@@ -499,3 +499,62 @@ TEST(PhaseSelectorTest, FlagsIndecisionMarginWhenCandidatesAreWithinThreshold) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Test 7: Reachability check prunes candidates exceeding max_reach_m
+// ---------------------------------------------------------------------
+TEST(PhaseSelectorTest, PrunesInfeasibleCandidatesExceedingMaxReach) {
+    auto robot_model = loadPandaRobotModel();
+    ASSERT_NE(robot_model, nullptr);
+
+    RobotModel::JointVector q0;
+    q0 << 0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854;
+    robot_model->update(q0, RobotModel::JointVector::Zero());
+    Eigen::Vector3d ee0_pos = robot_model->eePosition();
+    Eigen::Quaterniond ee0_quat = robot_model->eeOrientation();
+
+    // 1. All candidates completely out of reach (> 1.2m)
+    SatelliteRotationModel rotation_unreachable;
+    rotation_unreachable.center = Eigen::Vector3d(1.5, 0.0, 0.5);
+    rotation_unreachable.axis = Eigen::Vector3d::UnitZ();
+    rotation_unreachable.phase0 = 0.0;
+    rotation_unreachable.omega = 0.1;
+
+    auto prodmp_template = makeSyntheticProDmpTemplate();
+
+    PhaseSelector::Params params;
+    params.coarse_candidates = 8;
+    params.fine_candidates = 8;
+    params.max_reach_m = 0.80;
+
+    PhaseSelector selector_unreachable(robot_model, prodmp_template, params);
+    auto res_unreachable = selector_unreachable.select(
+        rotation_unreachable, Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(),
+        q0, ee0_pos, ee0_quat);
+
+    EXPECT_GT(res_unreachable.candidates_infeasible, 0);
+    EXPECT_EQ(res_unreachable.candidates_infeasible, res_unreachable.candidates_evaluated);
+    EXPECT_TRUE(res_unreachable.below_threshold);
+    EXPECT_EQ(res_unreachable.score, 0.0);
+
+    // 2. Mixed rotation circle: some candidates inside 0.80m, some outside
+    // Center at [0.70, 0.0, 0.3], radius = 0.20m => distance ranges [0.56m, 0.95m]
+    SatelliteRotationModel rotation_mixed;
+    rotation_mixed.center = Eigen::Vector3d(0.70, 0.0, 0.3);
+    rotation_mixed.axis = Eigen::Vector3d::UnitY();
+    rotation_mixed.phase0 = 0.0;
+    rotation_mixed.omega = 0.1;
+
+    Eigen::Vector3d grasp_body = Eigen::Vector3d(0.20, 0.0, 0.0);
+
+    PhaseSelector selector_mixed(robot_model, prodmp_template, params);
+    auto res_mixed = selector_mixed.select(
+        rotation_mixed, grasp_body, Eigen::Quaterniond::Identity(),
+        q0, ee0_pos, ee0_quat);
+
+    EXPECT_GT(res_mixed.candidates_infeasible, 0);
+    EXPECT_LT(res_mixed.candidates_infeasible, res_mixed.candidates_evaluated);
+    EXPECT_GT(res_mixed.score, 0.0);
+    EXPECT_LE(res_mixed.goal_position.norm(), params.max_reach_m + 1e-6);
+}
+
+

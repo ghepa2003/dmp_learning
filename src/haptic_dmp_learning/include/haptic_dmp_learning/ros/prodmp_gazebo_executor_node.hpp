@@ -57,6 +57,19 @@ private:
     void stepCallback();
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
+    /// @brief Looks up world_frame_ -> ee_frame_ via TF, retrying every 0.1 s
+    /// against odom_wait_start_/target_odom_timeout_sec_ until it succeeds or
+    /// the shared timeout fires (fail-loud, throws). Factored out of
+    /// startTimer() so BOTH the live-target retarget branch and the satellite
+    /// rotation branch (which also needs a real EE anchor for
+    /// prodmp_.setInitialConditions(), regardless of where the goal itself
+    /// comes from) share one implementation instead of two copies.
+    /// @return true if ee_now was resolved; false if the caller should return
+    ///         and wait for the next 0.1 s re-poll (startTimer() reschedules
+    ///         itself before returning false - this function never re-arms
+    ///         the timer itself, to keep timer ownership in one place).
+    bool lookupEeNowWithRetry(Eigen::Vector3d& ee_now);
+
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
     // Velocity feedforward companion to pose_pub_: prodmp_.velocity() / qdmp_.omega()
@@ -113,6 +126,19 @@ private:
     bool odom_wait_started_ = false;   ///< true once startTimer() began counting toward the timeout
     rclcpp::Time odom_wait_start_;     ///< node-clock instant the odometry wait started
     Eigen::Vector3d target_position_ = Eigen::Vector3d::Zero();
+
+    // Satellite rotation model (position-only reach test; see class docs and
+    // startTimer()). p_grasp_demo, captured once right after the ProDMP load
+    // and never touched afterward (prodmp_.goal() would already be
+    // overwritten by the time the target_odom_required_ branch runs its own
+    // retarget).
+    Eigen::Vector3d demo_grasp_goal_ = Eigen::Vector3d::Zero();
+    bool satellite_rotation_enabled_;
+    std::string satellite_rotation_mode_;  ///< "frozen" (impl.) | "continuous" (not yet)
+    Eigen::Vector3d satellite_rotation_axis_;
+    Eigen::Vector3d satellite_rotation_center_;
+    double satellite_rotation_angular_velocity_deg_s_;
+    double satellite_rotation_frozen_phase_deg_;
 
     // Parameters
     std::string weights_yaml_path_;             ///< ProDMP position weights (prodmp_weights_<run_id>.yaml)

@@ -112,9 +112,16 @@ public:
         double indecision_margin_fraction = 0.25;
 
         /// @brief Expected intrinsic uncertainty fraction on the predicted manipulability score
+        /// @brief Expected intrinsic uncertainty fraction on the predicted manipulability score
         /// of the winning candidate due to multi-basin dynamic postural bifurcations.
         /// Calibrated on the worst-case observed divergence across impedance control replicates (Goal 2: +23.9% ~ 0.24).
         double known_branch_uncertainty = 0.24;
+
+        /// @brief Maximum reachable Euclidean distance from robot base frame origin (m).
+        /// Candidates whose predicted arrival goal exceeds this distance are pruned immediately
+        /// as infeasible without running the expensive joint-path simulation.
+        /// Default 0.80m gives a safety margin below the physical Panda limit (~0.855m).
+        double max_reach_m = 0.80;
 
         // --- Budget ---
         double max_wall_time_sec = 120.0;  ///< abort (fail loud, keep best-so-far) if the scan exceeds this
@@ -138,8 +145,9 @@ public:
         Eigen::Vector3d goal_position = Eigen::Vector3d::Zero();
         Eigen::Quaterniond goal_orientation = Eigen::Quaterniond::Identity();
         int candidates_evaluated = 0;
+        int candidates_infeasible = 0;   ///< count of candidates pruned early due to reachability limit (dist > max_reach_m)
         bool budget_exceeded = false;    ///< true if max_wall_time_sec was hit before the scan finished
-        bool below_threshold = false;    ///< true if score < Params::score_threshold
+        bool below_threshold = false;    ///< true if score < Params::score_threshold or all candidates infeasible
         bool indecisive_margin = false;  ///< true if score_margin < Params::indecision_margin_fraction
         std::string message;             ///< human-readable explanation, set whenever a flag above is true
     };
@@ -161,10 +169,11 @@ public:
 
 private:
     struct Candidate {
-        double t_start;
-        double score;
-        Eigen::Vector3d goal_position;
-        Eigen::Quaterniond goal_orientation;
+        double t_start = 0.0;
+        double score = 0.0;
+        bool is_feasible = true;
+        Eigen::Vector3d goal_position = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond goal_orientation = Eigen::Quaterniond::Identity();
     };
 
     Candidate scoreCandidate(double t_start, const SatelliteRotationModel& rotation,

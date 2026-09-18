@@ -118,7 +118,7 @@ cartesian_impedance_controller:
       - fer_joint7
     ee_frame_name: fer_hand_tcp
     target_pose_topic: /target_pose
-    translational_stiffness: 2000.0
+    translational_stiffness: 200.0
     rotational_stiffness: 150.0
     translational_damping: 10.0
     rotational_damping: 1.0
