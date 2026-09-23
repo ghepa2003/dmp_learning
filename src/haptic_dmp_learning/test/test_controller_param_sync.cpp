@@ -17,6 +17,10 @@ TEST(ControllerParamSync, ParamNameMatchesTheControllerSideName) {
     EXPECT_STREQ(kInitialAlignmentPositionOverrideParamName, "initial_alignment_position_override");
 }
 
+TEST(ControllerParamSync, SkipInitialAlignmentParamNameMatchesTheControllerSideName) {
+    EXPECT_STREQ(kSkipInitialAlignmentParamName, "skip_initial_alignment");
+}
+
 TEST(ControllerParamSync, ToAlignmentOverrideValuePacksXyzInOrder) {
     const Eigen::Vector3d ee_now(0.512, -0.034, 0.287);
     const std::vector<double> value = toAlignmentOverrideValue(ee_now);

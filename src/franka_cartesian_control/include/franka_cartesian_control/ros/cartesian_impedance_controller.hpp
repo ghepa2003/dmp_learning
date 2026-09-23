@@ -49,8 +49,11 @@ private:
     // in ros_utils.hpp for why this parameter exists. onSetParameters() handles `ros2 param set` at
     // runtime; on_init() applies the parameter's initial value the same way, so a value supplied via
     // launch file (before the callback is even registered) is also picked up.
+    // skip_initial_alignment follows the exact same on_init()/onSetParameters() pattern - see
+    // FrameAligner::setIdentityAlignment() in ros_utils.hpp.
     rcl_interfaces::msg::SetParametersResult onSetParameters(const std::vector<rclcpp::Parameter>& parameters);
     void applyInitialAlignmentPositionOverride(const std::vector<double>& values);
+    void applySkipInitialAlignment(bool skip);
     rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr on_set_parameters_callback_handle_;
 
     // params

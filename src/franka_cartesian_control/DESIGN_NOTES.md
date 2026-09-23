@@ -52,3 +52,32 @@
   `demo_replay_sync_orchestrator_node` (which aborts if `/clock` is silent) and
   the sim-time conversion of `dmp_gazebo_executor_node` /
   `csv_master_pose_player_node`.
+
+## Known debt: `CartesianVelocityController` was never extended with `FrameAligner`'s alignment-bypass parameters
+
+- `FrameAligner` (`ros_utils.hpp`) is shared between `CartesianImpedanceController` and
+  `CartesianVelocityController`, but `initial_alignment_position_override` (Fix 2 - offset
+  computed from an expected initial position instead of deduced from whichever `/target_pose`
+  sample the RealtimeBuffer happens to read first) and `skip_initial_alignment` (identity bypass
+  for branches where world and the robot base frame are confirmed coincident, e.g.
+  `satellite_rotation`/`target_odom_required` in `prodmp_gazebo_executor_node`) were added ONLY to
+  `CartesianImpedanceController` (`on_init()`/`onSetParameters()` there declare both ROS 2
+  parameters and call `frame_aligner_.setInitialAlignmentPositionOverride()` /
+  `frame_aligner_.setIdentityAlignment()`). `cartesian_velocity_controller.cpp` still only ever
+  calls `frame_aligner_.reset()` and `frame_aligner_.align()` - no parameter, no override, no
+  bypass.
+
+- Consequence: a velocity-controller-based rollout using `satellite_rotation`/`target_odom_required`
+  today would still hit the original race (`~5.70 mm` residual, deduced-from-first-raw_pos) with
+  no way to opt out of it or even reduce it to the Fix 2 residual, since
+  `syncControllerAlignmentOverride()`/`syncControllerSkipInitialAlignment()` on the
+  `haptic_dmp_learning` side target `cartesian_impedance_controller` specifically
+  (`cartesian_controller_node_name` parameter), not whatever controller happens to be loaded.
+
+- **No historical or planned run requires this today (verified 2026-09-22).** If
+  `satellite_rotation` is ever combined with the velocity controller in the future, replicate the
+  same three pieces there: the `initial_alignment_position_override`/`skip_initial_alignment`
+  parameter declarations + `onSetParameters()` handling (mirror
+  `cartesian_impedance_controller.cpp`), and the corresponding
+  `syncControllerAlignmentOverride()`/`syncControllerSkipInitialAlignment()` calls on the node
+  side pointed at the velocity controller's node name instead.

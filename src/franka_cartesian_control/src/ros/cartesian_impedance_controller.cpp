@@ -86,6 +86,17 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         applyInitialAlignmentPositionOverride(
             node->get_parameter("initial_alignment_position_override").as_double_array());
 
+        // 6. Optional skip_initial_alignment (bool, default false). Bypasses FrameAligner
+        // entirely (identity offset) for branches where world and the robot base frame are known
+        // to coincide exactly and any alignment offset - including the
+        // initial_alignment_position_override-based one above, which still has a small residual
+        // from sampling activation_ee_position_ and the override's ee_now at two different times
+        // - would be pure noise. See FrameAligner::setIdentityAlignment() in ros_utils.hpp.
+        if (!node->has_parameter("skip_initial_alignment")) {
+            node->declare_parameter<bool>("skip_initial_alignment", false);
+        }
+        applySkipInitialAlignment(node->get_parameter("skip_initial_alignment").as_bool());
+
         on_set_parameters_callback_handle_ = node->add_on_set_parameters_callback(
             std::bind(&CartesianImpedanceController::onSetParameters, this, std::placeholders::_1));
 
@@ -152,10 +163,30 @@ void CartesianImpedanceController::applyInitialAlignmentPositionOverride(const s
 }
 
 /**
- * @brief add_on_set_parameters_callback handler: reacts to initial_alignment_position_override.
- * Rejects the update (successful=false) if initial_alignment_position_override is present but
- * not exactly 3 elements; any-NaN or all-set is otherwise always accepted (NaN just means "clear
- * the override").
+ * @brief Applies skip_initial_alignment's current value to frame_aligner_. true => identity
+ * bypass takes over for the NEXT alignment capture (see FrameAligner::setIdentityAlignment());
+ * false => bypass cleared, reverting to override-or-first-raw_pos deduction (FrameAligner
+ * decides which of those two based on whether initial_alignment_position_override_ is set -
+ * unaffected by this parameter either way).
+ */
+void CartesianImpedanceController::applySkipInitialAlignment(bool skip) {
+    if (skip) {
+        frame_aligner_.setIdentityAlignment();
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "skip_initial_alignment=true: FrameAligner will pass raw_pos/raw_quat through "
+                    "UNCHANGED (identity offset), ignoring both the first raw target sample and "
+                    "initial_alignment_position_override.");
+    } else {
+        frame_aligner_.clearIdentityAlignment();
+    }
+}
+
+/**
+ * @brief add_on_set_parameters_callback handler: reacts to initial_alignment_position_override
+ * and skip_initial_alignment. Rejects the update (successful=false) if
+ * initial_alignment_position_override is present but not exactly 3 elements; any-NaN or all-set
+ * is otherwise always accepted (NaN just means "clear the override"). skip_initial_alignment is
+ * always accepted (plain bool, nothing to validate).
  */
 rcl_interfaces::msg::SetParametersResult CartesianImpedanceController::onSetParameters(
     const std::vector<rclcpp::Parameter>& parameters) {
@@ -170,6 +201,8 @@ rcl_interfaces::msg::SetParametersResult CartesianImpedanceController::onSetPara
                 return result;
             }
             applyInitialAlignmentPositionOverride(values);
+        } else if (param.get_name() == "skip_initial_alignment") {
+            applySkipInitialAlignment(param.as_bool());
         }
     }
     return result;

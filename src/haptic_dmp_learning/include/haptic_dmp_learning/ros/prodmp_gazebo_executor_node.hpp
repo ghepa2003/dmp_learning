@@ -80,9 +80,22 @@ private:
     /// controller_param_sync_timeout_sec_ - no silent fallback to the old racy behavior.
     void syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now);
 
+    /// @brief Sets core::controller_param_sync::kSkipInitialAlignmentParamName on the
+    /// cartesian_impedance_controller node, BEFORE step_timer_ starts publishing /target_pose.
+    /// Called TOGETHER with syncControllerAlignmentOverride() (same call sites, same client, same
+    /// fail-loud convention) from the satellite_rotation and target_odom_required branches only -
+    /// see those call sites in startTimer() for why: both already anchor init_pos_/goal in
+    /// absolute world coordinates via anchorAndRotate(), and world/fer_link0 are confirmed
+    /// coincident, so any FrameAligner offset there - INCLUDING the
+    /// initial_alignment_position_override-based one from syncControllerAlignmentOverride() - is
+    /// pure noise. The baseline/pure-replay branch (target_odom_required_=false) is deliberately
+    /// left untouched: alignment is still needed there.
+    void syncControllerSkipInitialAlignment(bool skip);
+
     /// @brief Lazily creates param_sync_helper_node_/controller_param_client_ if not already
-    /// present, used by syncControllerAlignmentOverride() so its blocking parameter call goes
-    /// through a client that was never added to the process's main executor.
+    /// present, shared by syncControllerAlignmentOverride() and
+    /// syncControllerSkipInitialAlignment() so both parameters go through the SAME client/helper
+    /// node instead of each reconnecting separately.
     ///
     /// @details Why a whole extra rclcpp::Node, not just rclcpp::SyncParametersClient(this, ...):
     /// rclcpp::Node tracks, PER NODE (not per executor instance), whether it is currently
@@ -108,7 +121,7 @@ private:
     /// Lifetime: created once, lazily, on first use, and intentionally never destroyed - it lives
     /// for the rest of the process (a plain member, torn down implicitly when `this` is). That
     /// means "prodmp_param_sync_helper" is visible in `ros2 node list` for the process's whole
-    /// lifetime after the first call, not just around the blocking call it's actually used for -
+    /// lifetime after the first call, not just around the 2 blocking calls it's actually used for -
     /// graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
     /// in the process, never recreated). Acceptable given this node's actual deployment: a fresh
     /// subprocess per rollout (see run_satellite_rotation_experiment.py), so the extra node dies
@@ -173,10 +186,11 @@ private:
     rclcpp::Time odom_wait_start_;     ///< node-clock instant the odometry wait started
     Eigen::Vector3d target_position_ = Eigen::Vector3d::Zero();
 
-    // syncControllerAlignmentOverride() target: the cartesian_impedance_controller ROS 2 node
-    // name/timeout, and a lazily-created parameters client reused across calls (only a couple of
-    // calls per rollout today, but a future caller doing several retargets in the same process
-    // should not reconnect each time). See controller_param_sync.hpp for the parameter itself.
+    // syncControllerAlignmentOverride()/syncControllerSkipInitialAlignment() target: the
+    // cartesian_impedance_controller ROS 2 node name/timeout, and a lazily-created parameters
+    // client reused across calls (only 2 calls per rollout today, but a future caller doing
+    // several retargets in the same process should not reconnect each time). See
+    // controller_param_sync.hpp for the parameters themselves.
     std::string cartesian_controller_node_name_;
     double controller_param_sync_timeout_sec_;
     // Dedicated node used ONLY as controller_param_client_'s identity - never `this`, and never

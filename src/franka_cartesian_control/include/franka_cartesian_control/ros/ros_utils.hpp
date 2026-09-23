@@ -81,10 +81,11 @@ public:
      * @param initial_pos Physical end-effector position at activation.
      * @param initial_quat Physical end-effector orientation quaternion at activation.
      *
-     * @details Does NOT touch initial_position_override_: it is caller-set state (a ROS
-     * parameter, see setInitialAlignmentPositionOverride()), independent of the
-     * activate/deactivate cycle, so it survives reset() and is reused on the next activation
-     * unless the caller explicitly clears or overwrites it.
+     * @details Does NOT touch initial_position_override_ or identity_forced_: both are
+     * caller-set state (ROS parameters, see setInitialAlignmentPositionOverride() and
+     * setIdentityAlignment()), independent of the activate/deactivate cycle, so they survive
+     * reset() and are reused on the next activation unless the caller explicitly clears or
+     * overwrites them.
      */
     void reset(const Eigen::Vector3d& initial_pos, const Eigen::Quaterniond& initial_quat) {
         activation_ee_position_ = initial_pos;
@@ -125,6 +126,41 @@ public:
     void clearInitialAlignmentPositionOverride() { initial_position_override_.reset(); }
 
     /**
+     * @brief Forces align() to pass raw_pos/raw_quat through UNCHANGED (identity offset),
+     * bypassing both the first-raw_pos deduction AND initial_alignment_position_override_.
+     *
+     * @details
+     * For callers where world and the robot base frame are known to coincide EXACTLY (e.g. a
+     * satellite-rotation/target-odom branch that already anchors init_pos_/goal in absolute
+     * world coordinates via anchorAndRotate() before publishing) - any alignment offset there is
+     * pure noise, not signal. In particular initial_alignment_position_override_ itself has a
+     * residual (~1.89 mm observed) because activation_ee_position_ and the override's ee_now are
+     * sampled at two different times (on_activate() vs. rollout start) - identity bypasses that
+     * residual entirely instead of merely reducing it.
+     *
+     * initial_position_override_ is left UNTOUCHED on purpose (does not call
+     * clearInitialAlignmentPositionOverride()): if a future branch forgets to also call this
+     * method but still sets initial_alignment_position_override_, align() falls back to the
+     * override-based offset (~1.89 mm residual) instead of the original first-raw_pos race
+     * (~5.70 mm) - a defensive degrade path, not a silently worse failure. See align()'s
+     * identity_forced_ check for the actual precedence.
+     *
+     * Must be called before the first align() of the activation cycle to take effect, same as
+     * setInitialAlignmentPositionOverride(). Survives reset() (see its doc comment) - clear
+     * explicitly with clearIdentityAlignment() if a later activation should NOT bypass alignment
+     * (e.g. switching back to the baseline/replay branch in the same process).
+     */
+    void setIdentityAlignment() {
+        identity_forced_ = true;
+        alignment_captured_ = true;
+        position_offset_.setZero();
+        orientation_offset_.setIdentity();
+    }
+
+    /// @brief Clears the identity bypass, reverting to override-or-first-raw_pos deduction.
+    void clearIdentityAlignment() { identity_forced_ = false; }
+
+    /**
      * @brief Transforms a raw input target pose into the robot's base frame.
      * @param raw_pos Input raw position from DMP/device.
      * @param raw_quat Input raw orientation quaternion.
@@ -136,22 +172,40 @@ public:
                Eigen::Vector3d& aligned_pos, Eigen::Quaterniond& aligned_quat,
                rclcpp::Logger* logger = nullptr) {
         if (!alignment_captured_) {
-            // See setInitialAlignmentPositionOverride(): when set, use it instead of this
-            // raw_pos as the "expected first sample" to compute the offset from. aligned_pos
-            // below still uses the ACTUAL raw_pos received - only the offset computation is
-            // affected.
-            const Eigen::Vector3d& expected_initial_pos =
-                initial_position_override_.has_value() ? *initial_position_override_ : raw_pos;
-            position_offset_ = activation_ee_position_ - expected_initial_pos;
-            orientation_offset_ = activation_ee_orientation_ * raw_quat.conjugate();
+            // identity_forced_ takes priority over BOTH initial_position_override_ and the
+            // first-raw_pos deduction - see setIdentityAlignment(). Checked here (not just
+            // precomputed once in setIdentityAlignment()) so the bypass also survives a reset()
+            // in between: identity_forced_ persists across reset() same as
+            // initial_position_override_ does, so even though reset() clears
+            // alignment_captured_, the NEXT align() re-derives the zero offset instead of
+            // falling back to raw_pos/override.
+            if (identity_forced_) {
+                position_offset_.setZero();
+                orientation_offset_.setIdentity();
+            } else {
+                // See setInitialAlignmentPositionOverride(): when set, use it instead of this
+                // raw_pos as the "expected first sample" to compute the offset from. aligned_pos
+                // below still uses the ACTUAL raw_pos received - only the offset computation is
+                // affected. Fallback path: if identity_forced_ was supposed to be set but a
+                // caller forgot (bug), this degrades to the Fix 2 behavior (~1.89 mm residual)
+                // instead of the original first-raw_pos race (~5.70 mm) - see
+                // setIdentityAlignment()'s doc comment.
+                const Eigen::Vector3d& expected_initial_pos =
+                    initial_position_override_.has_value() ? *initial_position_override_ : raw_pos;
+                position_offset_ = activation_ee_position_ - expected_initial_pos;
+                orientation_offset_ = activation_ee_orientation_ * raw_quat.conjugate();
+            }
             alignment_captured_ = true;
             if (logger) {
                 RCLCPP_INFO(*logger,
                             "Captured DMP->robot alignment: position offset = [%.3f, %.3f, %.3f] m%s",
                             position_offset_.x(), position_offset_.y(), position_offset_.z(),
-                            initial_position_override_.has_value()
-                                ? " (from initial_alignment_position_override, not the first raw sample)"
-                                : "");
+                            identity_forced_
+                                ? " (identity bypass via skip_initial_alignment - world/base frame "
+                                  "assumed coincident, override and first raw sample both ignored)"
+                                : (initial_position_override_.has_value()
+                                       ? " (from initial_alignment_position_override, not the first raw sample)"
+                                       : ""));
             }
         }
         aligned_pos = position_offset_ + raw_pos;
@@ -160,6 +214,9 @@ public:
 
     /// @brief Returns true if the alignment offset has already been locked for the current activation cycle.
     bool isCaptured() const { return alignment_captured_; }
+
+    /// @brief Returns true if setIdentityAlignment() is currently in effect (see its doc comment).
+    bool isIdentityForced() const { return identity_forced_; }
 
     /**
      * @brief Transforms a raw feedforward twist (demo-local frame, same frame as
@@ -199,6 +256,7 @@ public:
 
 private:
     bool alignment_captured_ = false;
+    bool identity_forced_ = false;
     Eigen::Vector3d position_offset_ = Eigen::Vector3d::Zero();
     Eigen::Quaterniond orientation_offset_ = Eigen::Quaterniond::Identity();
     Eigen::Vector3d activation_ee_position_ = Eigen::Vector3d::Zero();

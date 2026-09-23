@@ -451,6 +451,48 @@ void ProDmpGazeboExecutorNode::syncControllerAlignmentOverride(const Eigen::Vect
                 cartesian_controller_node_name_.c_str(), cps::kInitialAlignmentPositionOverrideParamName);
 }
 
+void ProDmpGazeboExecutorNode::syncControllerSkipInitialAlignment(bool skip) {
+    namespace cps = core::controller_param_sync;
+
+    ensureControllerParamClient();  // same client as syncControllerAlignmentOverride() (reused)
+
+    const std::chrono::duration<double> timeout(controller_param_sync_timeout_sec_);
+
+    if (!controller_param_client_->wait_for_service(timeout)) {
+        const std::string m = "syncControllerSkipInitialAlignment: parameter service of "
+                               "controller node '" + cartesian_controller_node_name_ +
+                               "' not available after " +
+                               std::to_string(controller_param_sync_timeout_sec_) +
+                               " s. Refusing to start the rollout without '" +
+                               std::string(cps::kSkipInitialAlignmentParamName) + "' in place.";
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error("prodmp_gazebo_executor_node: " + m);
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "Setting '%s' on controller node '%s' to %s BEFORE starting step_timer_ - world "
+                "and the robot base frame coincide exactly for this branch (anchorAndRotate() "
+                "already publishes in absolute world coordinates), so FrameAligner should apply "
+                "identity, not even the initial_alignment_position_override-based offset.",
+                cps::kSkipInitialAlignmentParamName, cartesian_controller_node_name_.c_str(),
+                skip ? "true" : "false");
+
+    const rcl_interfaces::msg::SetParametersResult result = controller_param_client_->set_parameters_atomically(
+        {rclcpp::Parameter(cps::kSkipInitialAlignmentParamName, skip)}, timeout);
+
+    if (!result.successful) {
+        const std::string m = "syncControllerSkipInitialAlignment: controller node '" +
+                               cartesian_controller_node_name_ + "' rejected '" +
+                               std::string(cps::kSkipInitialAlignmentParamName) +
+                               "': " + result.reason;
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error("prodmp_gazebo_executor_node: " + m);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Confirmed: controller node '%s' accepted '%s'.",
+                cartesian_controller_node_name_.c_str(), cps::kSkipInitialAlignmentParamName);
+}
+
 void ProDmpGazeboExecutorNode::startTimer() {
     if (startup_timer_) startup_timer_->cancel();
 
@@ -535,6 +577,14 @@ void ProDmpGazeboExecutorNode::startTimer() {
         // the s=0-exact first tick) - the correct value to hand the controller as its expected
         // initial position.
         syncControllerAlignmentOverride(ee_now);
+        // world and fer_link0 coincide exactly (confirmed), and anchorAndRotate() above already
+        // anchored init_pos_/goal in absolute world coordinates - so the alignment offset itself
+        // should be identity, not even the override-based one just set above (that override still
+        // has a ~1.89 mm residual from sampling activation_ee_position_ and ee_now at two
+        // different times). Deliberately kept TOGETHER with the override call, not instead of it -
+        // see syncControllerSkipInitialAlignment()'s doc comment for the defensive fallback this
+        // gives if a future branch forgets to call it.
+        syncControllerSkipInitialAlignment(true);
         step_timer_ = rclcpp::create_timer(
             this, this->get_clock(),
             rclcpp::Duration::from_seconds(dt_),
@@ -640,6 +690,10 @@ void ProDmpGazeboExecutorNode::startTimer() {
     RCLCPP_INFO(this->get_logger(), "Starting ProDMP rollout.");
     // ee_now is the ProDMP's actual init position for this branch (setInitialConditions() above).
     syncControllerAlignmentOverride(ee_now);
+    // Same reasoning as the satellite_rotation branch above: target_position_/ee_now are already
+    // in absolute world coordinates and world == fer_link0, so identity is correct here too. See
+    // that call site and syncControllerSkipInitialAlignment()'s doc comment.
+    syncControllerSkipInitialAlignment(true);
     step_timer_ = rclcpp::create_timer(
         this, this->get_clock(),
         rclcpp::Duration::from_seconds(dt_),

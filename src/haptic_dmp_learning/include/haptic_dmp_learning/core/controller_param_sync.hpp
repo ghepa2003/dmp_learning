@@ -19,6 +19,18 @@ namespace controller_param_sync {
 inline constexpr const char* kInitialAlignmentPositionOverrideParamName =
     "initial_alignment_position_override";
 
+/// Name of the cartesian_impedance_controller ROS 2 parameter (bool, default false) that forces
+/// FrameAligner::setIdentityAlignment() - a pure pass-through, bypassing BOTH the first-raw_pos
+/// deduction and kInitialAlignmentPositionOverrideParamName. For branches where world and the
+/// robot base frame are known to coincide exactly (anchorAndRotate() already publishes in
+/// absolute world coordinates), even the override above has a small residual (~1.89 mm observed)
+/// from sampling activation_ee_position_ and ee_now at two different times - identity removes it
+/// entirely. Set TOGETHER with kInitialAlignmentPositionOverrideParamName (not instead of it): if
+/// this parameter is ever left unset by mistake, the controller falls back to the override-based
+/// offset (Fix 2, ~1.89 mm residual) instead of the original first-raw_pos race (~5.70 mm) - see
+/// FrameAligner::setIdentityAlignment() in ros_utils.hpp for the full precedence rule.
+inline constexpr const char* kSkipInitialAlignmentParamName = "skip_initial_alignment";
+
 /// Pure logic (no ROS) of what the node sends as the override value: same ee_now already used to
 /// anchor prodmp_.setInitialConditions(), just repackaged as the flat double[3] the parameter
 /// expects.
