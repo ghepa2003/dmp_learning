@@ -264,3 +264,29 @@ doing anything else, `demo_replay_sync_orchestrator` subscribes to `/clock` and
 waits `clock_wait_timeout_sec` (default 10 s, wall clock) for the first message;
 on timeout it logs `FATAL` and exits non-zero rather than proceeding with a
 clock that never advances.
+
+## 2026-09-22 fix: `anchorAndRotate()` goal was off by the demo's own init position (~192 mm)
+
+`demo_grasp_goal_` was captured as `prodmp_.goal()` - the raw absolute grasp coordinate stored in
+`weights.yaml` (`relative_goal: false`), i.e. the point in the demo's own local frame, **not** a
+displacement from where the demo started. `anchorAndRotate()` (frozen and continuous both call it,
+`satellite_intercept.hpp`) then computed `p_demo_world = ee_anchor + demo_grasp_goal_`, treating that
+absolute coordinate as if it were an offset from `ee_anchor` - silently double-counting
+`demo_init_pos_` and shifting every world-frame goal by ~192 mm (measured on the affected weights file).
+The pure baseline branch (`target_odom_required_=false`, no rotation) never had this bug: it hands
+`demo_init_pos_` to ProDMP as `init_pos_` with `relativeGoal=true` and lets `ProDMP::setGoal()` compute
+`new_goal - init_pos_` internally - the one place this subtraction should happen.
+
+Fix: `ProDMP::demoDisplacement()` (`core/prodmp.hpp`) now exposes `goal() - initPos()`, the physical
+displacement the demo covered, independent of `relativeGoal()`/runtime re-anchoring. `demo_grasp_goal_`
+is captured via this accessor instead of `prodmp_.goal()` (`prodmp_gazebo_executor_node.cpp`, at load
+time, before anything else can call `setGoal()`/`setInitialConditions()`); `anchorAndRotate()` itself is
+unchanged, since it was already computing `ee_anchor + goal` correctly - only what was passed as `goal`
+was wrong.
+
+**All frozen-mode results computed before this fix (phase 30/90/180/270 runs) and any
+`satellite_grasp_planner` output derived from them are on goals translated by ~192 mm from the
+correct point and are not reusable for quantitative conclusions without re-running.**
+`satellite_grasp_planner`'s `PhaseSelector`/`JointPathSimulator` do not read `weights.yaml`
+themselves - they take `grasp_pos_body` as a caller-supplied parameter, so once the caller passes the
+corrected displacement the fix propagates without any change needed in that package.

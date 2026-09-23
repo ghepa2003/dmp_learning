@@ -14,6 +14,7 @@
 
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
+#include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include "haptic_dmp_learning/core/controller_param_sync.hpp"
 
 namespace haptic_dmp_learning {

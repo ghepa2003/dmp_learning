@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
+#include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include <vector>
 #include <cmath>
 #include <cstdio>
@@ -215,6 +216,85 @@ TEST(ProDMPCoreTest, RelativeGoalGeneralization) {
     Eigen::Vector3d pos = mp.position();
     for (int i = 0; i < N - 1; ++i) pos = mp.step(dt);
     EXPECT_NEAR((pos - p_goal_new).norm(), 0.0, 0.04);
+}
+
+/**
+ * @brief demoDisplacement() must equal goal() - initPos() for known values, both when the goal
+ *        is stored absolute (relative_goal=false, e.g. loaded straight from weights.yaml) and
+ *        when it is stored relative to init_pos_ - the same physical displacement either way.
+ */
+TEST(ProDMPCoreTest, DemoDisplacementIsGoalMinusInitPos) {
+    const Eigen::Vector3d init_pos(0.2, 0.1, -0.1);
+    const Eigen::Vector3d goal_param(0.5, -0.2, 0.3);  // absolute, matches relative_goal=false
+    const std::array<Eigen::VectorXd, 3> weights = {Eigen::VectorXd::Zero(10), Eigen::VectorXd::Zero(10),
+                                                     Eigen::VectorXd::Zero(10)};
+    Eigen::VectorXd centers(10), widths(10);
+    centers.setLinSpaced(10, 0.05, 1.0);
+    widths.setConstant(10, 20.0);
+
+    ProDMP mp_abs(10);
+    mp_abs.setLearnedParameters(1.0, init_pos, Eigen::Vector3d::Zero(), goal_param, centers, widths,
+                                weights, /*relative_goal=*/false);
+    EXPECT_NEAR((mp_abs.goal() - goal_param).norm(), 0.0, 1e-12);  // absolute goal == goal_param as loaded
+    EXPECT_NEAR((mp_abs.demoDisplacement() - (goal_param - init_pos)).norm(), 0.0, 1e-12);
+
+    ProDMP mp_rel(10);
+    mp_rel.setLearnedParameters(1.0, init_pos, Eigen::Vector3d::Zero(), goal_param, centers, widths,
+                                weights, /*relative_goal=*/true);
+    EXPECT_NEAR((mp_rel.goal() - (init_pos + goal_param)).norm(), 0.0, 1e-12);
+    // Same physical displacement is recovered regardless of the internal storage convention.
+    EXPECT_NEAR((mp_rel.demoDisplacement() - goal_param).norm(), 0.0, 1e-12);
+}
+
+/**
+ * @brief Regression for the anchorAndRotate() ~192mm bug (satellite rotation frozen/continuous
+ *        branches, prodmp_gazebo_executor_node.cpp): at theta=0 (no rotation), anchoring the demo
+ *        via ee_anchor + ProDMP::demoDisplacement() and feeding it through
+ *        core::satellite_intercept::anchorAndRotate() must land on the SAME absolute goal as the
+ *        pure baseline path (relativeGoal=true, init_pos_=demo start, setGoal(goal)) - both
+ *        express the identical physical goal.
+ *
+ *        Both models are seeded directly via setLearnedParameters() (as prodmp_io's YAML loader
+ *        does) rather than fit from a demonstration via learnFromDemonstration(): a least-squares
+ *        fit of a synthetic (e.g. min-jerk) trajectory against a finite RBF basis has a nonzero
+ *        residual on the fitted goal by construction, which would swamp the ~mm-scale invariant
+ *        this test checks with fitting noise unrelated to the anchorAndRotate() bug (baseline's
+ *        setGoal() call assigns the goal parameter exactly, while a fitted satellite model's
+ *        goal() carries that residual - comparing the two would not be an apples-to-apples check).
+ *        Loading identical, exact parameters into both models instead makes this an exact
+ *        algebraic identity: only float rounding remains, hence the tight tolerance.
+ */
+TEST(ProDMPCoreTest, AnchorAndRotateAtThetaZeroMatchesBaselineGoal) {
+    using haptic_dmp_learning::core::satellite_intercept::anchorAndRotate;
+
+    const Eigen::Vector3d demo_init_pos(0.3, -0.1, 0.2);
+    const Eigen::Vector3d demo_goal(0.55, 0.05, 0.45);  // absolute, as loaded from weights.yaml
+    const std::array<Eigen::VectorXd, 3> weights = {Eigen::VectorXd::Zero(10), Eigen::VectorXd::Zero(10),
+                                                     Eigen::VectorXd::Zero(10)};
+    Eigen::VectorXd centers(10), widths(10);
+    centers.setLinSpaced(10, 0.05, 1.0);
+    widths.setConstant(10, 20.0);
+
+    // Baseline: relativeGoal=true, setGoal(demo_goal) from demo_init_pos_ - the one trusted place
+    // that computes (new_goal - init_pos_).
+    ProDMP baseline(10);
+    baseline.setLearnedParameters(1.0, demo_init_pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+                                  centers, widths, weights, /*relative_goal=*/true);
+    baseline.setInitialConditions(0.0, demo_init_pos, Eigen::Vector3d::Zero());
+    baseline.setGoal(demo_goal);
+    const Eigen::Vector3d baseline_absolute_goal = baseline.goal();
+
+    // Satellite branch: model loaded exactly as from weights.yaml (relative_goal=false, goal_param
+    // is the absolute demo_goal). ee_anchor happens to equal demo_init_pos_ here (the "no
+    // re-anchoring" case), anchored via the fixed demoDisplacement() and rotated by theta=0.
+    ProDMP satellite(10);
+    satellite.setLearnedParameters(1.0, demo_init_pos, Eigen::Vector3d::Zero(), demo_goal, centers, widths,
+                                   weights, /*relative_goal=*/false);
+    const Eigen::Vector3d ee_anchor = demo_init_pos;
+    const auto anchored = anchorAndRotate(ee_anchor, satellite.demoDisplacement(), Eigen::Vector3d::Zero(),
+                                          Eigen::Vector3d::UnitZ(), /*theta_rad=*/0.0);
+
+    EXPECT_NEAR((anchored.p_rotated_world - baseline_absolute_goal).norm(), 0.0, 1e-9);
 }
 
 /**

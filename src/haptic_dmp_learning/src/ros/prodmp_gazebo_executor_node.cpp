@@ -133,9 +133,13 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     }
     demo_init_pos_ = prodmp_.initPos();
     demo_init_vel_ = prodmp_.initVel();
-    // p_grasp_demo for the satellite rotation model below - captured now,
-    // before anything else can call setGoal() and overwrite it.
-    demo_grasp_goal_ = prodmp_.goal();
+    // Displacement (not the raw absolute goal) that the demo covered, for the satellite
+    // rotation model below: anchorAndRotate() adds this to a runtime ee anchor to get the
+    // grasp point at theta = 0, so it must already be relative to demo_init_pos_ - delegated
+    // to ProDMP::demoDisplacement() (goal() - initPos()) instead of recomputed here, so there
+    // is exactly one place that does this subtraction. Captured now, before anything else can
+    // call setGoal()/setInitialConditions() and move goal_/init_pos_ out from under it.
+    demo_grasp_goal_ = prodmp_.demoDisplacement();
 
     // 2b. Load the orientation (quaternion) model. ProDMP does not model
     // orientation in this project by default, so a plain ProDMP weights file
@@ -527,13 +531,15 @@ void ProDmpGazeboExecutorNode::startTimer() {
 
         // 1. Convert demo grasp goal from local demo frame to world coordinates
         // using the real end-effector initial anchor (same principle as target_odom_required_):
-        const Eigen::Vector3d p_grasp_demo_world = ee_now + demo_grasp_goal_;
-
-        // 2. Apply satellite rotation model (axis, center, theta) in world frame:
+        // 2. Apply satellite rotation model (axis, center, theta) in world frame. The anchoring +
+        // rotation math lives in core::satellite_intercept::anchorAndRotate; it performs exactly
+        // the operations that used to be inlined here:
+        //   p_demo = ee_now + demo_grasp_goal_;  p_rot = center + AngleAxisd(theta, axis.normalized()) * (p_demo - center)
         const double theta_rad = satellite_rotation_frozen_phase_deg_ * M_PI / 180.0;
-        const Eigen::AngleAxisd rot(theta_rad, satellite_rotation_axis_.normalized());
-        const Eigen::Vector3d p_grasp_rotated_world =
-            satellite_rotation_center_ + rot * (p_grasp_demo_world - satellite_rotation_center_);
+        const core::satellite_intercept::AnchoredGoal anchored = core::satellite_intercept::anchorAndRotate(
+            ee_now, demo_grasp_goal_, satellite_rotation_center_, satellite_rotation_axis_, theta_rad);
+        const Eigen::Vector3d& p_grasp_demo_world = anchored.p_demo_world;
+        const Eigen::Vector3d& p_grasp_rotated_world = anchored.p_rotated_world;
 
         // 3. Hand over to ProDMP in world coordinates with relativeGoal=true.
         // ProDMP::setGoal(p_grasp_rotated_world) stores internally:

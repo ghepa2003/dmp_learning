@@ -194,6 +194,16 @@ public:
     /// @brief Current absolute goal position.
     const Eigen::Vector3d& goal() const { return goal_; }
 
+    /// @brief Physical displacement the demonstration actually covered: goal() - initPos().
+    ///
+    /// Independent of relativeGoal() and of any runtime re-anchoring: goal() and initPos()
+    /// are both cached absolute quantities in the same frame the demo was recorded/loaded in,
+    /// so their difference is the demo's own displacement regardless of whether the goal is
+    /// currently stored relative to init_pos_ internally. Callers that re-anchor the demo to a
+    /// new runtime origin (e.g. ee_anchor + demoDisplacement()) should use this instead of
+    /// manually re-deriving it from goal()/initPos() or from a separately cached copy of either.
+    Eigen::Vector3d demoDisplacement() const { return goal_ - init_pos_; }
+
     /// @brief Current integrated position (equals init_pos before the first step).
     const Eigen::Vector3d& position() const { return pos_; }
 
