@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 #include <realtime_tools/realtime_publisher.hpp>
 
@@ -43,6 +44,14 @@ public:
 
 private:
     void targetPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
+    // initial_alignment_position_override support: see FrameAligner::setInitialAlignmentPositionOverride()
+    // in ros_utils.hpp for why this parameter exists. onSetParameters() handles `ros2 param set` at
+    // runtime; on_init() applies the parameter's initial value the same way, so a value supplied via
+    // launch file (before the callback is even registered) is also picked up.
+    rcl_interfaces::msg::SetParametersResult onSetParameters(const std::vector<rclcpp::Parameter>& parameters);
+    void applyInitialAlignmentPositionOverride(const std::vector<double>& values);
+    rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr on_set_parameters_callback_handle_;
 
     // params
     std::vector<std::string> joint_names_;

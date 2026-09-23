@@ -88,6 +88,10 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_velocity_ik test/test_velocity_ik.cpp)
   target_link_libraries(test_velocity_ik ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_ros_utils test/test_ros_utils.cpp)
+  ament_target_dependencies(test_ros_utils rclcpp geometry_msgs std_msgs)
+  target_link_libraries(test_ros_utils Eigen3::Eigen)
 endif()
 
 ament_export_include_directories(include)

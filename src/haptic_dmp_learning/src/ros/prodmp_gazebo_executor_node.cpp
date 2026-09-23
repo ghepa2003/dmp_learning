@@ -13,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 #include <rclcpp/create_timer.hpp>
 #include <tf2/exceptions.h>
@@ -69,6 +70,17 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     // grasp_monitoring/geometric_grasp_monitor.
     world_frame_ = this->declare_parameter<std::string>("world_frame", "world");
     ee_frame_ = this->declare_parameter<std::string>("ee_frame", "fer_hand_tcp");
+
+    // syncControllerAlignmentOverride(): name of the downstream cartesian controller's ROS 2 node
+    // (in ros2_control, the controller runs as its own node named after the controller entry in
+    // the controllers YAML - see franka_gazebo_overrides/franka_gazebo_controllers.yaml and the
+    // "cartesian_impedance_controller" spawner argument in
+    // gazebo_cartesian_impedance_control.launch.py) and how long to wait for its parameter
+    // service before failing loud.
+    cartesian_controller_node_name_ = this->declare_parameter<std::string>(
+        "cartesian_controller_node_name", "cartesian_impedance_controller");
+    controller_param_sync_timeout_sec_ =
+        this->declare_parameter<double>("controller_param_sync_timeout_sec", 5.0);
 
     // Satellite rotation model (position-only reach test - see startTimer()).
     // Default disabled: with satellite_rotation_enabled=false every branch
@@ -358,6 +370,87 @@ bool ProDmpGazeboExecutorNode::lookupEeNowWithRetry(Eigen::Vector3d& ee_now) {
     return true;
 }
 
+void ProDmpGazeboExecutorNode::ensureControllerParamClient() {
+    // See this method's full doc comment in the header for WHY a dedicated helper node is
+    // required (not just "an explicit executor") and why never destroying it is fine here.
+    // Blocking client: we are still in startTimer(), before step_timer_ exists, not in the 1 kHz
+    // RT loop - blocking here is explicitly fine, unlike in stepCallback().
+    if (controller_param_client_) return;
+
+    rclcpp::NodeOptions options;
+    options.use_global_arguments(false);
+    bool use_sim_time = false;
+    if (this->has_parameter("use_sim_time")) {
+        use_sim_time = this->get_parameter("use_sim_time").as_bool();
+    }
+    options.parameter_overrides({{"use_sim_time", use_sim_time}});
+    param_sync_helper_node_ = std::make_shared<rclcpp::Node>(
+        "prodmp_param_sync_helper", this->get_namespace(), options);
+    controller_param_client_ = std::make_shared<rclcpp::SyncParametersClient>(
+        param_sync_helper_node_, cartesian_controller_node_name_);
+}
+
+void ProDmpGazeboExecutorNode::syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now) {
+    namespace cps = core::controller_param_sync;
+
+    const std::vector<double> override_value = cps::toAlignmentOverrideValue(ee_now);
+    if (!cps::isValidAlignmentOverrideValue(override_value)) {
+        // Defensive only: lookupEeNowWithRetry() never hands back NaN today (a failed TF lookup
+        // re-polls or throws, it never returns a NaN ee_now). If it ever did, forwarding that
+        // silently would make the controller treat it as "not set" and silently fall back to the
+        // very race this fix exists to remove - fail loud instead.
+        const std::string m =
+            "syncControllerAlignmentOverride: ee_now = [" + std::to_string(ee_now.x()) + ", " +
+            std::to_string(ee_now.y()) + ", " + std::to_string(ee_now.z()) +
+            "] is not a valid override value (NaN component) - refusing to hand a bogus '" +
+            std::string(cps::kInitialAlignmentPositionOverrideParamName) + "' to the controller.";
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error("prodmp_gazebo_executor_node: " + m);
+    }
+
+    ensureControllerParamClient();
+
+    // NOTE: pass a std::chrono::duration<double> (not nanoseconds) here - SyncParametersClient's
+    // public wait_for_service()/set_parameters_atomically() overloads are templated on
+    // duration<RepT, RatioT> and forward to a PROTECTED nanoseconds overload internally; calling
+    // that protected overload directly does not compile from outside the class.
+    const std::chrono::duration<double> timeout(controller_param_sync_timeout_sec_);
+
+    if (!controller_param_client_->wait_for_service(timeout)) {
+        const std::string m = "syncControllerAlignmentOverride: parameter service of controller "
+                               "node '" + cartesian_controller_node_name_ + "' not available "
+                               "after " + std::to_string(controller_param_sync_timeout_sec_) +
+                               " s. Refusing to start the rollout without the alignment override "
+                               "in place - is the controller loaded and activated before this "
+                               "node starts, and is cartesian_controller_node_name_ correct?";
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error("prodmp_gazebo_executor_node: " + m);
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "Setting '%s' on controller node '%s' to ee_now = [%.4f, %.4f, %.4f] m (same "
+                "value anchoring the ProDMP's initial conditions) BEFORE starting step_timer_ - "
+                "this eliminates the FrameAligner's dependency on which /target_pose sample the "
+                "controller's RealtimeBuffer happens to read first.",
+                cps::kInitialAlignmentPositionOverrideParamName,
+                cartesian_controller_node_name_.c_str(), ee_now.x(), ee_now.y(), ee_now.z());
+
+    const rcl_interfaces::msg::SetParametersResult result = controller_param_client_->set_parameters_atomically(
+        {rclcpp::Parameter(cps::kInitialAlignmentPositionOverrideParamName, override_value)}, timeout);
+
+    if (!result.successful) {
+        const std::string m = "syncControllerAlignmentOverride: controller node '" +
+                               cartesian_controller_node_name_ + "' rejected '" +
+                               std::string(cps::kInitialAlignmentPositionOverrideParamName) +
+                               "': " + result.reason;
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error("prodmp_gazebo_executor_node: " + m);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Confirmed: controller node '%s' accepted '%s'.",
+                cartesian_controller_node_name_.c_str(), cps::kInitialAlignmentPositionOverrideParamName);
+}
+
 void ProDmpGazeboExecutorNode::startTimer() {
     if (startup_timer_) startup_timer_->cancel();
 
@@ -437,6 +530,11 @@ void ProDmpGazeboExecutorNode::startTimer() {
                     world_frame_.c_str(), ee_frame_.c_str());
 
         RCLCPP_INFO(this->get_logger(), "Starting ProDMP rollout.");
+        // ee_now is the ProDMP's actual init position for this branch (setInitialConditions()
+        // above), so it's also what the first published /target_pose sample will equal (thanks to
+        // the s=0-exact first tick) - the correct value to hand the controller as its expected
+        // initial position.
+        syncControllerAlignmentOverride(ee_now);
         step_timer_ = rclcpp::create_timer(
             this, this->get_clock(),
             rclcpp::Duration::from_seconds(dt_),
@@ -456,6 +554,10 @@ void ProDmpGazeboExecutorNode::startTimer() {
                     "target_odom_required=false: replaying with the DEMO'S ORIGINAL "
                     "GOAL, no retarget applied.");
         RCLCPP_INFO(this->get_logger(), "Starting ProDMP rollout.");
+        // No live ee_now in this branch (no TF lookup, no anchorAndRotate): the ProDMP's actual
+        // init position is demo_init_pos_ (setInitialConditions() above), so THAT is what the
+        // first published sample will equal - not ee_now, which isn't even in scope here.
+        syncControllerAlignmentOverride(demo_init_pos_);
         step_timer_ = rclcpp::create_timer(
             this, this->get_clock(),
             rclcpp::Duration::from_seconds(dt_),
@@ -536,6 +638,8 @@ void ProDmpGazeboExecutorNode::startTimer() {
                 target_odom_topic_.c_str());
 
     RCLCPP_INFO(this->get_logger(), "Starting ProDMP rollout.");
+    // ee_now is the ProDMP's actual init position for this branch (setInitialConditions() above).
+    syncControllerAlignmentOverride(ee_now);
     step_timer_ = rclcpp::create_timer(
         this, this->get_clock(),
         rclcpp::Duration::from_seconds(dt_),

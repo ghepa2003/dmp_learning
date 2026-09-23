@@ -10,9 +10,11 @@
 #include <std_msgs/msg/empty.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <rclcpp/parameter_client.hpp>
 
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
+#include "haptic_dmp_learning/core/controller_param_sync.hpp"
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -70,6 +72,50 @@ private:
     ///         the timer itself, to keep timer ownership in one place).
     bool lookupEeNowWithRetry(Eigen::Vector3d& ee_now);
 
+    /// @brief Sets core::controller_param_sync::kInitialAlignmentPositionOverrideParamName on the
+    /// cartesian_impedance_controller node to `ee_now` (the SAME value used to anchor
+    /// prodmp_.setInitialConditions() at the call site), BEFORE step_timer_ starts publishing
+    /// /target_pose. Eliminates the FrameAligner race described in controller_param_sync.hpp.
+    /// Fail-loud (throws) if the controller cannot be reached or rejects the parameter within
+    /// controller_param_sync_timeout_sec_ - no silent fallback to the old racy behavior.
+    void syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now);
+
+    /// @brief Lazily creates param_sync_helper_node_/controller_param_client_ if not already
+    /// present, used by syncControllerAlignmentOverride() so its blocking parameter call goes
+    /// through a client that was never added to the process's main executor.
+    ///
+    /// @details Why a whole extra rclcpp::Node, not just rclcpp::SyncParametersClient(this, ...):
+    /// rclcpp::Node tracks, PER NODE (not per executor instance), whether it is currently
+    /// associated with an executor. By the time startTimer() runs, `this` is already added to the
+    /// process's main executor (rclcpp::spin(node) in main()). SyncParametersClient's blocking
+    /// calls (set_parameters_atomically(), wait_for_service() does NOT need this, but the actual
+    /// RPC does) internally do their OWN executor_->add_node(node_base_interface) /
+    /// spin_until_future_complete() / remove_node() around the wait - and that add_node() throws
+    /// "Node has already been added to an executor." the moment it's tried on `this`, REGARDLESS
+    /// of whether executor_ is a brand-new, otherwise-unused rclcpp::Executor instance (confirmed
+    /// against the actual rclcpp Humble build in
+    /// test/test_param_client_executor_regression.cpp - passing an explicit fresh executor to
+    /// SyncParametersClient does NOT sidestep this; the conflict is the NODE's state, not which
+    /// executor object is used). The only way to make a blocking parameter-client call from
+    /// inside a node that is already spinning itself is to route it through a genuinely different
+    /// node that was never added to any executor - hence param_sync_helper_node_, a small
+    /// dedicated rclcpp::Node used ONLY as the parameter client's node identity (never spun
+    /// directly; SyncParametersClient manages its own private executor around it). This is the
+    /// standard ROS 2 Humble workaround for "synchronous service/parameter call from within a
+    /// node's own callback" (the same reason e.g. MoveGroupInterface keeps a private internal
+    /// node for its own synchronous calls).
+    ///
+    /// Lifetime: created once, lazily, on first use, and intentionally never destroyed - it lives
+    /// for the rest of the process (a plain member, torn down implicitly when `this` is). That
+    /// means "prodmp_param_sync_helper" is visible in `ros2 node list` for the process's whole
+    /// lifetime after the first call, not just around the blocking call it's actually used for -
+    /// graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
+    /// in the process, never recreated). Acceptable given this node's actual deployment: a fresh
+    /// subprocess per rollout (see run_satellite_rotation_experiment.py), so the extra node dies
+    /// with the process and never accumulates across runs. Revisit if this node is ever
+    /// refactored into a long-lived, multi-rollout process.
+    void ensureControllerParamClient();
+
     // ROS interfaces
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
     // Velocity feedforward companion to pose_pub_: prodmp_.velocity() / qdmp_.omega()
@@ -126,6 +172,19 @@ private:
     bool odom_wait_started_ = false;   ///< true once startTimer() began counting toward the timeout
     rclcpp::Time odom_wait_start_;     ///< node-clock instant the odometry wait started
     Eigen::Vector3d target_position_ = Eigen::Vector3d::Zero();
+
+    // syncControllerAlignmentOverride() target: the cartesian_impedance_controller ROS 2 node
+    // name/timeout, and a lazily-created parameters client reused across calls (only a couple of
+    // calls per rollout today, but a future caller doing several retargets in the same process
+    // should not reconnect each time). See controller_param_sync.hpp for the parameter itself.
+    std::string cartesian_controller_node_name_;
+    double controller_param_sync_timeout_sec_;
+    // Dedicated node used ONLY as controller_param_client_'s identity - never `this`, and never
+    // spun directly. See ensureControllerParamClient()'s doc comment for exactly why `this` can't
+    // be used here (a node already added to an executor breaks SyncParametersClient's blocking
+    // calls) and why never explicitly destroying this is fine given how this node is deployed.
+    std::shared_ptr<rclcpp::Node> param_sync_helper_node_;
+    std::shared_ptr<rclcpp::SyncParametersClient> controller_param_client_;
 
     // Satellite rotation model (position-only reach test; see class docs and
     // startTimer()). p_grasp_demo, captured once right after the ProDMP load

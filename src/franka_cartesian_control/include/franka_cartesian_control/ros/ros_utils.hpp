@@ -80,6 +80,11 @@ public:
      * @brief Resets the aligner upon controller activation.
      * @param initial_pos Physical end-effector position at activation.
      * @param initial_quat Physical end-effector orientation quaternion at activation.
+     *
+     * @details Does NOT touch initial_position_override_: it is caller-set state (a ROS
+     * parameter, see setInitialAlignmentPositionOverride()), independent of the
+     * activate/deactivate cycle, so it survives reset() and is reused on the next activation
+     * unless the caller explicitly clears or overwrites it.
      */
     void reset(const Eigen::Vector3d& initial_pos, const Eigen::Quaterniond& initial_quat) {
         activation_ee_position_ = initial_pos;
@@ -88,6 +93,36 @@ public:
         position_offset_.setZero();
         orientation_offset_.setIdentity();
     }
+
+    /**
+     * @brief Sets (or clears, via std::nullopt) the expected initial raw position used to
+     * compute the alignment offset, instead of deducing it from the first raw_pos passed to
+     * align().
+     *
+     * @details
+     * Problem: align() has historically captured the offset from whatever raw_pos is passed
+     * on its first call. When the publisher (e.g. a DMP replay node at 200 Hz) and the
+     * consumer (a 1 kHz realtime control loop reading a single-slot RealtimeBuffer, no queue)
+     * run at mismatched rates, there is no guarantee that the first sample the controller
+     * actually reads is the first sample the publisher actually sent - any raw_pos other than
+     * the true first one produces a spurious residual offset (observed ~4.5 mm).
+     *
+     * Fix: if the caller knows the expected initial raw position ahead of time (e.g. the DMP's
+     * init_pos_, known before the rollout starts publishing), it can pass it here. align() then
+     * computes position_offset_ = activation_ee_position_ - *override, instead of
+     * activation_ee_position_ - raw_pos, eliminating the dependency on which sample happens to
+     * arrive first. Must be called before the first align() of the activation cycle to take
+     * effect; align() itself still uses the actual raw_pos it receives to produce aligned_pos.
+     *
+     * No override set (default): behavior is UNCHANGED from before this override existed - the
+     * offset is deduced from the first raw_pos, exactly as always.
+     */
+    void setInitialAlignmentPositionOverride(const std::optional<Eigen::Vector3d>& override_pos) {
+        initial_position_override_ = override_pos;
+    }
+
+    /// @brief Clears any expected-initial-position override, reverting to first-raw_pos deduction.
+    void clearInitialAlignmentPositionOverride() { initial_position_override_.reset(); }
 
     /**
      * @brief Transforms a raw input target pose into the robot's base frame.
@@ -101,13 +136,22 @@ public:
                Eigen::Vector3d& aligned_pos, Eigen::Quaterniond& aligned_quat,
                rclcpp::Logger* logger = nullptr) {
         if (!alignment_captured_) {
-            position_offset_ = activation_ee_position_ - raw_pos;
+            // See setInitialAlignmentPositionOverride(): when set, use it instead of this
+            // raw_pos as the "expected first sample" to compute the offset from. aligned_pos
+            // below still uses the ACTUAL raw_pos received - only the offset computation is
+            // affected.
+            const Eigen::Vector3d& expected_initial_pos =
+                initial_position_override_.has_value() ? *initial_position_override_ : raw_pos;
+            position_offset_ = activation_ee_position_ - expected_initial_pos;
             orientation_offset_ = activation_ee_orientation_ * raw_quat.conjugate();
             alignment_captured_ = true;
             if (logger) {
                 RCLCPP_INFO(*logger,
-                            "Captured DMP->robot alignment: position offset = [%.3f, %.3f, %.3f] m",
-                            position_offset_.x(), position_offset_.y(), position_offset_.z());
+                            "Captured DMP->robot alignment: position offset = [%.3f, %.3f, %.3f] m%s",
+                            position_offset_.x(), position_offset_.y(), position_offset_.z(),
+                            initial_position_override_.has_value()
+                                ? " (from initial_alignment_position_override, not the first raw sample)"
+                                : "");
             }
         }
         aligned_pos = position_offset_ + raw_pos;
@@ -159,6 +203,7 @@ private:
     Eigen::Quaterniond orientation_offset_ = Eigen::Quaterniond::Identity();
     Eigen::Vector3d activation_ee_position_ = Eigen::Vector3d::Zero();
     Eigen::Quaterniond activation_ee_orientation_ = Eigen::Quaterniond::Identity();
+    std::optional<Eigen::Vector3d> initial_position_override_;
 };
 
 }  // namespace ros_wrapper

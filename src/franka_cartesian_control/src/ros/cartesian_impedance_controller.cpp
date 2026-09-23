@@ -1,6 +1,9 @@
 #include "franka_cartesian_control/ros/cartesian_impedance_controller.hpp"
 #include "franka_cartesian_control/core/cartesian_error.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <sstream>
 #include <pluginlib/class_list_macros.hpp>
 
@@ -68,6 +71,24 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         enable_contact_force_estimation_ =
             node->get_parameter("enable_contact_force_estimation").as_bool();
 
+        // 5. Optional initial_alignment_position_override (double[3], default [NaN, NaN, NaN] = "not
+        // set" sentinel - no idiomatic optional-vector-parameter pattern existed in this file, so NaN
+        // is used the same way it already is elsewhere in this codebase as an "unset"/"invalid" marker,
+        // e.g. prodmp_gazebo_executor_node.cpp). See FrameAligner::setInitialAlignmentPositionOverride()
+        // in ros_utils.hpp for what this eliminates and why. Applied here for the value at startup
+        // (launch file override, if any); onSetParameters() below applies it for later `ros2 param set`.
+        const std::vector<double> unset_override{std::numeric_limits<double>::quiet_NaN(),
+                                                   std::numeric_limits<double>::quiet_NaN(),
+                                                   std::numeric_limits<double>::quiet_NaN()};
+        if (!node->has_parameter("initial_alignment_position_override")) {
+            node->declare_parameter<std::vector<double>>("initial_alignment_position_override", unset_override);
+        }
+        applyInitialAlignmentPositionOverride(
+            node->get_parameter("initial_alignment_position_override").as_double_array());
+
+        on_set_parameters_callback_handle_ = node->add_on_set_parameters_callback(
+            std::bind(&CartesianImpedanceController::onSetParameters, this, std::placeholders::_1));
+
         impedance_solver_ = core::CartesianImpedanceSolver(params);
 
         std::ostringstream joint_names_str;
@@ -108,6 +129,50 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_init() {
         return controller_interface::CallbackReturn::ERROR;
     }
     return controller_interface::CallbackReturn::SUCCESS;
+}
+
+/**
+ * @brief Applies initial_alignment_position_override's current value to frame_aligner_.
+ * All 3 components non-NaN => override set (used from now on for the NEXT alignment capture,
+ * i.e. the next align() call after the next reset()); any NaN component => override cleared,
+ * reverting to the default "deduce from the first raw_pos" behavior.
+ */
+void CartesianImpedanceController::applyInitialAlignmentPositionOverride(const std::vector<double>& values) {
+    if (values.size() == 3 &&
+        std::none_of(values.begin(), values.end(), [](double v) { return std::isnan(v); })) {
+        frame_aligner_.setInitialAlignmentPositionOverride(Eigen::Vector3d(values[0], values[1], values[2]));
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "initial_alignment_position_override set to [%.4f, %.4f, %.4f] m: the next alignment "
+                    "offset will be computed from this expected position instead of the first raw "
+                    "target sample.",
+                    values[0], values[1], values[2]);
+    } else {
+        frame_aligner_.clearInitialAlignmentPositionOverride();
+    }
+}
+
+/**
+ * @brief add_on_set_parameters_callback handler: reacts to initial_alignment_position_override.
+ * Rejects the update (successful=false) if initial_alignment_position_override is present but
+ * not exactly 3 elements; any-NaN or all-set is otherwise always accepted (NaN just means "clear
+ * the override").
+ */
+rcl_interfaces::msg::SetParametersResult CartesianImpedanceController::onSetParameters(
+    const std::vector<rclcpp::Parameter>& parameters) {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    for (const auto& param : parameters) {
+        if (param.get_name() == "initial_alignment_position_override") {
+            const auto values = param.as_double_array();
+            if (values.size() != 3) {
+                result.successful = false;
+                result.reason = "initial_alignment_position_override must have exactly 3 elements [x, y, z]";
+                return result;
+            }
+            applyInitialAlignmentPositionOverride(values);
+        }
+    }
+    return result;
 }
 
 /**

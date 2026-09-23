@@ -245,6 +245,18 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
   target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
+
+  # Pure logic of syncControllerAlignmentOverride()'s parameter payload (header-only, no ROS
+  # node graph needed - the actual parameter-client call is not unit-testable in isolation).
+  ament_add_gtest(test_controller_param_sync test/test_controller_param_sync.cpp)
+  target_link_libraries(test_controller_param_sync ${PROJECT_NAME}_core)
+
+  # Regression test for the rclcpp::SyncParametersClient / executor conflict that
+  # ensureControllerParamClient() works around with a dedicated helper node (see
+  # prodmp_gazebo_executor_node.cpp) - needs a live rclcpp graph (rclcpp::init/shutdown), unlike
+  # the header-only tests above.
+  ament_add_gtest(test_param_client_executor_regression test/test_param_client_executor_regression.cpp)
+  ament_target_dependencies(test_param_client_executor_regression rclcpp)
 endif()
 
 ament_export_include_directories(include)
