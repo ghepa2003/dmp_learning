@@ -19,6 +19,7 @@ echo "Premi Ctrl+C per fermare la registrazione al termine del rollout."
 echo ""
 
 ros2 bag record \
+    --max-cache-size 104857600 \
     "/${CONTROLLER_NAME}/target_pose_aligned" \
     "/${CONTROLLER_NAME}/actual_pose" \
     /joint_states \
