@@ -21,6 +21,14 @@ import shutil
 import numpy as np
 import pinocchio as pin
 
+def build_q_index(model, joint_names):
+    """Resolves each joint name to its Pinocchio q-vector index (model.idx_qs[joint_id]),
+    mirroring RobotModel::update's q_index resolution in robot_model.cpp. Needed because
+    model.nq (9 with hand:=true: 7 arm joints + fer_finger_joint1/2) no longer matches the
+    7-element q vectors read from joint_states_*.csv."""
+    return [model.idx_qs[model.getJointId(name)] for name in joint_names]
+
+
 WS_ROOT = "/root/thesis_ws"
 EVAL_DIR = os.path.join(WS_ROOT, "tools/gazebo_cartesian_eval")
 DATA_DIR = os.path.join(EVAL_DIR, "data")
@@ -308,18 +316,26 @@ def evaluate_metrics(run_name, phase_deg):
     # Pinocchio w_trans at final joint state
     model = pin.buildModelFromUrdf(URDF_PATH)
     data = model.createData()
-    frame_id = model.getFrameId("fer_link8")
+    frame_id = model.getFrameId("fer_hand_tcp")
 
     joint_names = [f"fer_joint{i}" for i in range(1, 8)]
+    q_index = build_q_index(model, joint_names)
     q_final = []
     with open(js_path) as f:
         rows = list(csv.DictReader(f))
         last_row = rows[-1]
         q_final = [float(last_row[jn]) for jn in joint_names]
 
-    q_arr = np.array(q_final)
-    pin.computeJointJacobians(model, data, q_arr)
-    pin.framesForwardKinematics(model, data, q_arr)
+    # Zero-pad the 7 actuated arm values into Pinocchio's full model.nq configuration
+    # vector, at the name-resolved indices in q_index. The extra DOFs (gripper finger
+    # prismatic joints under hand:=true) stay at 0.0: fer_hand_tcp is reached via a fixed
+    # joint upstream of the fingers, so their value does not affect its position, and their
+    # Jacobian columns are structurally zero - harmless to the determinant below.
+    q_full = np.zeros(model.nq)
+    for i, idx in enumerate(q_index):
+        q_full[idx] = q_final[i]
+    pin.computeJointJacobians(model, data, q_full)
+    pin.framesForwardKinematics(model, data, q_full)
     J = pin.getFrameJacobian(model, data, frame_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
     J_p = J[:3, :]
     w_trans = math.sqrt(max(0.0, np.linalg.det(J_p @ J_p.T)))

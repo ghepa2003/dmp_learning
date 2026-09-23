@@ -29,7 +29,7 @@ namespace core {
  * quantity (det(Jt*Jt^T) = product of sigma_i^2), computed here via SVD
  * instead of det() for better numerical conditioning on a near-singular Jt.
  * Both the Python script and this function use the SAME URDF
- * (fer_flat_effort.urdf), the SAME frame (fer_link8, default) and the SAME
+ * (fer_flat_effort.urdf), the SAME frame (fer_hand_tcp, default) and the SAME
  * Jacobian convention (LOCAL_WORLD_ALIGNED, via franka_cartesian_control's
  * core::RobotModel), so the numbers match the ones already validated in the
  * thesis - see test_phase_selector.cpp for the cross-check against the

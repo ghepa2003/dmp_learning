@@ -109,7 +109,7 @@ std::shared_ptr<RobotModel> loadPandaRobotModel() {
     std::vector<std::string> joint_names;
     for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
 
-    return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_link8");
+    return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_hand_tcp");
 }
 
 RobotModel::JointVector jointVectorFromRow(const std::unordered_map<std::string, double>& row) {

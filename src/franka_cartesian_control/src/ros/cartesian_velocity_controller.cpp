@@ -28,7 +28,7 @@ controller_interface::CallbackReturn CartesianVelocityController::on_init() {
 
         // 2. Declare end-effector link frame name (must exist in URDF tree)
         if (!node->has_parameter("ee_frame_name")) {
-            node->declare_parameter<std::string>("ee_frame_name", "fer_link8");
+            node->declare_parameter<std::string>("ee_frame_name", "fer_hand_tcp");
         }
         ee_frame_name_ = node->get_parameter("ee_frame_name").as_string();
 
