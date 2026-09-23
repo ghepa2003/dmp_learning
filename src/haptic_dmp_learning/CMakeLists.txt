@@ -15,6 +15,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -89,6 +90,7 @@ ament_target_dependencies(prodmp_gazebo_executor_node
   geometry_msgs
   std_msgs
   nav_msgs
+  diagnostic_msgs
   tf2_ros
   ament_index_cpp
 )
@@ -245,6 +247,10 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
   target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
+
+  # Pure logic of satellite_rotation_mode="continuous" (header-only, no ROS).
+  ament_add_gtest(test_satellite_intercept test/test_satellite_intercept.cpp)
+  target_link_libraries(test_satellite_intercept ${PROJECT_NAME}_core)
 
   # Pure logic of syncControllerAlignmentOverride()'s parameter payload (header-only, no ROS
   # node graph needed - the actual parameter-client call is not unit-testable in isolation).

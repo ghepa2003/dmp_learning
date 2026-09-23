@@ -6,6 +6,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <tf2_ros/buffer.h>
@@ -16,6 +17,9 @@
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include "haptic_dmp_learning/core/controller_param_sync.hpp"
+
+#include <memory>
+#include <optional>
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -50,6 +54,16 @@ namespace ros_wrapper {
  * must be supplied separately via orientation_weights_yaml_path (the classic
  * combined dmp_weights_<run_id>.yaml); the node fails loud if it cannot obtain
  * them.
+ *
+ * Satellite rotation, mode "continuous" (v0, open-loop predictive intercept):
+ * the contact phase is a PARAMETER (satellite_intercept_phase_deg). The node
+ * waits for the satellite phase (measured from odometry or from a model) to
+ * cross theta_trig = theta_int - omega * T_total, then starts the ProDMP rollout
+ * towards p_goal = c + R(theta_int)(p0 - c) with a time base MEASURED on the node
+ * clock (elapsed = now - t_roll0, never elapsed += dt). See core/satellite_intercept.hpp
+ * for the pure logic and ~/continuous_status (diagnostic_msgs/DiagnosticArray) for the
+ * runtime report. With satellite_rotation_enabled=false or mode="frozen" nothing of
+ * this is active.
  */
 class ProDmpGazeboExecutorNode : public rclcpp::Node {
 public:
@@ -59,6 +73,22 @@ private:
     void startTimer();
     void stepCallback();
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+
+    // ---- satellite_rotation_mode="continuous" (see class docs) ----
+    enum class ContinuousState { kIdle, kWaiting, kRunning, kFinished };
+    /// Constructor part: reads/validates parameters (throws on any error), creates the
+    /// satellite odometry subscription (measured) and the status publisher.
+    void setupContinuous();
+    /// Called from startTimer() once ee_plan is known: logs the plan and starts waiting.
+    void beginContinuous(const Eigen::Vector3d& ee_plan);
+    void onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void onModelPhaseTick();
+    void onPhaseSample(double stamp_s, double theta_rad, const Eigen::Matrix3d& R_rel);
+    void startContinuousRollout(double theta_at_trigger_rad);
+    void finishContinuousRollout(const Eigen::Vector3d& commanded_after);
+    void publishContinuousStatus();
+    /// Single non-blocking TF lookup world_frame_ -> ee_frame_; false if unavailable.
+    bool lookupEeNonBlocking(Eigen::Vector3d& ee);
 
     /// @brief Looks up world_frame_ -> ee_frame_ via TF, retrying every 0.1 s
     /// against odom_wait_start_/target_odom_timeout_sec_ until it succeeds or
@@ -79,6 +109,16 @@ private:
     /// /target_pose. Eliminates the FrameAligner race described in controller_param_sync.hpp.
     /// Fail-loud (throws) if the controller cannot be reached or rejects the parameter within
     /// controller_param_sync_timeout_sec_ - no silent fallback to the old racy behavior.
+    ///
+    /// Frozen/baseline mode ONLY for now: called from the 3 non-continuous branches of
+    /// startTimer() (satellite_rotation mode="frozen", target_odom_required_=false, and the
+    /// live-target retarget), all of which resolve a real ee_now via TF right before arming
+    /// step_timer_. The continuous branch (beginContinuous()/startContinuousRollout()) is NOT
+    /// wired up yet: its step_timer_ starts later, from a phase-crossing event during the wait
+    /// loop rather than at startup, and its "ee_now" (ee_start_, captured at the trigger, not at
+    /// beginContinuous()) is a different quantity than the ee_plan anchor used earlier - wiring
+    /// it in cleanly needs its own look at where exactly to call this, not a copy-paste of the
+    /// frozen call site. Left for a follow-up.
     void syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now);
 
     /// @brief Sets core::controller_param_sync::kSkipInitialAlignmentParamName on the
@@ -122,8 +162,8 @@ private:
     /// Lifetime: created once, lazily, on first use, and intentionally never destroyed - it lives
     /// for the rest of the process (a plain member, torn down implicitly when `this` is). That
     /// means "prodmp_param_sync_helper" is visible in `ros2 node list` for the process's whole
-    /// lifetime after the first call, not just around the 2 blocking calls it's actually used for -
-    /// graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
+    /// lifetime after the first call, not just around the 2 blocking calls it's actually used for
+    /// - graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
     /// in the process, never recreated). Acceptable given this node's actual deployment: a fresh
     /// subprocess per rollout (see run_satellite_rotation_experiment.py), so the extra node dies
     /// with the process and never accumulates across runs. Revisit if this node is ever
@@ -167,6 +207,12 @@ private:
     double dt_;
     double elapsed_;
     bool finished_;
+    // Frozen/baseline mode only (rollout_clock_ null): mirrors
+    // MeasuredTimeBase::update()'s ticks_==0 case - the first stepCallback() tick
+    // publishes s=0 exact (step_dt=0.0) instead of s=dt_/tau, so init_pos_ is not
+    // distorted before the FrameAligner captures its offset. Cleared after the
+    // first tick; unused in continuous mode.
+    bool frozen_first_tick_pending_ = true;
     double gripper_trigger_t_ = -1.0;
     bool gripper_trigger_sent_ = false;
 
@@ -213,6 +259,38 @@ private:
     Eigen::Vector3d satellite_rotation_center_;
     double satellite_rotation_angular_velocity_deg_s_;
     double satellite_rotation_frozen_phase_deg_;
+
+    // ---- continuous mode state (unused unless satellite_rotation_mode == "continuous") ----
+    bool continuous_ = false;                           ///< enabled && mode == "continuous"
+    std::optional<core::satellite_intercept::ContinuousConfig> cc_;
+    ContinuousState cstate_ = ContinuousState::kIdle;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr satellite_odom_sub_;
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr continuous_status_pub_;
+    rclcpp::TimerBase::SharedPtr continuous_status_timer_;
+    rclcpp::TimerBase::SharedPtr model_phase_timer_;
+    std::unique_ptr<core::satellite_intercept::PhaseTracker> phase_tracker_;
+    std::unique_ptr<core::satellite_intercept::PhaseConsistencyChecker> phase_checker_;
+    std::unique_ptr<core::satellite_intercept::InterceptTrigger> trigger_;
+    std::unique_ptr<core::satellite_intercept::MeasuredTimeBase> rollout_clock_;
+    bool satellite_first_sample_seen_ = false;
+    bool wait_expected_logged_ = false;
+    Eigen::Vector3d ee_plan_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d p0_ = Eigen::Vector3d::Zero();          ///< grasp point at theta = 0 (world)
+    Eigen::Vector3d p_goal_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d ee_start_ = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d latest_R_rel_ = Eigen::Matrix3d::Identity();
+    bool have_phase_ = false;
+    double theta_sat_ = 0.0;                                ///< latest unwrapped phase [rad]
+    double phase_stamp_s_ = 0.0;                            ///< header.stamp (or clock) of that sample
+    double phase_latency_s_ = 0.0;                          ///< node clock - stamp of the latest sample
+    double t_wait_start_ = 0.0, t_trigger_ = 0.0, t_at_end_ = 0.0, last_wait_log_ = 0.0;
+    double theta_at_trigger_ = 0.0, trigger_e_rad_ = 0.0;
+    double duration_sim_ = 0.0, dtheta_at_end_rad_ = 0.0;
+    bool timing_ok_ = true;
+    Eigen::Vector3d last_cmd_pos_ = Eigen::Vector3d::Zero();
+    bool have_last_cmd_ = false;
+    Eigen::Vector3d cmd_after_ = Eigen::Vector3d::Zero();
+    bool at_end_recorded_ = false;
 
     // Parameters
     std::string weights_yaml_path_;             ///< ProDMP position weights (prodmp_weights_<run_id>.yaml)

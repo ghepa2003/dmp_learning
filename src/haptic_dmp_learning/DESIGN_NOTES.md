@@ -265,7 +265,33 @@ waits `clock_wait_timeout_sec` (default 10 s, wall clock) for the first message;
 on timeout it logs `FATAL` and exits non-zero rather than proceeding with a
 clock that never advances.
 
-## 2026-09-22 fix: `anchorAndRotate()` goal was off by the demo's own init position (~192 mm)
+## `satellite_rotation_mode="continuous"` (v0): predictive open-loop intercept
+
+Pure logic lives in `include/haptic_dmp_learning/core/satellite_intercept.hpp` (Eigen + STL, no ROS;
+tests in `test/test_satellite_intercept.cpp`). The node wiring is in `prodmp_gazebo_executor_node.cpp`.
+Nothing of it is active with `satellite_rotation_enabled=false` or `mode="frozen"`; the frozen branch only
+routes its (unchanged) anchoring + rotation arithmetic through `anchorAndRotate()`.
+
+- **Contact phase is a parameter** (`satellite_intercept_phase_deg`); there is no PhaseSelector here.
+- **Trigger**: `theta_trig = theta_int - omega * T_total (mod 360)`; the rollout starts at the first phase sample
+  crossing it (no angular tolerance). If the first consumed sample is already past, the next lap is awaited.
+- **T_total** = node-clock time from trigger detection to `at_end` = `tau` (measured `elapsed >= tau`) + one
+  timer period `dt_` (first tick of `step_timer_`) + 0 (single non-blocking TF lookup of `ee_start`). The
+  `startup_delay_sec` elapses BEFORE the trigger machinery is armed and is not part of it.
+  `satellite_contact_time_s` is checked against `tau + dt_` (`contact_time_tolerance_s`,
+  `allow_contact_time_mismatch`).
+- **Time base**: `elapsed = now - t_roll0` on the node clock (sim time; `use_sim_time=true` is enforced, and
+  `ros_time_is_active()` is checked when the plan starts). ProDMP / QuaternionDMP are advanced by the MEASURED
+  step between ticks; frozen keeps `elapsed_ += dt_`.
+- **Phase**: `measured` (odometry `header.stamp`, rotation checked to be about the configured axis within 0.5 deg,
+  unwrapped; omega verified against the phase history before any trigger is accepted) or `model`
+  (`theta0 + omega * t_sim`).
+- **Report**: `~/continuous_status` (`diagnostic_msgs/DiagnosticArray`, key/value strings, `header.stamp` = node
+  clock) from the start of the wait to >= 20 s after `at_end`.
+- The detectable omega error of the consistency check is `tol / (omega * window)`: with 1 deg, 2 deg/s and 5 s
+  it is 10 %. Tighten `phase_consistency_tol_deg` / widen `phase_consistency_window_s` for a stricter check.
+
+### 2026-09-22 fix: `anchorAndRotate()` goal was off by the demo's own init position (~192 mm)
 
 `demo_grasp_goal_` was captured as `prodmp_.goal()` - the raw absolute grasp coordinate stored in
 `weights.yaml` (`relative_goal: false`), i.e. the point in the demo's own local frame, **not** a

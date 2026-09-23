@@ -18,9 +18,21 @@ echo "Output: ${BAG_DIR}"
 echo "Premi Ctrl+C per fermare la registrazione al termine del rollout."
 echo ""
 
-ros2 bag record \
+# --- Aggiunte per satellite_rotation_mode="continuous" (i topic sopra restano invariati) ---
+# /clock e ~/continuous_status dell'executor sono sempre registrati; l'odometria del satellite solo se
+# SATELLITE_ODOM_TOPIC e' impostata (es. SATELLITE_ODOM_TOPIC=/free_target_object/odometry): senza,
+# l'assenza viene dichiarata esplicitamente qui sotto. --use-sim-time: timestamp di registrazione in sim time.
+EXTRA_TOPICS=(/clock /prodmp_gazebo_executor_node/continuous_status)
+if [ -n "${SATELLITE_ODOM_TOPIC:-}" ]; then
+    EXTRA_TOPICS+=("$SATELLITE_ODOM_TOPIC")
+else
+    echo "[ATTENZIONE] SATELLITE_ODOM_TOPIC non impostata: l'odometria del satellite NON viene registrata."
+fi
+
+ros2 bag record --use-sim-time \
     --max-cache-size 104857600 \
     "/${CONTROLLER_NAME}/target_pose_aligned" \
     "/${CONTROLLER_NAME}/actual_pose" \
     /joint_states \
+    "${EXTRA_TOPICS[@]}" \
     -o "$BAG_DIR"
