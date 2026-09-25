@@ -13,6 +13,7 @@
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
 
 using namespace haptic_dmp_learning::core::satellite_intercept;
+using haptic_dmp_learning::core::radToDeg;
 
 namespace {
 

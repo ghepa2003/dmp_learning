@@ -5,6 +5,8 @@
 #include <cmath>
 #include <iostream>
 
+#include "haptic_dmp_learning/core/math_utils.hpp"
+
 namespace satellite_grasp_planner {
 namespace core {
 
@@ -27,17 +29,6 @@ double percentile(std::vector<double> values, double p) {
     }
     const double frac = rank - static_cast<double>(lo);
     return values[lo] * (1.0 - frac) + values[hi] * frac;
-}
-
-/// @brief Constant-rate SLERP with shortest-path hemisphere alignment (same
-/// convention as franka_cartesian_control::core::computePoseError).
-Eigen::Quaterniond slerpShortestPath(const Eigen::Quaterniond& q0, const Eigen::Quaterniond& q1,
-                                      double s) {
-    Eigen::Quaterniond target = q1;
-    if (q0.coeffs().dot(target.coeffs()) < 0.0) {
-        target.coeffs() = -target.coeffs();
-    }
-    return q0.slerp(s, target).normalized();
 }
 
 }  // namespace
@@ -117,7 +108,7 @@ PhaseSelector::Candidate PhaseSelector::scoreCandidate(
         CartesianSample sample;
         sample.position = prodmp.step(dt);
         const double s = std::min(1.0, static_cast<double>(i + 1) * dt / tau);
-        sample.orientation = slerpShortestPath(ee_init_orientation, cand.goal_orientation, s);
+        sample.orientation = haptic_dmp_learning::core::slerpShortestPath(ee_init_orientation, cand.goal_orientation, s);
         // No velocity feedforward - see class docs (matches the
         // feedforward_enabled_=false baseline the score is validated
         // against).

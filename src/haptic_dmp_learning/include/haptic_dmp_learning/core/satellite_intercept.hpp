@@ -28,28 +28,11 @@
 #include <utility>
 #include <vector>
 
+#include "haptic_dmp_learning/core/math_utils.hpp"
+
 namespace haptic_dmp_learning {
 namespace core {
 namespace satellite_intercept {
-
-constexpr double kPi = 3.14159265358979323846;
-
-inline double degToRad(double d) { return d * kPi / 180.0; }
-inline double radToDeg(double r) { return r * 180.0 / kPi; }
-
-/// Wraps to (-pi, pi].
-inline double wrapPi(double a) {
-    double w = std::fmod(a + kPi, 2.0 * kPi);
-    if (w <= 0.0) w += 2.0 * kPi;
-    return w - kPi;
-}
-
-/// Wraps to [0, 2*pi).
-inline double wrap2Pi(double a) {
-    double w = std::fmod(a, 2.0 * kPi);
-    if (w < 0.0) w += 2.0 * kPi;
-    return w;
-}
 
 // ---------------------------------------------------------------------------------------
 // 1. Goal math shared by frozen and continuous

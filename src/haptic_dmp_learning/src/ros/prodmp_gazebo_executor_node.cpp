@@ -953,11 +953,11 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
                 "  phase_source=%s  consistency window=%.2f s tol=%.3f deg  trigger_timeout=%.2f s  rollout_time_tol=%.3f s\n"
                 "  theta_trig=%.4f deg (mod 360)",
                 c.center.x(), c.center.y(), c.center.z(), c.axis_unit.x(), c.axis_unit.y(), c.axis_unit.z(),
-                c.omega_deg_s, c.omega_rad_s, si::radToDeg(c.theta_int_rad), c.contact_time_s, c.tau, c.dt,
+                c.omega_deg_s, c.omega_rad_s, core::radToDeg(c.theta_int_rad), c.contact_time_s, c.tau, c.dt,
                 c.expected_contact_time_s, in.contact_time_tolerance_s,
                 c.contact_time_mismatch ? " - MISMATCH ALLOWED by allow_contact_time_mismatch=true" : "",
                 source_desc.c_str(), c.consistency_window_s, c.consistency_tol_deg, c.trigger_timeout_s,
-                c.rollout_time_tol_s, si::radToDeg(trigger_->thetaTrigRad()));
+                c.rollout_time_tol_s, core::radToDeg(trigger_->thetaTrigRad()));
     if (c.contact_time_mismatch) {
         RCLCPP_WARN(this->get_logger(),
                     "satellite_contact_time_s=%.4f differs from the expected %.4f s by more than %.3f s "
@@ -1001,7 +1001,7 @@ void ProDmpGazeboExecutorNode::beginContinuous(const Eigen::Vector3d& ee_plan) {
                 p0_.x(), p0_.y(), p0_.z(), c.center.x(), c.center.y(), c.center.z(),
                 c.axis_unit.x(), c.axis_unit.y(), c.axis_unit.z(),
                 si::distanceFromAxis(p0_, c.center, c.axis_unit), p0_.norm(), (p0_ - shoulder).norm(),
-                si::radToDeg(c.theta_int_rad), p_goal_.x(), p_goal_.y(), p_goal_.z(),
+                core::radToDeg(c.theta_int_rad), p_goal_.x(), p_goal_.y(), p_goal_.z(),
                 world_frame_.c_str(), ee_frame_.c_str());
 
     const double now_s = this->now().seconds();
@@ -1011,7 +1011,7 @@ void ProDmpGazeboExecutorNode::beginContinuous(const Eigen::Vector3d& ee_plan) {
     RCLCPP_INFO(this->get_logger(),
                 "continuous: WAITING for the trigger at theta_trig=%.4f deg (theta_int %.4f - omega*T_total %.4f), "
                 "timeout %.1f s.%s",
-                si::radToDeg(trigger_->thetaTrigRad()), si::radToDeg(c.theta_int_rad),
+                core::radToDeg(trigger_->thetaTrigRad()), core::radToDeg(c.theta_int_rad),
                 c.omega_deg_s * c.contact_time_s, c.trigger_timeout_s,
                 c.measured ? " Phase from odometry (consumption gated on the phase-consistency check)."
                            : " Phase from the model theta0 + omega*t_sim.");
@@ -1077,7 +1077,7 @@ void ProDmpGazeboExecutorNode::onPhaseSample(double stamp_s, double theta_rad, c
     if (now_s - t_wait_start_ > c.trigger_timeout_s) {
         std::ostringstream m;
         m << "continuous: trigger not reached within timeout " << c.trigger_timeout_s << " s (360/|omega| + T_total + margin). "
-          << "theta_sat=" << si::radToDeg(theta_rad) << " deg, theta_trig=" << si::radToDeg(trigger_->thetaTrigRad())
+          << "theta_sat=" << core::radToDeg(theta_rad) << " deg, theta_trig=" << core::radToDeg(trigger_->thetaTrigRad())
           << " deg. No motion was started.";
         RCLCPP_FATAL(this->get_logger(), "%s", m.str().c_str());
         throw std::runtime_error(m.str());
@@ -1091,7 +1091,7 @@ void ProDmpGazeboExecutorNode::onPhaseSample(double stamp_s, double theta_rad, c
         RCLCPP_INFO(this->get_logger(),
                     "continuous: first phase sample consumed by the trigger: theta_sat=%.4f deg, e=%.4f deg, "
                     "expected wait %.1f s%s (phase-consistency error %.4f deg over >= %.1f s)",
-                    si::radToDeg(theta_rad), si::radToDeg(r.e_rad), trigger_->expectedWaitS(theta_rad),
+                    core::radToDeg(theta_rad), core::radToDeg(r.e_rad), trigger_->expectedWaitS(theta_rad),
                     r.first_sample_past ? " [already past the threshold: waiting for the NEXT lap]" : "",
                     c.measured ? phase_checker_->lastErrorDeg() : 0.0, c.consistency_window_s);
     }
@@ -1137,8 +1137,8 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
                 "relative goal=[%.4f, %.4f, %.4f]\n"
                 "  starting rollout: time base = node clock (elapsed = now - t_roll0), dt_nominal=%.4f s, tau=%.4f s, "
                 "tick_count=0",
-                t_trigger_, si::radToDeg(theta_at_trigger_rad), si::radToDeg(trigger_->thetaTrigRad()),
-                si::radToDeg(trigger_e_rad_), phase_latency_s_, ee_start_.x(), ee_start_.y(), ee_start_.z(), dev * 1000.0,
+                t_trigger_, core::radToDeg(theta_at_trigger_rad), core::radToDeg(trigger_->thetaTrigRad()),
+                core::radToDeg(trigger_e_rad_), phase_latency_s_, ee_start_.x(), ee_start_.y(), ee_start_.z(), dev * 1000.0,
                 p_goal_.x(), p_goal_.y(), p_goal_.z(), rel_goal.x(), rel_goal.y(), rel_goal.z(), dt_, prodmp_.tau());
 
     step_timer_ = rclcpp::create_timer(
@@ -1163,7 +1163,7 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
         theta_end = c.theta0_model_rad + c.omega_rad_s * now_s;
         R_end = Eigen::AngleAxisd(theta_end, c.axis_unit).toRotationMatrix();
     }
-    dtheta_at_end_rad_ = si::wrapPi(theta_end - c.theta_int_rad);
+    dtheta_at_end_rad_ = core::wrapPi(theta_end - c.theta_int_rad);
     const Eigen::Vector3d p_handle = c.center + R_end * (p0_ - c.center);
     Eigen::Vector3d ee;
     const bool ee_ok = lookupEeNonBlocking(ee);
@@ -1180,8 +1180,8 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
                 "  commanded pose before/after the at_end transition differs by %.4f mm",
                 now_s, duration_sim_, prodmp_.tau(), duration_sim_ - prodmp_.tau(), c.rollout_time_tol_s,
                 timing_ok_ ? "true" : "false", t_at_end_ - t_trigger_, c.contact_time_s,
-                si::radToDeg(theta_end), phase_stamp_s_, now_s - phase_stamp_s_, si::radToDeg(c.theta_int_rad),
-                si::radToDeg(dtheta_at_end_rad_), (p_handle - p_goal_).norm() * 1000.0, handle_ee.c_str(),
+                core::radToDeg(theta_end), phase_stamp_s_, now_s - phase_stamp_s_, core::radToDeg(c.theta_int_rad),
+                core::radToDeg(dtheta_at_end_rad_), (p_handle - p_goal_).norm() * 1000.0, handle_ee.c_str(),
                 static_cast<unsigned long long>(rollout_clock_->tickCount()), mean_p, rollout_clock_->maxPeriod(), dt_,
                 static_cast<unsigned long long>(rollout_clock_->skippedTicks()), cmd_jump_mm);
     if (!timing_ok_) {
@@ -1214,9 +1214,9 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
         }
         if (now_s - last_wait_log_ >= 10.0) {
             last_wait_log_ = now_s;
-            const double e = have_phase_ ? si::wrapPi(theta_sat_ - trigger_->thetaTrigRad()) : nan;
+            const double e = have_phase_ ? core::wrapPi(theta_sat_ - trigger_->thetaTrigRad()) : nan;
             RCLCPP_INFO(this->get_logger(), "continuous: waiting, theta_sat=%.4f deg e=%.4f deg (armed=%s)",
-                        have_phase_ ? si::radToDeg(theta_sat_) : nan, si::radToDeg(e), trigger_->armed() ? "yes" : "no");
+                        have_phase_ ? core::radToDeg(theta_sat_) : nan, core::radToDeg(e), trigger_->armed() ? "yes" : "no");
         }
     }
     if (cstate_ == ContinuousState::kFinished && now_s >= t_at_end_ + 20.0) {
@@ -1248,11 +1248,11 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
 
     const double theta_now = have_phase_ ? theta_sat_ : nan;
     kv("state", state_name);
-    kvd("theta_sat_deg", si::radToDeg(theta_now));
-    kvd("theta_trig_deg", si::radToDeg(trigger_->thetaTrigRad()));
-    kvd("e_deg", have_phase_ ? si::radToDeg(si::wrapPi(theta_sat_ - trigger_->thetaTrigRad())) : nan);
+    kvd("theta_sat_deg", core::radToDeg(theta_now));
+    kvd("theta_trig_deg", core::radToDeg(trigger_->thetaTrigRad()));
+    kvd("e_deg", have_phase_ ? core::radToDeg(core::wrapPi(theta_sat_ - trigger_->thetaTrigRad())) : nan);
     kvd("omega_deg_s", c.omega_deg_s);
-    kvd("theta_int_deg", si::radToDeg(c.theta_int_rad));
+    kvd("theta_int_deg", core::radToDeg(c.theta_int_rad));
     kvd("T_total_s", c.contact_time_s);
     kv("phase_source", c.measured ? "measured" : "model");
     kvd("phase_latency_s", have_phase_ ? phase_latency_s_ : nan);
@@ -1285,7 +1285,7 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
     const Eigen::Vector3d miss = p_handle - ee;
     kv3("miss", miss);
     kvd("miss_norm", miss.norm());
-    kvd("dtheta_at_end_deg", at_end_recorded_ ? si::radToDeg(dtheta_at_end_rad_) : nan);
+    kvd("dtheta_at_end_deg", at_end_recorded_ ? core::radToDeg(dtheta_at_end_rad_) : nan);
     kv3("cmd_before_at_end", have_last_cmd_ ? last_cmd_pos_ : Eigen::Vector3d::Constant(nan));
     kv3("cmd_after_at_end", at_end_recorded_ ? cmd_after_ : Eigen::Vector3d::Constant(nan));
     kvd("cmd_jump_at_end_mm",

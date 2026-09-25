@@ -316,3 +316,99 @@ correct point and are not reusable for quantitative conclusions without re-runni
 `satellite_grasp_planner`'s `PhaseSelector`/`JointPathSimulator` do not read `weights.yaml`
 themselves - they take `grasp_pos_body` as a caller-supplied parameter, so once the caller passes the
 corrected displacement the fix propagates without any change needed in that package.
+
+**2026-09-23 addendum**: the same invalidation applies to `tools/compare_proxy_vs_real_phases.py`
+(w_trans-along-phase comparison, PhaseSelector/JointPathSimulator vs. real Gazebo manipulability -
+§8.4/9.4). `PhaseSelector`/`JointPathSimulator` themselves are pure and unaffected (see above), but
+`compare_proxy_vs_real_phases.py` consumes
+`target_aligned_reach_task_satellite_rot_phase{30,90,180,270}.csv` and
+`joint_states_reach_task_satellite_rot_phase{30,90,180,270}.csv` - Gazebo runs recorded BEFORE the
+fix, i.e. the ~192 mm goal error is baked into the joint trajectories themselves, not just into a
+downstream computation. **The pre-fix CSVs (no `_displacement_fixed` suffix) are invalid for any
+w_trans-vs-phase quantitative comparison.** The post-fix CSVs (`_displacement_fixed` suffix, see
+session summary 2026-09-22 §A.8) are valid but only cover 5 phases (0°, 30°, 90°, 180°, 270°) with a
+single run each, no repeats - insufficient for the planned repeated-run sweep.
+
+### Checklist item 4 - "Sweep di fasi con ripetizioni: w massimo => errore finale minimo?" (2026-09-23, post-fix, 25/25 run)
+
+The repeated-run sweep called for above is now complete: 5 fasi (0°, 30°, 90°, 180°, 270°) x 5
+ripetizioni = 25/25 run, `Kt=200`, goal geometricamente corretti post-fix displacement (suffisso
+`_sweep_5rep_23_09`). The result is **duplice** and the two halves must be kept distinct - a previous
+report (Gemini) stated this point was "confermato al 100%", but that conflates (a) and (b) below: only
+(a) is confirmed, (b) is an open problem.
+
+**(a) w_real -> errore finale: CONFERMATO**, and on clean (post-fix) data the correlation is stronger
+than the pre-fix estimate. `w_real` (Gazebo, media 5 ripetizioni, deviazione standard trascurabile,
+<0.01%) correla con l'errore di tracking Cartesiano con Pearson r=-0.954 (R²≈0.91), contro il valore
+storico del 21/09 di r=-0.867 (R²=0.752, calcolato su dati poi invalidati dal bug di displacement -
+vedi addendum sopra). Questo è citabile in tesi come risultato solido.
+
+180° e 270° hanno `w_real` quasi identico (0.1276 vs 0.1274, 0.16% di scarto) ma errore diverso e
+ripetibile (2.68 mm vs 2.02 mm, ~33%): questo residuo non spiegato è coerente con il 25% già
+documentato il 21/09, non è un'anomalia nuova introdotta dal fix.
+
+**(b) w_proxy -> w_real (uso predittivo, cioè per `PhaseSelector` PRIMA dell'esecuzione): RICONCILIATO,
+proxy affidabile.** Il verdetto precedente (ρ=0.40, proxy non affidabile) era basato su un secondo
+script Python diagnostico usato per il primo sweep offline - **non** il codice di produzione - ed è
+superato dalla riconciliazione seguente contro il proxy C++ di produzione (`PhaseSelector`/
+`JointPathSimulator`, che usa il vero `prodmp.step()`), verificato end-to-end nel container.
+
+Tabella finale riconciliata (unico riferimento per questo punto, sostituisce ogni numero precedente):
+
+| Fase | w_real (Gazebo Kt=200, media 5 rep) | w_proxy C++ (scale=10) | Gap  |
+|------|--------------------------------------|--------------------------|------|
+| 0°   | 0.0924                               | 0.0961                   | +4.0% |
+| 30°  | 0.0858                               | 0.0894                   | +4.2% |
+| 90°  | 0.0950                               | 0.0983                   | +3.5% |
+| 180° | 0.1276                               | 0.1326                   | +3.9% |
+| 270° | 0.1274                               | 0.1326                   | +4.1% |
+
+Ranking preservato: proxy e reale concordano su {180°, 270°} come coppia migliore e 30° come peggiore.
+Il gap è sistematico e uniforme (+3.5% a +4.2%), non più il -28%/-81% del calcolo iniziale bacato - il
+proxy C++ di produzione è affidabile per la selezione di fase.
+
+Causa del falso allarme iniziale (ρ=0.40): il secondo script Python diagnostico (non il codice di
+produzione) usato per il primo sweep offline conteneva una formula di generazione traiettoria
+algebrica fittizia, incompatibile con la dinamica di ProDMP (pesi calibrati per un sistema del
+second'ordine, applicati linearmente) - produceva escursioni fuori scala (fino a -67 m in Z) che
+saturavano il DLS su configurazioni quasi-singolari fittizie. Bug isolato allo script diagnostico, MAI
+presente nel codice C++ di produzione (`PhaseSelector`/`JointPathSimulator`), verificato
+indipendentemente con esecuzione end-to-end nel container.
+
+**Nota su `joint1_nullspace_gain_scale`: CHIUSO** (indagine dedicata). Testate 4 configurazioni di
+`k_ns`: Config A (`scale=10`, attuale), Config B (`scale=5`, teoricamente esatto per K0/D0=1.118 del
+controllore reale), Config C ("tasso vero" √Ki uniforme su tutti i giunti), Config D (tasso vero +
+smorzamento doppio reale su giunto 1). Config A e Config C producono `w_proxy` identici fino alla 5a
+cifra decimale su tutte le 5 fasi: **la scelta di `k_ns` non ha alcun effetto misurabile**. Causa
+analitica: la costante di tempo del nullspazio (1/k_ns≈2.2-4.5s) è 13-28x più corta della durata del
+rollout (τ=60.97s) - il sistema ha ampio margine per convergere alla stessa varietà stazionaria
+indipendentemente da quanto velocemente `k_ns` lo porta lì (`k_ns` determina la velocità di
+convergenza, non la destinazione, e con τ≫1/k_ns la destinazione è tutto ciò che conta a fine
+rollout). Il ranking tra le 5 fasi resta identico in tutte e 4 le configurazioni testate - `k_ns` non
+ha mai avuto impatto pratico sulle decisioni del `PhaseSelector`, indipendentemente dalla sua
+calibrazione.
+
+Causa reale del residuo ~4% (non `k_ns`): l'errore di inseguimento stazionario intrinseco al
+controllore a impedenza cartesiana a rigidezza finita (`Kt=200` N/m) - il controllore non annulla mai
+l'errore posizione-target per costruzione fisica (F=Kt·errore≠0 a regime), mentre il proxy cinematico
+(DLS ideale) insegue il target esattamente. Coerente in ordine di grandezza: errore di tracking finale
+misurato in Gazebo ≈1.98-2.30 mm su tutte le fasi, residuo relativo su `w_trans` 1.4%-6.3% - stesso
+ordine di grandezza, compatibile con la spiegazione, **ma non dimostrato formalmente** (resta
+un'ipotesi qualitativa ben supportata, non una prova matematica). Tre possibili sorgenti fisiche del
+residuo, non isolate né verificate singolarmente (ipotesi aperte, non fatti): (a) proiettore di
+nullspazio approssimato (N=I-J^T(JJ^T+λ²I)^-1J, λ=0.05) che lascia "fuggire" una frazione della coppia
+di richiamo nullspazio nello spazio del task; (b) compensazione di gravità imperfetta (massa/baricentro
+modellati vs reali, incluso carico gripper); (c) attrito statico nei giunti vicino all'equilibrio.
+Nessuna delle tre verificata.
+
+Decisione presa: NON perseguire ulteriore correzione - il gap ~4% non altera il ranking (verificato su
+4 configurazioni), quindi non cambia alcuna decisione pratica del `PhaseSelector`. Costo/beneficio
+sfavorevole rispetto al tempo disponibile per il progetto. Il codice resta con `k_ns scale=10`
+(invariato).
+
+La spiegazione "270° beneficia di compliance dinamica e rilassamento del nullspace" (da un report
+precedente) **non è verificata da alcuna analisi dedicata** in questo sweep e non va citata in tesi
+come fatto accertato finché non isolata con un test specifico.
+
+**Punto 4 della checklist: CHIUSO.** w massimo (proxy) predice correttamente errore minimo (reale)
+entro un margine di errore uniforme del ~4%, su tutte e 5 le fasi testate.
