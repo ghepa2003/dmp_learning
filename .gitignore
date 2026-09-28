@@ -16,10 +16,32 @@ demo_raw_*.csv
 
 # dati generati da sessioni di test
 pinocchio_test/
-tools/
-scripts/
+# tools/: lista bianca ancorata alla radice (l'ultima regola che corrisponde vince)
+/tools/**
+!/tools/**/
+!/tools/**/*.py
+!/tools/**/*.cpp
+!/tools/**/*.hpp
+!/tools/**/*.h
+!/tools/**/*.c
+!/tools/**/*.sh
+!/tools/**/*.md
+!/tools/**/CMakeLists.txt
+!/tools/COLCON_IGNORE
+/tools/**/__pycache__/
+/tools/**/build/
+/tools/**/data/
+/tools/**/bags/
+/tools/**/plots/
+/tools/**/canonical_out/
+/tools/**/weights/
+/scripts/
 real_demo/
 references/
-scripts/
 slides_material/
-runs/
+# runs/: solo i pesi di produzione
+/runs/*
+!/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/
+/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/*
+!/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml
+!/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights_demo_params.yaml
