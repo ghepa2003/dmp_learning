@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 
 #include "probe_gate.hpp"
+#include "test_fixtures.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
@@ -37,54 +38,11 @@ using haptic_dmp_learning::core::ProDMP;
 using haptic_dmp_learning::core::degToRad;
 using haptic_dmp_learning::core::radToDeg;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_fixtures::loadPandaRobotModel;
+using satellite_grasp_planner::test_fixtures::makeModelB;
+using satellite_grasp_planner::test_fixtures::makeSyntheticProDmpTemplate;
 
 namespace {
-
-std::shared_ptr<RobotModel> loadPandaRobotModel() {
-    const char* home = std::getenv("HOME");
-    const std::string urdf_path = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-    std::ifstream f(urdf_path);
-    if (!f.is_open()) {
-        ADD_FAILURE() << "Could not open URDF (required test fixture): " << urdf_path;
-        return nullptr;
-    }
-    std::stringstream buffer;
-    buffer << f.rdbuf();
-    std::vector<std::string> joint_names;
-    for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
-    return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_hand_tcp");
-}
-
-/// 2 s straight 0.1 m demo, 8 basis functions.
-ProDMP makeSyntheticProDmpTemplate() {
-    std::vector<haptic_dmp_learning::core::Sample> demo;
-    for (int i = 0; i <= 50; ++i) {
-        haptic_dmp_learning::core::Sample s;
-        s.t = 2.0 * i / 50.0;
-        s.position = Eigen::Vector3d(0.1 * s.t / 2.0, 0.0, 0.0);
-        demo.push_back(s);
-    }
-    ProDMP p(/*num_basis=*/8);
-    p.learnFromDemonstration(demo);
-    return p;
-}
-
-CubeSatelliteModel makeModelB() {
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
-    return CubeSatelliteModel(p);
-}
-
-std::string productionWeightsPath() {
-    const char* home = std::getenv("HOME");
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    return env_w ? std::string(env_w)
-                 : std::string(home ? home : "/root") +
-                       "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                       "weights.yaml";
-}
 
 /// Satellite placed so that the approach axis z_tcp = -n equals the tool z-axis at q0 (axis = tool x,
 /// n = -tool z) and the collar center sits 0.1 m ahead of the start position in world X, like the
@@ -272,11 +230,7 @@ TEST(GraspSelectionTest, InvalidParamsThrow) {
 // template. Expected duration 5-10 minutes.
 TEST(SatelliteSelectionProbe, PrintsSelection) {
     SKIP_UNLESS_PROBES_ENABLED();
-    const std::string weights_path = productionWeightsPath();
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
     const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);

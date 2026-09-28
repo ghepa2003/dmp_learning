@@ -21,6 +21,7 @@
 #include <coal/shape/geometric_shapes.h>
 
 #include "probe_gate.hpp"
+#include "test_fixtures.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
@@ -33,6 +34,8 @@
 using satellite_grasp_planner::core::checkSatelliteCollision;
 using haptic_dmp_learning::core::CubeSatelliteModel;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_fixtures::makeModelBParams;
+using satellite_grasp_planner::test_fixtures::resetRobotToReady;
 
 namespace {
 
@@ -57,7 +60,7 @@ std::unique_ptr<RobotModel> loadPandaRobotModel() {
 TEST(SatelliteCollisionTest, FarSatelliteIsFeasibleWithLargePositiveDistance) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
 
     CubeSatelliteModel::Params p;
     p.center_world = Eigen::Vector3d(3.0, 3.0, 1.0);  // metres away from the arm
@@ -84,7 +87,7 @@ TEST(SatelliteCollisionTest, FarSatelliteIsFeasibleWithLargePositiveDistance) {
 TEST(SatelliteCollisionTest, ArmLinkInsideCylinderIsInfeasibleWithNegativeDistance) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
     const Eigen::Vector3d link4 = model->framePose("fer_link4").position;
 
     CubeSatelliteModel::Params p;
@@ -101,7 +104,7 @@ TEST(SatelliteCollisionTest, ArmLinkInsideCylinderIsInfeasibleWithNegativeDistan
 TEST(SatelliteCollisionTest, CubeCenteredOnLink4IsInfeasibleWithNegativeCubeDistance) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
     CubeSatelliteModel::Params p;
     p.center_world = model->framePose("fer_link4").position;
     const CubeSatelliteModel satellite(p);
@@ -115,7 +118,7 @@ TEST(SatelliteCollisionTest, CubeCenteredOnLink4IsInfeasibleWithNegativeCubeDist
 TEST(SatelliteCollisionTest, CubeDistanceInvariantToQuarterTurnAboutAxis) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
     CubeSatelliteModel::Params p;
     p.center_world = model->framePose("fer_link4").position + Eigen::Vector3d(0.25, 0.05, 0.0);
     const CubeSatelliteModel satellite(p);
@@ -155,7 +158,7 @@ TEST(SatelliteCollisionTest, CubeBoxFrameMatchesCylinderEndpoints) {
 TEST(SatelliteCollisionTest, MarginDecidesFeasibility) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
     CubeSatelliteModel::Params p;
     p.center_world = Eigen::Vector3d(3.0, 3.0, 1.0);
     const CubeSatelliteModel satellite(p);
@@ -199,17 +202,7 @@ TEST(SatelliteCollisionProbe, ReportsCollisionDistanceAtRealGraspPose) {
 
     // Production ProDMP template (n_basis=80, tau ~61 s). Start/goal are overridden per rollout.
     // Path: $GRASP_PROBE_WEIGHTS, else the n80 fit run below (identical to runs/20260915_090358_*).
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const char* home = std::getenv("HOME");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     const haptic_dmp_learning::core::ProDMP tmpl =
         haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
     std::cout << "[probe3] template " << weights_path << " tau=" << tmpl.tau() << std::endl;
@@ -358,23 +351,10 @@ TEST(SatelliteVelocityProbe, ReportsProDmpVelocityVersusSatelliteSurfaceVelocity
     ASSERT_NE(model_owner, nullptr);
     auto model = std::shared_ptr<RobotModel>(std::move(model_owner));
 
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel satellite(p);
 
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const char* home = std::getenv("HOME");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     haptic_dmp_learning::core::ProDMP prodmp =
         haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
 

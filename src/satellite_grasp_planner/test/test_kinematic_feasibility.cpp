@@ -17,43 +17,15 @@
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/types.hpp"
 #include "satellite_grasp_planner/core/kinematic_feasibility.hpp"
+#include "test_fixtures.hpp"
 
 using satellite_grasp_planner::core::checkKinematicFeasibility;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_fixtures::loadPandaRobotModel;
+using satellite_grasp_planner::test_fixtures::makeSyntheticProDmpTemplate;
+using satellite_grasp_planner::test_fixtures::resetRobotToReady;
 
 namespace {
-
-std::shared_ptr<RobotModel> loadPandaRobotModel() {
-    const char* home = std::getenv("HOME");
-    const std::string urdf_path = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-    std::ifstream f(urdf_path);
-    if (!f.is_open()) {
-        ADD_FAILURE() << "Could not open URDF (required test fixture): " << urdf_path;
-        return nullptr;
-    }
-    std::stringstream buffer;
-    buffer << f.rdbuf();
-    std::vector<std::string> joint_names;
-    for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
-    return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_hand_tcp");
-}
-
-/// Short synthetic ProDMP (2 s, straight 0.1 m line): only shape/duration matter, the goal and
-/// initial conditions are overridden by checkKinematicFeasibility().
-haptic_dmp_learning::core::ProDMP makeSyntheticProDmpTemplate() {
-    std::vector<haptic_dmp_learning::core::Sample> demo;
-    const double tau = 2.0;
-    const int n = 50;
-    for (int i = 0; i <= n; ++i) {
-        haptic_dmp_learning::core::Sample s;
-        s.t = tau * static_cast<double>(i) / static_cast<double>(n);
-        s.position = Eigen::Vector3d(0.1 * s.t / tau, 0.0, 0.0);
-        demo.push_back(s);
-    }
-    haptic_dmp_learning::core::ProDMP prodmp(/*num_basis=*/8);
-    prodmp.learnFromDemonstration(demo);
-    return prodmp;
-}
 
 }  // namespace
 
@@ -83,7 +55,7 @@ TEST(RobotModelReadyPoseTest, MatchesHomingValuesUsedInTools) {
 TEST(KinematicFeasibilityTest, NearbyTargetFromReadyPoseIsFeasible) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    model->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(model);
     const Eigen::Vector3d target = model->eePosition() + Eigen::Vector3d(0.1, 0.0, 0.0);
     const Eigen::Quaterniond quat = model->eeOrientation();
 

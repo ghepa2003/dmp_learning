@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 
 #include "probe_gate.hpp"
+#include "test_fixtures.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
@@ -34,22 +35,11 @@ using haptic_dmp_learning::core::ProDMP;
 using haptic_dmp_learning::core::degToRad;
 using haptic_dmp_learning::core::radToDeg;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_fixtures::makeModelBParams;
+using satellite_grasp_planner::test_fixtures::makeSyntheticProDmpTemplate;
+using satellite_grasp_planner::test_fixtures::resetRobotToReady;
 
 namespace {
-
-/// 2 s straight 0.1 m demo, 8 basis functions.
-ProDMP makeTemplate() {
-    std::vector<haptic_dmp_learning::core::Sample> demo;
-    for (int i = 0; i <= 50; ++i) {
-        haptic_dmp_learning::core::Sample s;
-        s.t = 2.0 * i / 50.0;
-        s.position = Eigen::Vector3d(0.1 * s.t / 2.0, 0.0, 0.0);
-        demo.push_back(s);
-    }
-    ProDMP p(/*num_basis=*/8);
-    p.learnFromDemonstration(demo);
-    return p;
-}
 
 ScanParams makeScan(const CubeSatelliteModel& m) {
     ScanParams sp;
@@ -67,10 +57,7 @@ ScanParams makeScan(const CubeSatelliteModel& m) {
 
 TEST(CandidateScanWindow, CenterThetaKnownCases) {
     {
-        CubeSatelliteModel::Params p;
-        p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-        p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-        p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+        auto p = makeModelBParams();
         EXPECT_NEAR(windowCenterTheta(CubeSatelliteModel(p), Eigen::Vector3d::Zero()), 0.0, 1e-12);
     }
     {
@@ -89,7 +76,7 @@ TEST(CandidateScanWindow, CenterThetaKnownCases) {
 
 TEST(CandidateScanRows, CountAndThetaRange) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const ProDMP tmpl = makeTemplate();
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
     const ScanParams sp = makeScan(m);
     const auto rows = scanCandidates(m, tmpl, sp);
     ASSERT_EQ(rows.size(), 4u * 37u);
@@ -99,7 +86,7 @@ TEST(CandidateScanRows, CountAndThetaRange) {
 
 TEST(CandidateScanRows, EvMatchesIndependentComputation) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const ProDMP tmpl = makeTemplate();
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
     const ScanParams sp = makeScan(m);
     const auto rows = scanCandidates(m, tmpl, sp);
 
@@ -123,7 +110,7 @@ TEST(CandidateScanRows, EvMatchesIndependentComputation) {
 
 TEST(CandidateScanRows, TemplateIsNotModified) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const ProDMP tmpl = makeTemplate();
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
     const Eigen::Vector3d v0 = tmpl.velocity(), p0 = tmpl.position();
     scanCandidates(m, tmpl, makeScan(m));
     EXPECT_EQ(tmpl.velocity(), v0);
@@ -132,7 +119,7 @@ TEST(CandidateScanRows, TemplateIsNotModified) {
 
 TEST(CandidateScanRows, ContactToEndOffset) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const ProDMP tmpl = makeTemplate();
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
     ScanParams sp = makeScan(m);
     const auto base = scanCandidates(m, tmpl, sp);
     sp.contact_to_end_offset = Eigen::Vector3d(0.05, -0.02, 0.01);
@@ -151,7 +138,7 @@ TEST(CandidateScanRows, ContactToEndOffset) {
 
 TEST(CandidateScanRows, SortingAndBestPerPoint) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const auto rows = scanCandidates(m, makeTemplate(), makeScan(m));
+    const auto rows = scanCandidates(m, makeSyntheticProDmpTemplate(), makeScan(m));
     const auto sorted = sortedByPartialCost(rows);
     ASSERT_EQ(sorted.size(), rows.size());
     for (std::size_t i = 1; i < sorted.size(); ++i) {
@@ -164,7 +151,9 @@ TEST(CandidateScanRows, SortingAndBestPerPoint) {
                            GraspPointId::kP270}) {
         for (int j = 0; j < 3; ++j, ++i) {
             EXPECT_EQ(best[i].k, k);
-            if (j > 0) EXPECT_LE(best[i - 1].partial_cost, best[i].partial_cost);
+            if (j > 0) {
+                EXPECT_LE(best[i - 1].partial_cost, best[i].partial_cost);
+            }
         }
     }
     EXPECT_THROW(bestPerPoint(rows, 0), std::invalid_argument);
@@ -194,7 +183,7 @@ TEST(CandidateScanLaunchDelay, HandComputedAndRange) {
 
 TEST(CandidateScanRows, InvalidArgumentsThrow) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    const ProDMP tmpl = makeTemplate();
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
     ScanParams sp = makeScan(m);
     sp.step_rad = 0.0;
     EXPECT_THROW(scanCandidates(m, tmpl, sp), std::invalid_argument);
@@ -230,27 +219,15 @@ TEST(SatelliteScanProbe, PrintsScanOverProductionTemplate) {
     for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
     RobotModel robot(buffer.str(), joint_names, "fer_hand_tcp");
 
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     // demoDisplacement() must be read BEFORE any setInitialConditions().
     const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
     const Eigen::Vector3d delta_g_demo = tmpl.demoDisplacement();
 
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
 
-    robot.update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(robot);
     const Eigen::Vector3d p0 = robot.eePosition();
     Eigen::Vector3d base = Eigen::Vector3d::Zero();
     try {

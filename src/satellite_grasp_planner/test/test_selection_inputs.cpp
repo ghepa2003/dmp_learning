@@ -17,6 +17,7 @@
 #include <Eigen/Dense>
 
 #include "franka_cartesian_control/core/robot_model.hpp"
+#include "test_fixtures.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
@@ -34,13 +35,10 @@ using haptic_dmp_learning::core::Sample;
 using haptic_dmp_learning::core::degToRad;
 namespace dp = haptic_dmp_learning::core::demo_params;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_fixtures::resetRobotToReady;
+using satellite_grasp_planner::test_fixtures::urdfPath;
 
 namespace {
-
-std::string urdfPath() {
-    const char* home = std::getenv("HOME");
-    return std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-}
 
 std::string readAll(const std::string& p) {
     std::ifstream f(p, std::ios::binary);
@@ -196,7 +194,7 @@ TEST_F(SelectionInputsTest, P0FromKinematics) {
     p.start_joints_rad.reset();
     rewrite(p);
     SelectionInputs b = build();
-    ref.update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(ref);
     EXPECT_NEAR((b.p0 - ref.eePosition()).norm(), 0.0, 1e-12);
     EXPECT_NEAR((b.q0 - RobotModel::readyPose()).norm(), 0.0, 1e-15);
     // Not the demo-frame start position.
@@ -210,7 +208,7 @@ TEST_F(SelectionInputsTest, WTransDemoFromEndJoints) {
     p.end_joints_rad = toArray(RobotModel::readyPose());
     rewrite(p);
     SelectionInputs a = build();
-    ref.update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    resetRobotToReady(ref);
     EXPECT_NEAR(a.params.w_trans_demo, wTransFromJacobian(ref.jacobian().topRows<3>()), 1e-12);
     EXPECT_FALSE(a.w_trans_demo_is_proxy);
 

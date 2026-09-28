@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 
 #include "probe_gate.hpp"
+#include "test_fixtures.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/grasp_roll.hpp"
@@ -35,37 +36,16 @@ using haptic_dmp_learning::core::CubeSatelliteModel;
 using haptic_dmp_learning::core::GraspPointId;
 using haptic_dmp_learning::core::ProDMP;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+namespace tf = satellite_grasp_planner::test_fixtures;
+using tf::kModelBCenterX;
+using tf::kModelBCenterY;
+using tf::kModelBCenterZ;
+using tf::loadPandaRobotModel;
+using tf::loadProductionTemplate;
+using tf::makeModelBParams;
+using tf::makeSyntheticProDmpTemplate;
 
 namespace {
-
-std::shared_ptr<RobotModel> loadPandaRobotModel() {
-    const char* home = std::getenv("HOME");
-    const std::string urdf_path = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-    std::ifstream f(urdf_path);
-    if (!f.is_open()) {
-        ADD_FAILURE() << "Could not open URDF (required test fixture): " << urdf_path;
-        return nullptr;
-    }
-    std::stringstream buffer;
-    buffer << f.rdbuf();
-    std::vector<std::string> joint_names;
-    for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
-    return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_hand_tcp");
-}
-
-/// 2 s straight 0.1 m demo, 8 basis functions (mechanism only, not a result).
-ProDMP makeSyntheticProDmpTemplate() {
-    std::vector<haptic_dmp_learning::core::Sample> demo;
-    for (int i = 0; i <= 50; ++i) {
-        haptic_dmp_learning::core::Sample s;
-        s.t = 2.0 * i / 50.0;
-        s.position = Eigen::Vector3d(0.1 * s.t / 2.0, 0.0, 0.0);
-        demo.push_back(s);
-    }
-    ProDMP p(/*num_basis=*/8);
-    p.learnFromDemonstration(demo);
-    return p;
-}
 
 }  // namespace
 
@@ -73,10 +53,7 @@ TEST(CandidateEvalTest, MatchesManualComposition) {
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
     const ProDMP tmpl = makeSyntheticProDmpTemplate();
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
     const GraspPointId k = GraspPointId::kP90;
     const double theta = 0.3, psi = 0.2;
@@ -112,10 +89,7 @@ TEST(CandidateEvalTest, MatchesManualComposition) {
 // psi and psi + pi: same target position, different target orientation (recomputed here exactly as
 // evaluateCandidate does). Both evaluations must also run.
 TEST(CandidateEvalTest, RollAndRollPlusPiShareTargetPositionButNotOrientation) {
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
     const double theta = 0.3, psi = 0.2;
     const auto t0 = model.graspPoseAt(GraspPointId::kP0, theta);
@@ -139,20 +113,10 @@ TEST(CandidateEvalTest, RollAndRollPlusPiShareTargetPositionButNotOrientation) {
 // configurations, production template, psi = 0. ~56 rollouts, ~7 minutes.
 TEST(SatelliteFeasibilityMapProbe, PrintsFeasibilityMap) {
     SKIP_UNLESS_PROBES_ENABLED();
-    const char* home = std::getenv("HOME");
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
-    const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
+    const ProDMP tmpl = loadProductionTemplate(weights_path);
 
     struct Config {
         const char* name;
@@ -160,7 +124,7 @@ TEST(SatelliteFeasibilityMapProbe, PrintsFeasibilityMap) {
     };
     const std::vector<Config> configs = {
         {"A", {0.3928, -0.165, 0.1188}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}},
-        {"B", {0.75, 0.0, 0.35}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}}};
+        {"B", {kModelBCenterX, kModelBCenterY, kModelBCenterZ}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}}};
     const std::vector<std::pair<const char*, GraspPointId>> points = {
         {"kP0", GraspPointId::kP0}, {"kP90", GraspPointId::kP90},
         {"kP180", GraspPointId::kP180}, {"kP270", GraspPointId::kP270}};
@@ -219,25 +183,12 @@ TEST(SatelliteFeasibilityMapProbe, PrintsFeasibilityMap) {
 // theta_c).
 TEST(SatelliteRollRescueProbe, PrintsRollRescue) {
     SKIP_UNLESS_PROBES_ENABLED();
-    const char* home = std::getenv("HOME");
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
-    const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
+    const ProDMP tmpl = loadProductionTemplate(weights_path);
 
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
     const RobotModel::JointVector q0 = RobotModel::readyPose();
 
@@ -292,25 +243,12 @@ TEST(SatelliteRollRescueProbe, PrintsRollRescue) {
 // (no collision, no reached criterion). Theta is ABSOLUTE.
 TEST(SatelliteViolationDiagnosisProbe, PrintsWorstJointViolation) {
     SKIP_UNLESS_PROBES_ENABLED();
-    const char* home = std::getenv("HOME");
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
-    const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
+    const ProDMP tmpl = loadProductionTemplate(weights_path);
 
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
     const RobotModel::JointVector q0 = RobotModel::readyPose();
 
@@ -355,25 +293,12 @@ TEST(SatelliteViolationDiagnosisProbe, PrintsWorstJointViolation) {
 // criterion). Theta is ABSOLUTE. 8 rollouts, ~60 s.
 TEST(SatelliteRollBasinProbe, PrintsRollBasins) {
     SKIP_UNLESS_PROBES_ENABLED();
-    const char* home = std::getenv("HOME");
-    const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
-    const std::string weights_path =
-        env_w ? std::string(env_w)
-              : std::string(home ? home : "/root") +
-                    "/thesis_ws/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/"
-                    "weights.yaml";
-    if (!std::ifstream(weights_path).good()) {
-        GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
-                     << " (set GRASP_PROBE_WEIGHTS)";
-    }
+    SKIP_UNLESS_PRODUCTION_WEIGHTS(weights_path);
     auto robot = loadPandaRobotModel();
     ASSERT_NE(robot, nullptr);
-    const ProDMP tmpl = haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path);
+    const ProDMP tmpl = loadProductionTemplate(weights_path);
 
-    CubeSatelliteModel::Params p;
-    p.center_world = Eigen::Vector3d(0.75, 0.0, 0.35);
-    p.axis_world = Eigen::Vector3d(0.0, 0.0, 1.0);
-    p.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+    auto p = makeModelBParams();
     const CubeSatelliteModel model(p);
     const RobotModel::JointVector q0 = RobotModel::readyPose();
 
