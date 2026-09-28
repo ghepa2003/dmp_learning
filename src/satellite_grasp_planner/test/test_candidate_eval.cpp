@@ -17,6 +17,7 @@
 
 #include <Eigen/Dense>
 
+#include "probe_gate.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/grasp_roll.hpp"
@@ -137,6 +138,7 @@ TEST(CandidateEvalTest, RollAndRollPlusPiShareTargetPositionButNotOrientation) {
 // EMPIRICAL probe, NO asserts on values: feasibility map over theta x k for two satellite
 // configurations, production template, psi = 0. ~56 rollouts, ~7 minutes.
 TEST(SatelliteFeasibilityMapProbe, PrintsFeasibilityMap) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const char* home = std::getenv("HOME");
     const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
     const std::string weights_path =
@@ -216,6 +218,7 @@ TEST(SatelliteFeasibilityMapProbe, PrintsFeasibilityMap) {
 // Configuration B, production template. 20 rollouts, ~150 s. Theta is ABSOLUTE (not relative to
 // theta_c).
 TEST(SatelliteRollRescueProbe, PrintsRollRescue) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const char* home = std::getenv("HOME");
     const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
     const std::string weights_path =
@@ -288,6 +291,7 @@ TEST(SatelliteRollRescueProbe, PrintsRollRescue) {
 // violate its limit? Configuration B, production template. Calls checkKinematicFeasibility directly
 // (no collision, no reached criterion). Theta is ABSOLUTE.
 TEST(SatelliteViolationDiagnosisProbe, PrintsWorstJointViolation) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const char* home = std::getenv("HOME");
     const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
     const std::string weights_path =
@@ -350,6 +354,7 @@ TEST(SatelliteViolationDiagnosisProbe, PrintsWorstJointViolation) {
 // production template, checkKinematicFeasibility called directly (no collision, no reached
 // criterion). Theta is ABSOLUTE. 8 rollouts, ~60 s.
 TEST(SatelliteRollBasinProbe, PrintsRollBasins) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const char* home = std::getenv("HOME");
     const char* env_w = std::getenv("GRASP_PROBE_WEIGHTS");
     const std::string weights_path =

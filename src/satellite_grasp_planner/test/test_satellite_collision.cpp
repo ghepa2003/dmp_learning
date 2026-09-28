@@ -20,6 +20,7 @@
 #include <coal/math/transform.h>
 #include <coal/shape/geometric_shapes.h>
 
+#include "probe_gate.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
@@ -175,6 +176,7 @@ TEST(SatelliteCollisionTest, MarginDecidesFeasibility) {
 // hand capsule reaching ~1.7 cm past the tcp plane). Read the printed line / recorded properties.
 // Only sanity is asserted (finite numbers, non-empty capsule name).
 TEST(SatelliteCollisionProbe, ReportsCollisionDistanceAtRealGraspPose) {
+    SKIP_UNLESS_PROBES_ENABLED();
     auto model_owner = loadPandaRobotModel();
     ASSERT_NE(model_owner, nullptr);
     auto model = std::shared_ptr<RobotModel>(std::move(model_owner));
@@ -351,6 +353,7 @@ TEST(SatelliteCollisionProbe, ReportsCollisionDistanceAtRealGraspPose) {
 // with the satellite, and the squared mismatch. The ProDMP is brought to s>=1 with a fixed
 // support goal (p0 + demoDisplacement()) and setGoal() is never called afterwards.
 TEST(SatelliteVelocityProbe, ReportsProDmpVelocityVersusSatelliteSurfaceVelocity) {
+    SKIP_UNLESS_PROBES_ENABLED();
     auto model_owner = loadPandaRobotModel();
     ASSERT_NE(model_owner, nullptr);
     auto model = std::shared_ptr<RobotModel>(std::move(model_owner));

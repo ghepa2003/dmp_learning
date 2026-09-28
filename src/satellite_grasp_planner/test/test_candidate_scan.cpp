@@ -17,6 +17,7 @@
 
 #include <Eigen/Dense>
 
+#include "probe_gate.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
@@ -215,6 +216,7 @@ TEST(CandidateScanRows, InvalidArgumentsThrow) {
 // decided yet. Prints the whole scan (production ProDMP template, satellite at (0.75,0,0.35),
 // vertical axis, face towards the robot base) so it can be read, not judged.
 TEST(SatelliteScanProbe, PrintsScanOverProductionTemplate) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const char* home = std::getenv("HOME");
     const std::string urdf_path =
         std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -16,14 +17,18 @@
 
 #include <Eigen/Dense>
 
+#include "probe_gate.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
+#include "haptic_dmp_learning/core/demo_csv_io.hpp"
+#include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
 #include "haptic_dmp_learning/core/types.hpp"
 #include "satellite_grasp_planner/core/grasp_selection.hpp"
+#include "satellite_grasp_planner/core/selection_inputs.hpp"
 
 using namespace satellite_grasp_planner::core;
 using haptic_dmp_learning::core::CubeSatelliteModel;
@@ -179,8 +184,12 @@ TEST(GraspSelectionTest, SelectionInvariants) {
         EXPECT_TRUE(c.rollouts_used == 2 || c.rollouts_used == 6) << c.rollouts_used;
         const bool psi_basic =
             std::abs(c.psi_rad) < 1e-12 || std::abs(c.psi_rad - haptic_dmp_learning::core::kPi) < 1e-12;
-        if (c.eval.feasible && psi_basic) EXPECT_EQ(c.rollouts_used, 2);
-        if (c.eval.feasible) EXPECT_LE(sel.best.cost.total, c.cost.total);
+        if (c.eval.feasible && psi_basic) {
+            EXPECT_EQ(c.rollouts_used, 2);
+        }
+        if (c.eval.feasible) {
+            EXPECT_LE(sel.best.cost.total, c.cost.total);
+        }
         total += c.rollouts_used;
     }
     EXPECT_EQ(sel.total_rollouts, total);
@@ -188,7 +197,9 @@ TEST(GraspSelectionTest, SelectionInvariants) {
     EXPECT_TRUE(sel.best.eval.feasible);
     EXPECT_EQ(sel.goal_position, sel.best.row.goal_param);
     EXPECT_NEAR(sel.goal_orientation.norm(), 1.0, 1e-12);
-    if (!sel.truncated) EXPECT_EQ(sel.rows_evaluated + sel.rows_skipped_by_bound, n_rows);
+    if (!sel.truncated) {
+        EXPECT_EQ(sel.rows_evaluated + sel.rows_skipped_by_bound, n_rows);
+    }
 }
 
 // A huge bound never stops the search (all rows evaluated); a tiny one stops as soon as it can.
@@ -260,6 +271,7 @@ TEST(GraspSelectionTest, InvalidParamsThrow) {
 // EMPIRICAL probe, NO asserts on values: full selection on configuration B with the production
 // template. Expected duration 5-10 minutes.
 TEST(SatelliteSelectionProbe, PrintsSelection) {
+    SKIP_UNLESS_PROBES_ENABLED();
     const std::string weights_path = productionWeightsPath();
     if (!std::ifstream(weights_path).good()) {
         GTEST_SKIP() << "Production weights.yaml not reachable: " << weights_path
@@ -337,5 +349,133 @@ TEST(SatelliteSelectionProbe, PrintsSelection) {
                   << " expected=" << expected
                   << " rel_diff=" << (target->cost.total - expected) / expected
                   << " feasible=" << target->eval.feasible << std::endl;
+    }
+}
+
+// EMPIRICAL probe, NO asserts on values: same selection as SatelliteSelectionProbe, but the inputs come
+// from buildSelectionInputs() reading a demo_params file generated (like fit_prodmp does) next to a COPY
+// of the production weights in /tmp/sel_check. No satellite options: satellite_at_demo is null.
+// Expected duration 5-10 minutes.
+TEST(SatelliteSelectionFromDemoParamsProbe, PrintsSelection) {
+    SKIP_UNLESS_PROBES_ENABLED();
+    const char* home = std::getenv("HOME");
+    const std::string root = std::string(home ? home : "/root") + "/thesis_ws/";
+    const std::string csv = root + "reach_task_baseline.csv";
+    const std::string prod_weights =
+        root + "runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml";
+    if (!std::ifstream(csv).good() || !std::ifstream(prod_weights).good()) {
+        GTEST_SKIP() << "production demo/weights not reachable: " << csv << " / " << prod_weights;
+    }
+    namespace dp = haptic_dmp_learning::core::demo_params;
+
+    // Copy of the production weights + demo_params generated next to it.
+    const std::string dir = "/tmp/sel_check/";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string weights_copy = dir + "weights.yaml";
+    {
+        std::ifstream in(prod_weights, std::ios::binary);
+        std::ofstream out(weights_copy, std::ios::binary);
+        out << in.rdbuf();
+    }
+    const std::vector<haptic_dmp_learning::core::Sample> demo = haptic_dmp_learning::core::demo_csv_io::readDemoCsv(csv);
+    dp::FitInfo fit;  // production fit configuration (prodmp_features.yaml)
+    fit.num_basis = 80;
+    fit.ridge_lambda = 1e-10;
+    fit.position_filter_window_s = 0.05;
+    fit.fix_goal_to_demo_endpoint = true;
+    std::ostringstream wlog;
+    dp::DemoParams written;
+    const std::string params_path =
+        dp::writeForWeights(csv, demo, fit, weights_copy, std::nullopt, wlog, &written);
+    std::cout << "[sel2-setup] " << wlog.str() << "[sel2-setup] demo_params hash=" << written.weights_sha256
+              << " production weights hash=" << dp::sha256FileHex(prod_weights)
+              << (written.weights_sha256 == dp::sha256FileHex(prod_weights) ? " (MATCH)" : " (DIFFERENT)")
+              << std::endl;
+
+    auto probe_robot = loadPandaRobotModel();
+    ASSERT_NE(probe_robot, nullptr);
+    probe_robot->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    const Eigen::Vector3d base = probe_robot->framePose("fer_link0").position;
+
+    SatelliteSnapshot snap;
+    snap.center = Eigen::Vector3d(0.75, 0.0, 0.35);
+    snap.axis = Eigen::Vector3d(0.0, 0.0, 1.0);
+    snap.omega_rad_s = -degToRad(2.0);
+    snap.theta_rad = 0.0;
+    snap.t_s = 0.0;
+    CubeSatelliteModel::Params geometry;
+    geometry.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+
+    const char* home2 = std::getenv("HOME");
+    const std::string urdf = std::string(home2 ? home2 : "/root") + "/thesis_ws/fer_flat_effort.urdf";
+    SelectionInputs in = buildSelectionInputs(params_path, urdf, snap, geometry, base);
+    for (const auto& l : in.provenance) std::cout << "[sel2-inputs] " << l << std::endl;
+    std::cout << "[sel2-inputs] w_trans_demo=" << in.params.w_trans_demo
+              << " w_trans_demo_is_proxy=" << in.w_trans_demo_is_proxy
+              << " contact_assumed_at_end=" << in.contact_assumed_at_end << std::endl;
+
+    // Same search settings as SatelliteSelectionProbe.
+    in.params.scan.step_rad = degToRad(10.0);
+    in.params.w_hat_upper_bound = 2.5;
+    in.params.max_rows = 40;
+
+    const CubeSatelliteModel model(in.cube_params);
+    const GraspSelection sel = selectGrasp(model, in.prodmp_template, in.robot, in.q0, in.params);
+
+    const char* names[4] = {"kP0", "kP90", "kP180", "kP270"};
+    auto line = [&](const char* tag, const EvaluatedCandidate& c) {
+        std::cout << tag << " " << names[static_cast<int>(c.row.k)] << " theta="
+                  << radToDeg(c.row.theta_rad) << " psi=" << radToDeg(c.psi_rad)
+                  << " feasible=" << c.eval.feasible << " e_v_hat=" << c.cost.e_v_hat
+                  << " e_g_hat=" << c.cost.e_g_hat << " w_hat=" << c.cost.w_hat
+                  << " p_psi=" << c.cost.p_psi << " total=" << c.cost.total
+                  << " max_joint_violation_rad=" << c.eval.max_joint_violation_rad
+                  << " pos_err_final_mm=" << c.eval.pos_err_final_mm
+                  << " min_distance_arm_m=" << c.eval.min_distance_arm_m
+                  << " min_distance_cube_m=" << c.eval.min_distance_cube_m
+                  << " rollouts_used=" << c.rollouts_used << std::endl;
+    };
+    for (const auto& c : sel.evaluated) line("[sel2]", c);
+    if (sel.found) {
+        line("[sel2-best]", sel.best);
+    } else {
+        std::cout << "[sel2-best] none found" << std::endl;
+    }
+    std::cout << "[sel2-stop] stopped_by_bound=" << sel.stopped_by_bound << " truncated=" << sel.truncated
+              << " rows_evaluated=" << sel.rows_evaluated
+              << " rows_skipped_by_bound=" << sel.rows_skipped_by_bound
+              << " max_w_hat_seen=" << sel.max_w_hat_seen << " bound_violated=" << sel.bound_violated
+              << std::endl;
+    std::cout << "[sel2-time] total_rollouts=" << sel.total_rollouts << " elapsed=" << sel.elapsed_s << " s"
+              << std::endl;
+
+    // Compare the best with the previous probe's: (kP270, theta=-60, psi=0), total 1.32548,
+    // w_trans_demo 0.0912627 there.
+    const double expected_total = 1.32548, old_w_ref = 0.0912627;
+    const double w_ref_new = in.params.w_trans_demo;
+    std::cout << "[sel2-check] w_trans_demo here=" << w_ref_new << " previous probe=" << old_w_ref
+              << " |delta_g| here=" << in.params.scan.delta_g_demo.norm() << " (template demoDisplacement "
+              << in.prodmp_template.demoDisplacement().norm() << ", used by the previous probe)" << std::endl;
+    if (!sel.found) {
+        std::cout << "[sel2-check] no best found: nothing to compare" << std::endl;
+    } else {
+        const EvaluatedCandidate& b = sel.best;
+        const bool same = b.row.k == GraspPointId::kP270 && std::abs(b.row.theta_rad - degToRad(-60.0)) < 1e-6 &&
+                          std::abs(b.psi_rad) < 1e-12;
+        std::cout << "[sel2-check] best here: " << names[static_cast<int>(b.row.k)] << " theta="
+                  << radToDeg(b.row.theta_rad) << " psi=" << radToDeg(b.psi_rad) << " total=" << b.cost.total
+                  << (same ? " (same candidate as the previous probe)" : " (DIFFERENT candidate from the previous probe)")
+                  << " expected_total=" << expected_total
+                  << " rel_diff=" << (b.cost.total - expected_total) / expected_total << std::endl;
+        // How much of the total difference is explained by w_trans_demo: recompute the total with the old
+        // reference, w_hat_old = w_trans_final / old_w_ref, using this candidate's own w_trans_final.
+        const double w_trans_final = b.cost.w_hat * w_ref_new;
+        const double w_hat_old = w_trans_final / old_w_ref;
+        const double total_with_old_ref = b.cost.total + in.params.scan.weights.w_m * (b.cost.w_hat - w_hat_old);
+        std::cout << "[sel2-check] w_trans_final=" << w_trans_final << " w_hat here=" << b.cost.w_hat
+                  << " w_hat with previous reference=" << w_hat_old << " -> total recomputed with the previous "
+                  << "w_trans_demo=" << total_with_old_ref << " (rel_diff vs expected "
+                  << (total_with_old_ref - expected_total) / expected_total << ")" << std::endl;
     }
 }

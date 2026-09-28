@@ -34,6 +34,7 @@ add_library(${PROJECT_NAME}_core
   src/core/candidate_eval.cpp
   src/core/grasp_selection.cpp
   src/core/launch_plan.cpp
+  src/core/selection_inputs.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -87,6 +88,16 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_kinematic_feasibility
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_selection_inputs test/test_selection_inputs.cpp)
+  target_link_libraries(test_selection_inputs
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_selection_inputs
     haptic_dmp_learning
     franka_cartesian_control
   )
