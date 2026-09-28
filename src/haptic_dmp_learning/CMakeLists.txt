@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME}_core
   src/core/grasp_state_machine.cpp
   src/core/cube_satellite_model.cpp
   src/core/joint_states_csv_io.cpp
+  src/core/demo_params.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -240,6 +241,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_joint_states_csv_io test/test_joint_states_csv_io.cpp)
   target_link_libraries(test_joint_states_csv_io ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_demo_params test/test_demo_params.cpp)
+  target_link_libraries(test_demo_params ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_grasp_state_machine test/test_grasp_state_machine.cpp)
   target_link_libraries(test_grasp_state_machine ${PROJECT_NAME}_core)

@@ -44,6 +44,12 @@ std::string deriveJointStatesCsvPath(const std::string& demo_csv_path);
 ///         std::runtime_error if @p path cannot be opened for writing.
 void writeJointStatesCsv(const std::string& path, const std::vector<JointStateSample>& samples);
 
+/// Reads a CSV written by writeJointStatesCsv() (or the python extractor). Columns are mapped BY NAME
+/// from the header ("t" and fer_joint1..7, any order, extra columns ignored).
+/// @throws std::runtime_error if the file cannot be opened, a required column is missing, a row is
+///         malformed, or there are no data rows.
+std::vector<JointStateSample> readJointStatesCsv(const std::string& path);
+
 }  // namespace joint_states_csv_io
 }  // namespace core
 }  // namespace haptic_dmp_learning

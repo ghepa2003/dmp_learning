@@ -67,3 +67,50 @@ TEST(JointStatesCsvIoTest, EmptyBufferThrowsAndWritesNoFile) {
     EXPECT_THROW(writeJointStatesCsv(path, {}), std::invalid_argument);
     EXPECT_FALSE(std::ifstream(path).good());
 }
+
+TEST(JointStatesCsvIoTest, ReadRoundTripAndByNameMapping) {
+    const std::string path = ::testing::TempDir() + "joint_states_read_test.csv";
+    std::vector<JointStateSample> s(2);
+    s[0].t = 0.0;
+    s[1].t = 0.5;
+    for (std::size_t j = 0; j < kNumJoints; ++j) {
+        s[0].q[j] = 0.1 * static_cast<double>(j);
+        s[1].q[j] = -0.2 * static_cast<double>(j + 1);
+    }
+    writeJointStatesCsv(path, s);
+    const auto r = readJointStatesCsv(path);
+    ASSERT_EQ(r.size(), 2u);
+    EXPECT_NEAR(r[1].t, 0.5, 1e-12);
+    for (std::size_t j = 0; j < kNumJoints; ++j) {
+        EXPECT_NEAR(r[0].q[j], s[0].q[j], 1e-9);
+        EXPECT_NEAR(r[1].q[j], s[1].q[j], 1e-9);
+    }
+
+    // Shuffled columns plus an extra one: mapped by name.
+    const std::string shuffled = ::testing::TempDir() + "joint_states_read_shuffled.csv";
+    {
+        std::ofstream f(shuffled);
+        f << "extra,fer_joint7,t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6\n";
+        f << "99,7,1.5,1,2,3,4,5,6\n";
+    }
+    const auto q = readJointStatesCsv(shuffled);
+    ASSERT_EQ(q.size(), 1u);
+    EXPECT_DOUBLE_EQ(q[0].t, 1.5);
+    for (std::size_t j = 0; j < kNumJoints; ++j) EXPECT_DOUBLE_EQ(q[0].q[j], j + 1.0);
+}
+
+TEST(JointStatesCsvIoTest, ReadRejectsBadFiles) {
+    EXPECT_THROW(readJointStatesCsv("/tmp/definitely_missing_joint_states.csv"), std::runtime_error);
+    const std::string missing_col = ::testing::TempDir() + "joint_states_read_missingcol.csv";
+    {
+        std::ofstream f(missing_col);
+        f << "t,fer_joint1,fer_joint2\n0,1,2\n";
+    }
+    EXPECT_THROW(readJointStatesCsv(missing_col), std::runtime_error);
+    const std::string no_rows = ::testing::TempDir() + "joint_states_read_norows.csv";
+    {
+        std::ofstream f(no_rows);
+        f << "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7\n";
+    }
+    EXPECT_THROW(readJointStatesCsv(no_rows), std::runtime_error);
+}
