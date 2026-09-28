@@ -86,6 +86,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_cartesian_error test/test_cartesian_error.cpp)
   target_link_libraries(test_cartesian_error ${PROJECT_NAME}_core)
 
+  ament_add_gtest(test_robot_model_frames test/test_robot_model_frames.cpp)
+  target_link_libraries(test_robot_model_frames ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_velocity_ik test/test_velocity_ik.cpp)
   target_link_libraries(test_velocity_ik ${PROJECT_NAME}_core)
 

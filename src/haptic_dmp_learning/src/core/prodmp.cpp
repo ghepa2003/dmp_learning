@@ -523,6 +523,53 @@ Eigen::Vector3d ProDMP::step(double dt) {
     return pos_;
 }
 
+Eigen::Vector3d ProDMP::velocityForCandidateGoal(const Eigen::Vector3d& candidate_goal) const {
+    if (!learned_) {
+        throw std::logic_error(
+            "ProDMP::velocityForCandidateGoal: parameters not learned or loaded. Call "
+            "learnFromDemonstration() or setLearnedParameters() first.");
+    }
+    if (!(s_ > 0.0)) {
+        throw std::logic_error(
+            "ProDMP::velocityForCandidateGoal: no step() performed yet (s == 0). Advance the "
+            "ProDMP to the instant of interest with step() before calling this method.");
+    }
+
+    // Same closed-form quantities as step() at the current s_ (state is not modified).
+    const double e = std::exp(0.5 * alpha_ * s_);
+    const double y1 = std::exp(-0.5 * alpha_ * s_);
+    const double y2 = s_ * y1;
+    const double dy1 = -0.5 * alpha_ * y1;
+    const double dy2 = y1 - 0.5 * alpha_ * y2;
+
+    const double dy1_0 = -0.5 * alpha_;
+    const double dy2_0 = 1.0;
+    const double dxi1 = (dy2_0 * dy1 - dy1_0 * dy2) / wronskian_det_;
+    const double dxi2 = dy2;
+
+    const double q1 = (0.5 * alpha_ * s_ - 1.0) * e + 1.0;
+    const double q2 = 0.5 * alpha_ * (e - 1.0);
+    const double vel_g = dy2 * q2 - dy1 * q1;
+
+    const Eigen::Vector3d init_vel_scaled = init_vel_ * tau_;
+    Eigen::Vector3d vel_s = init_pos_ * dxi1 + init_vel_scaled * dxi2;
+
+    for (int i = 0; i < num_basis_; ++i) {
+        const double vel_w = dy2 * p2_accum_(i) - dy1 * p1_accum_(i);
+        for (int d = 0; d < 3; ++d) vel_s(d) += weights_[d](i) * vel_w;
+    }
+
+    // Goal term: goal_param_ is replaced by the candidate (stored relative to init_pos_ when
+    // relative_goal_, whose init_pos_ * vel_g share is then added back, exactly as in step()).
+    const Eigen::Vector3d candidate_param =
+        relative_goal_ ? Eigen::Vector3d(candidate_goal - init_pos_) : candidate_goal;
+    vel_s += candidate_param * vel_g;
+    if (relative_goal_) {
+        vel_s += init_pos_ * vel_g;
+    }
+    return vel_s / tau_;
+}
+
 void ProDMP::setLearnedParameters(double tau, const Eigen::Vector3d& init_pos,
                                   const Eigen::Vector3d& init_vel, const Eigen::Vector3d& goal_param,
                                   const Eigen::VectorXd& centers, const Eigen::VectorXd& widths,

@@ -34,6 +34,7 @@ add_library(${PROJECT_NAME}_core
   src/core/demo_csv_io.cpp
   src/core/grasp_state_machine.cpp
   src/core/cube_satellite_model.cpp
+  src/core/joint_states_csv_io.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -237,6 +238,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_demo_csv_io test/test_demo_csv_io.cpp)
   target_link_libraries(test_demo_csv_io ${PROJECT_NAME}_core)
 
+  ament_add_gtest(test_joint_states_csv_io test/test_joint_states_csv_io.cpp)
+  target_link_libraries(test_joint_states_csv_io ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_grasp_state_machine test/test_grasp_state_machine.cpp)
   target_link_libraries(test_grasp_state_machine ${PROJECT_NAME}_core)
 
@@ -256,6 +260,12 @@ if(BUILD_TESTING)
   # Pure geometry of the cube satellite model (no ROS).
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_grasp_roll test/test_grasp_roll.cpp)
+  target_link_libraries(test_grasp_roll ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_grasp_cost test/test_grasp_cost.cpp)
+  target_link_libraries(test_grasp_cost ${PROJECT_NAME}_core)
 
   # Pure logic of syncControllerAlignmentOverride()'s parameter payload (header-only, no ROS
   # node graph needed - the actual parameter-client call is not unit-testable in isolation).

@@ -6,10 +6,12 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
 #include "haptic_dmp_learning/core/demonstration_recorder.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
+#include "haptic_dmp_learning/core/joint_states_csv_io.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp" 
 
 namespace haptic_dmp_learning {
@@ -34,19 +36,26 @@ public:
 private:
     void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
 
     void startRecording();
     void stopRecordingAndLearn();
+    void saveJointStates();
     void saveDemoToCsv(const std::string& path) const;
 
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
 
     // Core mathematical objects
     core::DemonstrationRecorder recorder_;
     core::DMP dmp_;
     core::QuaternionDMP quat_dmp_;
+
+    // /joint_states buffered during the recording interval (same start/stop as the Cartesian demo)
+    std::vector<core::joint_states_csv_io::JointStateSample> joint_state_samples_;
+    std::size_t joint_states_skipped_ = 0;  ///< messages lacking one of fer_joint1..7
 
     // State machine tracking
     bool recording_;
@@ -69,6 +78,8 @@ private:
     std::string pose_topic_;  ///< master pose input topic (declared, not remap-dependent)
     std::string output_yaml_path_;
     std::string output_demo_csv_path_;
+    std::string joint_states_topic_;
+    std::string output_joint_states_csv_path_;
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
     std::string feature_flags_path_;

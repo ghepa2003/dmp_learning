@@ -47,6 +47,7 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
     master_pose_topic_ = this->declare_parameter<std::string>("master_pose_topic", "/master_pose_raw");
     target_pose_topic_ = this->declare_parameter<std::string>("target_pose_topic", "/target_pose");
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
+    joint_states_topic_ = this->declare_parameter<std::string>("joint_states_topic", "/joint_states");
 
     // Absolute defaults so behavior does not depend on the process's current
     // working directory at launch.
@@ -54,6 +55,11 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
     const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
     output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", ws_root + "/live_demo_dmp_weights.yaml");
     output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", ws_root + "/live_demo_raw.csv");
+    // Same session path as the raw demo, suffix _joint_states (live_demo_raw.csv ->
+    // live_demo_joint_states.csv). An empty value disables the joint-states CSV.
+    output_joint_states_csv_path_ = this->declare_parameter<std::string>(
+        "output_joint_states_csv_path",
+        core::joint_states_csv_io::deriveJointStatesCsvPath(output_demo_csv_path_));
 
     // 3. Locate feature flags configuration YAML (absolute default;
     // dmp_io::applyFeatureConfig has its own fallback chain and will refuse
@@ -80,6 +86,12 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
     buttons_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
         buttons_topic_, 10,
         std::bind(&LiveDemoRecorderNode::buttonsCallback, this, std::placeholders::_1));
+
+    // 6b. Subscribe to joint states (same always-on pattern as the master pose; the callback
+    // drops messages while not recording)
+    joint_states_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        joint_states_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&LiveDemoRecorderNode::jointStateCallback, this, std::placeholders::_1));
 
     // 7. Publisher for mirroring master poses to Gazebo controller
     target_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -186,6 +198,34 @@ void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStam
     recorder_.addSample(s);
 }
 
+void LiveDemoRecorderNode::jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
+    if (!recording_) return;
+
+    // Joints are mapped by NAME (msg->name order is not fixed).
+    core::joint_states_csv_io::JointStateSample sample;
+    if (!core::joint_states_csv_io::extractJointPositions(msg->name, msg->position, sample.q)) {
+        ++joint_states_skipped_;
+        RCLCPP_WARN_ONCE(this->get_logger(),
+                         "%s message lacks one of fer_joint1..fer_joint7 - skipping such "
+                         "messages (count reported at the end of the recording).",
+                         joint_states_topic_.c_str());
+        return;
+    }
+
+    // Same time base rule as masterPoseCallback: header.stamp when it shares the recording
+    // clock, this->now() otherwise (unset or different clock).
+    rclcpp::Time now;
+    const rclcpp::Time stamp(msg->header.stamp, record_start_time_.get_clock_type());
+    if ((msg->header.stamp.sec != 0 || msg->header.stamp.nanosec != 0) &&
+        std::abs((stamp - record_start_time_).seconds()) < kMaxPlausibleDemoSeconds) {
+        now = stamp;
+    } else {
+        now = this->now();
+    }
+    sample.t = (now - record_start_time_).seconds();
+    joint_state_samples_.push_back(sample);
+}
+
 void LiveDemoRecorderNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg) {
     if (msg->buttons.size() < 2) {
         RCLCPP_WARN_ONCE(this->get_logger(),
@@ -218,6 +258,8 @@ void LiveDemoRecorderNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPt
 
 void LiveDemoRecorderNode::startRecording() {
     recorder_.clear();
+    joint_state_samples_.clear();
+    joint_states_skipped_ = 0;
     recording_ = true;
     gripper_trigger_pending_ = false;
     has_last_orientation_ = false;
@@ -225,6 +267,30 @@ void LiveDemoRecorderNode::startRecording() {
     quat_sign_flips_corrected_ = 0;
     record_start_time_ = this->now();
     RCLCPP_INFO(this->get_logger(), "Recording started.");
+}
+
+void LiveDemoRecorderNode::saveJointStates() {
+    if (output_joint_states_csv_path_.empty()) return;
+    if (joint_states_skipped_ > 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "%zu %s message(s) lacked one of fer_joint1..fer_joint7 and were skipped.",
+                    joint_states_skipped_, joint_states_topic_.c_str());
+    }
+    if (joint_state_samples_.empty()) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "%s was not published during the recording (0 valid samples) - verify that "
+                     "Gazebo / the robot state publisher is running. Joint-states CSV NOT written.",
+                     joint_states_topic_.c_str());
+        return;
+    }
+    try {
+        core::joint_states_csv_io::writeJointStatesCsv(output_joint_states_csv_path_,
+                                                       joint_state_samples_);
+        RCLCPP_INFO(this->get_logger(), "Joint states (%zu samples) saved to %s",
+                    joint_state_samples_.size(), output_joint_states_csv_path_.c_str());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Saving joint states failed: %s", e.what());
+    }
 }
 
 void LiveDemoRecorderNode::stopRecordingAndLearn() {
@@ -252,6 +318,8 @@ void LiveDemoRecorderNode::stopRecordingAndLearn() {
             RCLCPP_ERROR(this->get_logger(), "Saving raw demo failed: %s", e.what());
         }
     }
+
+    saveJointStates();
 
     // Fit DMP models
     try {

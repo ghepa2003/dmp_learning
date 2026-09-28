@@ -344,3 +344,83 @@ TEST(ProDMPCoreTest, YamlRoundtrip) {
     for (int i = 0; i < N; ++i) max_diff = std::max(max_diff, (traj_ref[i] - traj_new[i]).norm());
     EXPECT_NEAR(max_diff, 0.0, 1e-9);
 }
+
+// ---------------------------------------------------------------------------------------
+// velocityForCandidateGoal()
+// ---------------------------------------------------------------------------------------
+namespace {
+
+ProDMP makeLearnedProDMP(int N, double dt) {
+    ProDMP mp(20);
+    mp.learnFromDemonstration(
+        makeMinJerkDemo(Eigen::Vector3d::Zero(), Eigen::Vector3d(0.3, -0.2, 0.4), N, dt));
+    return mp;
+}
+
+}  // namespace
+
+TEST(ProDMPCandidateGoalTest, CurrentGoalReproducesVelocity) {
+    for (bool relative : {false, true}) {
+        ProDMP mp = makeLearnedProDMP(200, 0.01);
+        mp.setRelativeGoal(relative);
+        for (int i = 0; i < 60; ++i) mp.step(0.01);
+        const Eigen::Vector3d v = mp.velocityForCandidateGoal(mp.goal());
+        EXPECT_NEAR((v - mp.velocity()).norm(), 0.0, 1e-12) << "relative=" << relative;
+    }
+}
+
+TEST(ProDMPCandidateGoalTest, DifferenceIsLinearInGoalWithKnownFactor) {
+    const double dt = 0.01;
+    const int n_steps = 60;
+    for (bool relative : {false, true}) {
+        ProDMP mp = makeLearnedProDMP(200, dt);
+        mp.setRelativeGoal(relative);
+        for (int i = 0; i < n_steps; ++i) mp.step(dt);
+
+        const double a = mp.alpha();
+        const double s = n_steps * dt / mp.tau();
+        const double e = std::exp(0.5 * a * s);
+        const double y1 = std::exp(-0.5 * a * s);
+        const double y2 = s * y1;
+        const double dy1 = -0.5 * a * y1;
+        const double dy2 = y1 - 0.5 * a * y2;
+        const double q1 = (0.5 * a * s - 1.0) * e + 1.0;
+        const double q2 = 0.5 * a * (e - 1.0);
+        const double factor = (dy2 * q2 - dy1 * q1) / mp.tau();
+
+        const Eigen::Vector3d g1(0.5, 0.1, -0.2), g2(-0.3, 0.4, 0.6);
+        const Eigen::Vector3d dv = mp.velocityForCandidateGoal(g1) - mp.velocityForCandidateGoal(g2);
+        EXPECT_GT(std::abs(factor), 1e-6);
+        for (int d = 0; d < 3; ++d) {
+            EXPECT_NEAR(dv(d), factor * (g1(d) - g2(d)), 1e-9) << "axis " << d;
+        }
+    }
+}
+
+TEST(ProDMPCandidateGoalTest, ThrowsBeforeAnyStepOrWhenNotLearned) {
+    const ProDMP unlearned(20);
+    EXPECT_THROW(unlearned.velocityForCandidateGoal(Eigen::Vector3d::Zero()), std::logic_error);
+
+    ProDMP mp = makeLearnedProDMP(200, 0.01);
+    EXPECT_THROW(mp.velocityForCandidateGoal(Eigen::Vector3d::Zero()), std::logic_error);
+    mp.step(0.01);
+    EXPECT_NO_THROW(mp.velocityForCandidateGoal(Eigen::Vector3d::Zero()));
+}
+
+TEST(ProDMPCandidateGoalTest, DoesNotAlterState) {
+    ProDMP mp = makeLearnedProDMP(200, 0.01);
+    for (int i = 0; i < 40; ++i) mp.step(0.01);
+    const Eigen::Vector3d pos = mp.position(), vel = mp.velocity(), goal = mp.goal();
+    const Eigen::Vector3d gp = mp.goalParam();
+
+    mp.velocityForCandidateGoal(Eigen::Vector3d(1.0, 2.0, 3.0));
+
+    EXPECT_EQ(mp.position(), pos);
+    EXPECT_EQ(mp.velocity(), vel);
+    EXPECT_EQ(mp.goal(), goal);
+    EXPECT_EQ(mp.goalParam(), gp);
+    // The next real step is identical to one taken on an untouched twin.
+    ProDMP twin = makeLearnedProDMP(200, 0.01);
+    for (int i = 0; i < 40; ++i) twin.step(0.01);
+    EXPECT_EQ(mp.step(0.01), twin.step(0.01));
+}

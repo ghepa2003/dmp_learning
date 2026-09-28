@@ -188,6 +188,23 @@ public:
      */
     Eigen::Vector3d step(double dt);
 
+    /**
+     * @brief Velocity (real time scale) at the CURRENT instant s_ if the goal were
+     *        @p candidate_goal instead of goal_param_. Read-only: does NOT advance or
+     *        alter any state (s_, pos_, vel_, goal_param_, the p1/p2 accumulators).
+     *
+     * Call it after bringing the ProDMP to the desired instant with repeated step()
+     * calls, typically with any "nominal" goal: @p candidate_goal only replaces the goal
+     * term of the velocity g*(y2'(s) q2(s) - y1'(s) q1(s)) / tau, never the position or
+     * the internal state. Uses the same formula as step().
+     *
+     * @param candidate_goal Absolute goal (same convention as goal() / setGoal()),
+     *                       also when relativeGoal() is true.
+     * @throws std::logic_error if !isLearned() or no step() has been performed since the
+     *         last setInitialConditions() (s_ == 0).
+     */
+    Eigen::Vector3d velocityForCandidateGoal(const Eigen::Vector3d& candidate_goal) const;
+
     /// @brief Movement duration tau (seconds).
     double tau() const { return tau_; }
 

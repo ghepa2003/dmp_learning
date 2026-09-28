@@ -62,6 +62,10 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
         pinocchio::JointIndex jid = impl_->model.getJointId(jn);
         impl_->q_index[i] = impl_->model.idx_qs[jid];
         impl_->v_index[i] = impl_->model.idx_vs[jid];
+        // Limits parsed from the URDF by Pinocchio, extracted through the same q_index mapping
+        // (model.nq may include non-arm DOF such as gripper fingers).
+        joint_lower_limits_(i) = impl_->model.lowerPositionLimit(impl_->q_index[i]);
+        joint_upper_limits_(i) = impl_->model.upperPositionLimit(impl_->q_index[i]);
     }
 
     jacobian_.setZero();
@@ -71,6 +75,37 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
 }
 
 RobotModel::~RobotModel() = default;
+
+RobotModel::FramePose RobotModel::framePose(const std::string& frame_name) const {
+    if (!impl_->model.existFrame(frame_name)) {
+        throw std::invalid_argument("RobotModel::framePose: frame not found in URDF: " + frame_name);
+    }
+    const pinocchio::FrameIndex idx = impl_->model.getFrameId(frame_name);
+    const auto& oMf = impl_->data.oMf[idx];
+    FramePose pose;
+    pose.position = oMf.translation();
+    pose.orientation = Eigen::Quaterniond(oMf.rotation());
+    return pose;
+}
+
+const std::vector<std::string>& RobotModel::armLinkFrameNames() {
+    static const std::vector<std::string> names = {
+        "fer_link0", "fer_link1", "fer_link2", "fer_link3", "fer_link4",
+        "fer_link5", "fer_link6", "fer_link7", "fer_link8", "fer_hand"};
+    return names;
+}
+
+const std::vector<std::string>& RobotModel::gripperFrameNames() {
+    static const std::vector<std::string> names = {"fer_leftfinger", "fer_rightfinger"};
+    return names;
+}
+
+RobotModel::JointVector RobotModel::readyPose() {
+    JointVector q;
+    q << 0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0, 1.5707963267948966,
+        0.7853981633974483;
+    return q;
+}
 
 void RobotModel::update(const JointVector& q, const JointVector& dq) {
     // 1. Pack the 7 actuated joint values into Pinocchio's full coordinate vectors

@@ -56,6 +56,15 @@ public:
     Eigen::Vector3d cylinderBaseCenterWorld(double theta_rad) const;     // on the cube face
     Eigen::Vector3d cylinderTopCenterWorld(double theta_rad) const;      // base + standoff * axis
 
+    // Cube body pose (pure geometry): centered at center_world, rotated by R(theta) about axis_world.
+    Eigen::Vector3d cubeCenterWorld() const;
+    /// Cube body orientation in world: R(theta) * [n, axis, n x axis] (columns), the same frame
+    /// graspPoseAt uses. NOT R(theta) alone (that would assume a world-aligned body frame).
+    Eigen::Matrix3d cubeRotationWorld(double theta_rad) const;
+    double cubeSideM() const;
+    Eigen::Vector3d axisWorld() const;  // normalized spin axis (theta-independent)
+    Eigen::Vector3d faceNormalBody() const;  // normalized face normal at theta = 0                                   // cube_side_m
+
     /// Tolerance on |axis . n| for "face is lateral". 1e-6 (~1 microrad) is far above double
     /// round-off on unit vectors (~1e-16), so exactly-perpendicular inputs always pass, yet
     /// tight enough that the frame u/v/n stays orthonormal to well below any geometric

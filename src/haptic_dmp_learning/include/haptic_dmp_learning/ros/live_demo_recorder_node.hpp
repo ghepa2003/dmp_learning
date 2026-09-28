@@ -6,10 +6,12 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
 #include "haptic_dmp_learning/core/demonstration_recorder.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
+#include "haptic_dmp_learning/core/joint_states_csv_io.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
 
 namespace haptic_dmp_learning {
@@ -33,13 +35,16 @@ public:
 private:
     void masterPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
 
     void startRecording();
     void stopRecordingAndLearn();
+    void saveJointStates();
 
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr master_pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
 
     // Core mathematical objects
@@ -52,6 +57,10 @@ private:
     rclcpp::Time record_start_time_;
     std::vector<int32_t> prev_buttons_;  ///< Previous button state for rising-edge detection
     bool gripper_trigger_pending_ = false;
+
+    // /joint_states buffered during the recording interval (same start/stop as the Cartesian demo)
+    std::vector<core::joint_states_csv_io::JointStateSample> joint_state_samples_;
+    std::size_t joint_states_skipped_ = 0;  ///< messages lacking one of fer_joint1..7
 
     // Quaternion double-cover continuity. The Geomagic Touch driver sometimes
     // reports a physically identical rotation as -q, a representation sign flip
@@ -69,8 +78,10 @@ private:
     std::string master_pose_topic_;
     std::string target_pose_topic_;
     std::string buttons_topic_;
+    std::string joint_states_topic_;
     std::string output_yaml_path_;
     std::string output_demo_csv_path_;
+    std::string output_joint_states_csv_path_;
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
     std::string feature_flags_path_;
