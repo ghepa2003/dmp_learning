@@ -1,0 +1,17 @@
+format_version: 1
+weights_file: weights.yaml
+weights_sha256: 03d4bc158bbaf652f135d6c0dd736db77ef67fab7a2da4c717ab5bbd86c7ac3a
+demo:
+  tau_s: 60.972930046000002
+  t_contact_s: null
+  delta_g_demo_m: [0.08595382, -0.1149694, -0.18811998999999999]
+  contact_to_end_offset_m: [0, 0, 0]
+  start_position_demo_frame_m: [-0.0016375199999999999, 0.066248299999999996, 0.179836]
+  start_joints_rad: null
+  end_joints_rad: null
+satellite_at_demo: null
+fit:
+  num_basis: 80
+  ridge_lambda: 1e-10
+  position_filter_window_s: 0.050000000000000003
+  fix_goal_to_demo_endpoint: true
