@@ -43,6 +43,7 @@
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "satellite_grasp_msgs/msg/grasp_command.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
+#include "satellite_grasp_planner/ros/grasp_planner_checks.hpp"
 
 namespace satellite_grasp_planner {
 namespace ros_wrapper {
@@ -71,6 +72,7 @@ private:
     Eigen::Quaterniond satellite_q_ref_ = Eigen::Quaterniond::Identity();
     double omega_consistency_tol_rad_s_ = 0.0;
     std::optional<double> time_budget_s_;
+    SelectionOverrides selection_overrides_;  ///< optional SelectionParams overrides, see grasp_planner_checks.hpp
     std::string grasp_command_topic_;
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;

@@ -35,8 +35,9 @@ GraspCommand toGraspCommandMsg(const core::GraspLaunchResult& result, const core
         msg.theta_star_rad = result.theta_star_rad.value();
         msg.psi_rad = result.psi_rad.value();
         msg.provisional_delay_s = result.launch->delay_s;
+        msg.best_total_cost = result.selection.best.cost.total;
     }
-    // else: goal_pose/k/theta_star_rad/psi_rad/provisional_delay_s stay at their zero-init defaults.
+    // else: goal_pose/k/theta_star_rad/psi_rad/provisional_delay_s/best_total_cost stay at their zero-init defaults.
 
     msg.contact_time_s = result.tau_launch_s;  // 0.0 when status != kSelected (GraspLaunchResult's own contract)
     msg.omega_rad_s = snapshot.omega_rad_s;
@@ -63,6 +64,27 @@ GraspCommand toGraspCommandMsg(const core::GraspLaunchResult& result, const core
     msg.max_w_hat_seen = sel.max_w_hat_seen;
 
     return msg;
+}
+
+const char* statusName(uint8_t status) {
+    switch (status) {
+        case GraspCommand::STATUS_UNSET: return "STATUS_UNSET";
+        case GraspCommand::STATUS_SELECTED: return "STATUS_SELECTED";
+        case GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE: return "STATUS_NO_FEASIBLE_CANDIDATE";
+        case GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE: return "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE";
+        default: return "STATUS_<unknown>";
+    }
+}
+
+const char* stopReasonName(uint8_t stop_reason) {
+    switch (stop_reason) {
+        case GraspCommand::STOP_UNSET: return "STOP_UNSET";
+        case GraspCommand::STOP_COMPLETED: return "STOP_COMPLETED";
+        case GraspCommand::STOP_BOUND_SATISFIED: return "STOP_BOUND_SATISFIED";
+        case GraspCommand::STOP_MAX_ROWS_REACHED: return "STOP_MAX_ROWS_REACHED";
+        case GraspCommand::STOP_TIME_BUDGET_EXHAUSTED: return "STOP_TIME_BUDGET_EXHAUSTED";
+        default: return "STOP_<unknown>";
+    }
 }
 
 }  // namespace ros_wrapper

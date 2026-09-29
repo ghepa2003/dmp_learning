@@ -6,10 +6,13 @@
  *        Kept free of rclcpp::Node so these checks are unit-testable without rclcpp::init().
  */
 
+#include <optional>
 #include <string>
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+
+#include "satellite_grasp_planner/core/grasp_selection.hpp"
 
 namespace satellite_grasp_planner {
 namespace ros_wrapper {
@@ -49,6 +52,27 @@ void checkFirstOdomSample(const Eigen::Vector3d& position, const std::string& fr
 /// @p omega_rad_s by more than @p tol_rad_s.
 void checkOmegaConsistency(const Eigen::Vector3d& twist_angular, const Eigen::Vector3d& axis, double omega_rad_s,
                            double tol_rad_s);
+
+/// Optional ROS-parameter overrides of core::SelectionParams. nullopt = parameter not set, the
+/// SelectionParams default is kept.
+struct SelectionOverrides {
+    std::optional<double> scan_step_deg;
+    std::optional<int> max_rows;
+    std::optional<double> w_hat_upper_bound;
+    std::optional<double> psi_tol_deg;
+};
+
+/// @throws std::invalid_argument, naming the parameter, if a set override is not finite or not > 0.
+void validateSelectionOverrides(const SelectionOverrides& overrides);
+
+/// Validates @p overrides, then writes each set one into @p params (scan.step_rad, max_rows,
+/// w_hat_upper_bound, psi_tol_rad). Unset ones leave @p params untouched.
+/// @throws std::invalid_argument as validateSelectionOverrides(); @p params is not modified then.
+void applySelectionOverrides(core::SelectionParams& params, const SelectionOverrides& overrides);
+
+/// One-line description of the effective values in @p params for the four overridable fields, each
+/// marked "(default)" if @p overrides left it unset, "(param)" otherwise.
+std::string describeSelectionParams(const core::SelectionParams& params, const SelectionOverrides& overrides);
 
 }  // namespace ros_wrapper
 }  // namespace satellite_grasp_planner

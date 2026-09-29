@@ -45,6 +45,11 @@ grasp_planner_node:
     robot_base_world_tol_m: 1.0e-6
     grasp_command_topic: "/grasp_command"
     # time_budget_s: 10.0   # optional, soft wall-clock budget for the whole selectGrasp() call
+    # Optional SelectionParams overrides; each must be finite and > 0. Unset = default (shown).
+    # scan_step_deg: 5.0
+    # max_rows: 40           # integer
+    # w_hat_upper_bound: 2.5
+    # psi_tol_deg: 10.0
 
 # Shown only to document the shared-YAML idea (D3): this node's satellite_rotation_* / satellite_q_ref
 # / satellite_odom_topic parameters above are meant to be read by prodmp_gazebo_executor_node too, via

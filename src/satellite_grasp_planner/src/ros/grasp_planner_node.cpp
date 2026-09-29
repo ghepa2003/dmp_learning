@@ -1,6 +1,7 @@
 #include "satellite_grasp_planner/ros/grasp_planner_node.hpp"
 
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -106,6 +107,28 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     const double time_budget_s = this->declare_parameter<double>("time_budget_s", -1.0);
     if (time_budget_s >= 0.0) time_budget_s_ = time_budget_s;
 
+    // SelectionParams overrides: declared by type only, so "not set" (keep the SelectionParams
+    // default) is distinguishable from any value. Validated here so a bad value fails at startup.
+    auto opt_double = [this](const char* name) -> std::optional<double> {
+        const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
+        if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) return std::nullopt;
+        return v.get<double>();
+    };
+    selection_overrides_.scan_step_deg = opt_double("scan_step_deg");
+    selection_overrides_.w_hat_upper_bound = opt_double("w_hat_upper_bound");
+    selection_overrides_.psi_tol_deg = opt_double("psi_tol_deg");
+    {
+        const auto v = this->declare_parameter("max_rows", rclcpp::ParameterType::PARAMETER_INTEGER);
+        if (v.get_type() != rclcpp::ParameterType::PARAMETER_NOT_SET) {
+            const int64_t rows = v.get<int64_t>();
+            if (rows > std::numeric_limits<int>::max()) {
+                throw std::invalid_argument("parameter 'max_rows' is too large: " + std::to_string(rows));
+            }
+            selection_overrides_.max_rows = static_cast<int>(rows);  // <= 0 is rejected below
+        }
+    }
+    validateSelectionOverrides(selection_overrides_);
+
     // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
     checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
     checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
@@ -166,6 +189,9 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         core::SelectionInputs in =
             core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, robot_base_world_);
         if (time_budget_s_) in.params.time_budget_s = time_budget_s_;
+        applySelectionOverrides(in.params, selection_overrides_);
+        RCLCPP_INFO(this->get_logger(), "grasp_planner_node: starting selection with %s",
+                    describeSelectionParams(in.params, selection_overrides_).c_str());
 
         const core::GraspLaunchResult result = core::planGraspAndLaunch(
             in, snapshot, min_delay_s_, /*clock=*/nullptr, /*t_now_override_s=*/std::nullopt);
@@ -178,10 +204,14 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
             throw std::runtime_error(m.str());
         }
 
-        pub_->publish(toGraspCommandMsg(result, snapshot, now));
+        const auto msg = toGraspCommandMsg(result, snapshot, now);
+        pub_->publish(msg);
         RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: published GraspCommand (status=%d, rows_evaluated=%d), now idle.",
-                    static_cast<int>(result.status), result.selection.rows_evaluated);
+                    "grasp_planner_node: published GraspCommand (status=%u %s, stop_reason=%u %s, "
+                    "rows_evaluated=%d), now idle.",
+                    static_cast<unsigned>(msg.status), statusName(msg.status),
+                    static_cast<unsigned>(msg.stop_reason), stopReasonName(msg.stop_reason),
+                    msg.rows_evaluated);
     } catch (const std::exception& e) {
         RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: selection failed: %s", e.what());
         rclcpp::shutdown();

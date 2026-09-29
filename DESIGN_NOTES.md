@@ -135,6 +135,23 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   `883ffb2ffdaf8d9d4f0581c092cace8ae40037d4663a0cf5bbb4196228d9af6c`;
   `runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml` has the identical hash.
 
+## 2026-09-29 — Convention of theta and of the virtual collar
+
+- `theta = 0` is the spawn orientation of `free_target_object` (identity, `roll=pitch=yaw=0`),
+  which is why `satellite_q_ref` is identity in `config/grasp_planner_example.yaml`.
+  `PhaseTracker` and `CubeSatelliteModel` use the same theta (`test_theta_convention.cpp`).
+- The virtual collar sits on the `+x` body face in the example YAML
+  (`cube_geometry.face_normal_body = [1, 0, 0]`). The selection probe fixtures in
+  `test_grasp_selection.cpp` use `-x` (`face_normal_body = [-1, 0, 0]`). Both are valid.
+- Equivalence: `(face_normal_body = n, theta)` and `(face_normal_body = -n, theta + pi)` give the
+  same grasp position, nominal orientation and approach axis, for all four points k. It is
+  proved numerically, for several theta values and three center/axis setups, in
+  `OppositeFaceNormalWithThetaPlusPiGivesSameGraspPose`. The test also checks that
+  `(-n, theta)` without the `+pi` does NOT match, so the comparison cannot pass vacuously.
+  So a YAML with `-x` describes the same physical collar as `+x`, with theta shifted by `pi`.
+- The collar exists ONLY in `CubeSatelliteModel` (planner geometry and collision model). It is
+  NOT in the Gazebo SDF of `free_target_object`: the simulated cube has no collar geometry.
+
 ## 2026-09-11 — Quaternion normalization in `learn_and_test_dmp.cpp`'s local CSV loader
 
 **Context**: `demo_csv_io::readDemoCsv` (used by `learn_and_test_prodmp.cpp`)

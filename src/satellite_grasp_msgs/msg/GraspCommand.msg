@@ -27,7 +27,8 @@ float64 omega_rad_s                     # signed, from the snapshot used for sel
 
 # DIAGNOSTIC ONLY - do not use this to time a launch. Computed from planGraspAndLaunch()'s default
 # t_now_s = snapshot.t_s + WALL-CLOCK elapsed_s, which is wrong under a Gazebo real-time-factor != 1.
-# The consuming executor triggers on PHASE (theta_trig = theta* - omega*T_total), never on this value.
+# The consuming executor triggers on PHASE, never on this value: theta_trig = theta* - omega*contact_time_s,
+# brought back to (-pi, pi] with wrapPi.
 float64 provisional_delay_s             # launch.delay_s if SELECTED else 0.0
 
 # Selection diagnostics - always populated regardless of status.
@@ -42,3 +43,7 @@ uint8 STOP_TIME_BUDGET_EXHAUSTED = 4
 uint8 stop_reason
 bool bound_violated
 float64 max_w_hat_seen
+# Total cost (GraspCostBreakdown::total, to be MINIMIZED) of the selected candidate. Meaningful ONLY
+# when status == STATUS_SELECTED; 0.0 otherwise - 0.0 is a legitimate cost value too, so read status
+# first, never infer "selected" from this field.
+float64 best_total_cost
