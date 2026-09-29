@@ -86,8 +86,10 @@ Planned for removal together with the ring code (author's plan, not tracked in t
   code 3 = weights saved, demo_params write failed; `NonIncreasingTimestampsError` only prints
   a warning, writes no file, exits 0.
 - `satellite_grasp_planner/test/probe_gate.hpp` — long probes are skipped unless
-  `GRASP_RUN_PROBES` is set to something other than `""`/`"0"`; about 25 minutes per full run,
-  reported 2026-09-28, not re-measured.
+  `GRASP_RUN_PROBES` is set to something other than `""`/`"0"`. MEASURED 2026-09-29, dev laptop,
+  Release (-O3): production selection = 66 rollouts + scan in 5.2 s (at most ~80 ms per rollout).
+  A build without optimization flags is far slower: ~7.6 s per rollout / ~500 s per selection were
+  reported on 2026-09-28 (build type not recorded at the time).
 - `grasp_cost.hpp` (`meanSurfaceSpeedSquared`) — mean over the 4 grasp points at theta = 0 of
   `|omega * axis x r|^2`, `r` from `graspPoseAt(k, 0) - cubeCenterWorld()`; independent of
   theta. MEASURED 2026-09-29 (default `CubeSatelliteModel::Params`: side 0.20 m, standoff

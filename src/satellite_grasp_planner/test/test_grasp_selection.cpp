@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -226,6 +227,117 @@ TEST(GraspSelectionTest, InvalidParamsThrow) {
     EXPECT_THROW(selectGrasp(m, tmpl, robot, q0, bad), std::invalid_argument);
 }
 
+TEST(GraspSelectionTest, InvalidTimeBudgetThrowsZeroDoesNot) {
+    auto robot = loadPandaRobotModel();
+    ASSERT_NE(robot, nullptr);
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
+    const RobotModel::JointVector q0 = RobotModel::readyPose();
+    const CubeSatelliteModel m = makeNearbyModel(*robot, q0);
+    SelectionParams sp = makeSmallParams(m, q0, *robot, 1.0);
+
+    SelectionParams bad = sp;
+    bad.time_budget_s = std::nan("");
+    EXPECT_THROW(selectGrasp(m, tmpl, robot, q0, bad), std::invalid_argument);
+    bad.time_budget_s = -1.0;
+    EXPECT_THROW(selectGrasp(m, tmpl, robot, q0, bad), std::invalid_argument);
+    bad.time_budget_s = std::numeric_limits<double>::infinity();
+    EXPECT_THROW(selectGrasp(m, tmpl, robot, q0, bad), std::invalid_argument);
+
+    SelectionParams zero = sp;
+    zero.time_budget_s = 0.0;
+    EXPECT_NO_THROW(selectGrasp(m, tmpl, robot, q0, zero));
+}
+
+// time_budget_s = nullopt (default) and a practically unlimited budget must behave the same, field by
+// field, aside from elapsed_s (real wall time, never expected to be bit-identical between two calls).
+// This is NOT a claim that either of them matches selectGrasp()'s behavior before the budget feature
+// was added - only that an unlimited budget is equivalent to no budget at all.
+TEST(GraspSelectionTest, TimeBudgetNulloptEqualsHugeBudget) {
+    auto robot = loadPandaRobotModel();
+    ASSERT_NE(robot, nullptr);
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
+    const RobotModel::JointVector q0 = RobotModel::readyPose();
+    const CubeSatelliteModel m = makeNearbyModel(*robot, q0);
+    const double w_ref = referenceWTrans(tmpl, robot, q0, Eigen::Vector3d(0.1, 0.0, 0.0));
+    SelectionParams sp = makeSmallParams(m, q0, *robot, w_ref);
+
+    sp.time_budget_s = std::nullopt;
+    const GraspSelection a = selectGrasp(m, tmpl, robot, q0, sp);
+    sp.time_budget_s = 1e9;
+    const GraspSelection b = selectGrasp(m, tmpl, robot, q0, sp);
+
+    EXPECT_EQ(a.found, b.found);
+    EXPECT_EQ(a.rows_evaluated, b.rows_evaluated);
+    EXPECT_EQ(a.total_rollouts, b.total_rollouts);
+    EXPECT_EQ(a.stopped_by_bound, b.stopped_by_bound);
+    EXPECT_EQ(a.truncated, b.truncated);
+    EXPECT_EQ(a.rows_skipped_by_bound, b.rows_skipped_by_bound);
+    EXPECT_FALSE(a.budget_exhausted);
+    EXPECT_FALSE(b.budget_exhausted);
+    EXPECT_EQ(a.rows_skipped_by_budget, 0);
+    EXPECT_EQ(b.rows_skipped_by_budget, 0);
+    EXPECT_EQ(a.stop_reason, b.stop_reason);
+    EXPECT_EQ(a.goal_position, b.goal_position);
+    ASSERT_EQ(a.evaluated.size(), b.evaluated.size());
+    for (std::size_t i = 0; i < a.evaluated.size(); ++i) {
+        EXPECT_EQ(a.evaluated[i].rollouts_used, b.evaluated[i].rollouts_used);
+        EXPECT_DOUBLE_EQ(a.evaluated[i].psi_rad, b.evaluated[i].psi_rad);
+        EXPECT_DOUBLE_EQ(a.evaluated[i].cost.total, b.evaluated[i].cost.total);
+        EXPECT_FALSE(a.evaluated[i].row_interrupted_by_budget);
+        EXPECT_FALSE(b.evaluated[i].row_interrupted_by_budget);
+    }
+}
+
+// A fake clock (advances by a fixed step per call, decoupled from evaluateCandidate()'s actual - small,
+// synthetic-template - runtime) lets this test be deterministic on any machine. It deliberately does
+// NOT assume how many clock() calls a single evaluateCandidate() attempt costs (an implementation
+// detail): it first calibrates with an unlimited budget on the SAME kind of clock to learn the total
+// "tick time" of the full search, then re-runs with half that budget on a fresh clock instance, which
+// is guaranteed to cut the search short by construction, and only asserts inequalities.
+TEST(GraspSelectionTest, TimeBudgetFakeClockCutsSearchShort) {
+    auto robot = loadPandaRobotModel();
+    ASSERT_NE(robot, nullptr);
+    const ProDMP tmpl = makeSyntheticProDmpTemplate();
+    const RobotModel::JointVector q0 = RobotModel::readyPose();
+    const CubeSatelliteModel m = makeNearbyModel(*robot, q0);
+    const double w_ref = referenceWTrans(tmpl, robot, q0, Eigen::Vector3d(0.1, 0.0, 0.0));
+    SelectionParams sp = makeSmallParams(m, q0, *robot, w_ref);
+    sp.w_hat_upper_bound = 1e6;  // never stop by bound: every row is attempted (as in
+                                 // LargerBoundEvaluatesMoreRowsAndNeverWorse's "big" case).
+
+    auto makeFakeClock = []() {
+        auto ticks = std::make_shared<int>(0);
+        constexpr double kStepS = 1.0;
+        return ClockFn([ticks]() { return kStepS * (*ticks)++; });
+    };
+
+    // A practically unlimited budget (not nullopt) so the timing code path still runs - clock() gets
+    // called around every rollout, not just once at entry and once at exit - and full.elapsed_s
+    // reflects the actual "tick time" of the whole search, proportional to its rollout count.
+    sp.time_budget_s = 1e9;
+    const GraspSelection full = selectGrasp(m, tmpl, robot, q0, sp, makeFakeClock());
+    ASSERT_TRUE(full.found);
+    ASSERT_GE(full.total_rollouts, 4) << "need enough rollouts for a meaningful halfway cutoff";
+
+    sp.time_budget_s = full.elapsed_s / 2.0;
+    const GraspSelection cut = selectGrasp(m, tmpl, robot, q0, sp, makeFakeClock());
+
+    EXPECT_TRUE(cut.budget_exhausted);
+    EXPECT_EQ(cut.stop_reason, GraspSelection::StopReason::kTimeBudgetExhausted);
+    ASSERT_FALSE(cut.evaluated.empty());
+    EXPECT_GE(cut.total_rollouts, 1);
+    EXPECT_LT(cut.total_rollouts, full.total_rollouts);
+    EXPECT_LE(cut.rows_evaluated, full.rows_evaluated);
+    EXPECT_GT(cut.rows_skipped_by_budget, 0);
+    int rollouts_sum = 0;
+    for (const auto& c : cut.evaluated) rollouts_sum += c.rollouts_used;
+    EXPECT_EQ(rollouts_sum, cut.total_rollouts);
+    // Only the LAST pushed row can be interrupted mid-way; every earlier one ran to completion.
+    for (std::size_t i = 0; i + 1 < cut.evaluated.size(); ++i) {
+        EXPECT_FALSE(cut.evaluated[i].row_interrupted_by_budget);
+    }
+}
+
 // EMPIRICAL probe, NO asserts on values: full selection on configuration B with the production
 // template. Expected duration 5-10 minutes.
 TEST(SatelliteSelectionProbe, PrintsSelection) {
@@ -431,5 +543,86 @@ TEST(SatelliteSelectionFromDemoParamsProbe, PrintsSelection) {
                   << " w_hat with previous reference=" << w_hat_old << " -> total recomputed with the previous "
                   << "w_trans_demo=" << total_with_old_ref << " (rel_diff vs expected "
                   << (total_with_old_ref - expected_total) / expected_total << ")" << std::endl;
+    }
+}
+
+// EMPIRICAL probe, NO asserts on values: same setup as SatelliteSelectionFromDemoParamsProbe, but with
+// a 30 s time budget on the real (steady_clock-backed) clock, to see the budget feature's effect on the
+// production template/geometry. Expected duration: up to ~30 s plus the last (uninterruptible) rollout.
+TEST(SatelliteSelectionBudgetProbe, PrintsSelection) {
+    SKIP_UNLESS_PROBES_ENABLED();
+    const char* home = std::getenv("HOME");
+    const std::string root = std::string(home ? home : "/root") + "/thesis_ws/";
+    const std::string csv = root + "reach_task_baseline.csv";
+    const std::string prod_weights =
+        root + "runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml";
+    if (!std::ifstream(csv).good() || !std::ifstream(prod_weights).good()) {
+        GTEST_SKIP() << "production demo/weights not reachable: " << csv << " / " << prod_weights;
+    }
+    namespace dp = haptic_dmp_learning::core::demo_params;
+
+    const std::string dir = "/tmp/sel_budget_check/";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string weights_copy = dir + "weights.yaml";
+    {
+        std::ifstream in(prod_weights, std::ios::binary);
+        std::ofstream out(weights_copy, std::ios::binary);
+        out << in.rdbuf();
+    }
+    const std::vector<haptic_dmp_learning::core::Sample> demo = haptic_dmp_learning::core::demo_csv_io::readDemoCsv(csv);
+    dp::FitInfo fit;  // production fit configuration (prodmp_features.yaml)
+    fit.num_basis = 80;
+    fit.ridge_lambda = 1e-10;
+    fit.position_filter_window_s = 0.05;
+    fit.fix_goal_to_demo_endpoint = true;
+    std::ostringstream wlog;
+    dp::DemoParams written;
+    const std::string params_path =
+        dp::writeForWeights(csv, demo, fit, weights_copy, std::nullopt, wlog, &written);
+
+    auto probe_robot = loadPandaRobotModel();
+    ASSERT_NE(probe_robot, nullptr);
+    probe_robot->update(RobotModel::readyPose(), RobotModel::JointVector::Zero());
+    const Eigen::Vector3d base = probe_robot->framePose("fer_link0").position;
+
+    SatelliteSnapshot snap;
+    snap.center = Eigen::Vector3d(0.75, 0.0, 0.35);
+    snap.axis = Eigen::Vector3d(0.0, 0.0, 1.0);
+    snap.omega_rad_s = -degToRad(2.0);
+    snap.theta_rad = 0.0;
+    snap.t_s = 0.0;
+    CubeSatelliteModel::Params geometry;
+    geometry.face_normal_body = Eigen::Vector3d(-1.0, 0.0, 0.0);
+
+    const std::string urdf = root + "fer_flat_effort.urdf";
+    SelectionInputs in = buildSelectionInputs(params_path, urdf, snap, geometry, base);
+
+    // Same search settings as SatelliteSelectionProbe/SatelliteSelectionFromDemoParamsProbe, plus the
+    // 30 s time budget under test. Real (default) clock: clock = nullptr.
+    in.params.scan.step_rad = degToRad(10.0);
+    in.params.w_hat_upper_bound = 2.5;
+    in.params.max_rows = 40;
+    in.params.time_budget_s = 30.0;
+
+    const CubeSatelliteModel model(in.cube_params);
+    const GraspSelection sel = selectGrasp(model, in.prodmp_template, in.robot, in.q0, in.params);
+
+    const char* stop_reason_name = "?";
+    switch (sel.stop_reason) {
+        case GraspSelection::StopReason::kCompleted: stop_reason_name = "kCompleted"; break;
+        case GraspSelection::StopReason::kBoundSatisfied: stop_reason_name = "kBoundSatisfied"; break;
+        case GraspSelection::StopReason::kMaxRowsReached: stop_reason_name = "kMaxRowsReached"; break;
+        case GraspSelection::StopReason::kTimeBudgetExhausted: stop_reason_name = "kTimeBudgetExhausted"; break;
+    }
+    std::cout << "[sel-budget] rows_evaluated=" << sel.rows_evaluated
+              << " total_rollouts=" << sel.total_rollouts << " elapsed_s=" << sel.elapsed_s
+              << " stop_reason=" << stop_reason_name << " budget_exhausted=" << sel.budget_exhausted
+              << " found=" << sel.found << std::endl;
+    if (!sel.evaluated.empty()) {
+        std::cout << "[sel-budget] last row row_interrupted_by_budget="
+                  << sel.evaluated.back().row_interrupted_by_budget << std::endl;
+    } else {
+        std::cout << "[sel-budget] no row was evaluated" << std::endl;
     }
 }

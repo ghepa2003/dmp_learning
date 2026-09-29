@@ -8,7 +8,9 @@
  * with one RobotModel instance per thread (RobotModel is not thread-safe).
  */
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -23,6 +25,11 @@
 
 namespace satellite_grasp_planner {
 namespace core {
+
+/// Monotonic clock for selectGrasp()'s time budget: returns seconds on an arbitrary epoch, only
+/// differences are meaningful. Passing nullptr to selectGrasp() uses a std::chrono::steady_clock
+/// wrapper; tests inject a fake one for determinism (see grasp_selection.cpp / test_grasp_selection.cpp).
+using ClockFn = std::function<double()>;
 
 /// PROVISIONAL proxy of w_trans,demo: translational manipulability at the END of a replica of the
 /// demo from the starting posture (orientation kept), i.e. the w_trans_final of
@@ -45,6 +52,12 @@ struct SelectionParams {
     int max_rows = 40;  ///< time cap: at most this many scan rows are evaluated
     double d_safe_m = 0.010;
     double pos_tol_mm = 20.0;
+    /// Soft wall-clock budget for the WHOLE selectGrasp() call (scan included). nullopt = no limit,
+    /// behavior identical to not having this field. SOFT: the first rollout of the call always starts
+    /// (nothing measured yet to compare against), and a rollout that runs longer than every rollout
+    /// seen so far in this call can overshoot the budget by up to about one rollout's duration - see
+    /// selectGrasp()'s doc comment.
+    std::optional<double> time_budget_s = std::nullopt;
 };
 
 struct EvaluatedCandidate {
@@ -52,7 +65,11 @@ struct EvaluatedCandidate {
     double psi_rad = 0.0;
     CandidateEval eval;
     haptic_dmp_learning::core::GraspCostBreakdown cost;
-    int rollouts_used = 0;  ///< evaluateCandidate calls spent on this row (2 or 6)
+    int rollouts_used = 0;  ///< evaluateCandidate calls spent on this row (2 or 6, fewer if budget-cut)
+    /// True if the time budget expired while this row's variants were still being evaluated: only the
+    /// variants actually rolled out (rollouts_used of them) are present, the row is otherwise handled
+    /// like any other (best feasible kept, or least-violating if none feasible).
+    bool row_interrupted_by_budget = false;
 };
 
 struct GraspSelection {
@@ -69,6 +86,14 @@ struct GraspSelection {
     int rows_skipped_by_bound = 0;    ///< rows left unevaluated when the bound stopped the search
     double max_w_hat_seen = 0.0;      ///< max w_hat over the FEASIBLE variants evaluated
     bool bound_violated = false;      ///< max_w_hat_seen > w_hat_upper_bound
+    bool budget_exhausted = false;    ///< stopped because time_budget_s was reached (see selectGrasp)
+    int rows_skipped_by_budget = 0;   ///< rows not attempted at all because the budget ran out first
+
+    /// Single, unambiguous reason the search stopped (stopped_by_bound / truncated / budget_exhausted
+    /// are kept for backward compatibility but are mutually exclusive by construction: each stops the
+    /// loop immediately, checked in this fixed priority order: bound, then max_rows, then budget).
+    enum class StopReason { kCompleted, kBoundSatisfied, kMaxRowsReached, kTimeBudgetExhausted };
+    StopReason stop_reason = StopReason::kCompleted;
 };
 
 /**
@@ -84,15 +109,29 @@ struct GraspSelection {
  * the smallest max_joint_violation_rad is kept with eval.feasible = false (diagnostics; its cost is
  * computed but is not a selectable candidate). best = feasible entry of minimum total.
  * goal_position = best.row.goal_param, goal_orientation = applyRoll(nominal, best psi).
- * @throws std::invalid_argument for max_rows <= 0, w_hat_upper_bound <= 0, w_trans_demo <= 0
+ * @throws std::invalid_argument for max_rows <= 0, w_hat_upper_bound <= 0, w_trans_demo <= 0, or a
+ *         time_budget_s that is set but not finite or < 0 (0 is valid: it means "no rollout")
  *         (scan parameters are validated by scanCandidates).
+ *
+ * TIME BUDGET (params.time_budget_s, SOFT): the clock starts here, before scanCandidates(). Before
+ * every evaluateCandidate() call, if elapsed-so-far + (the longest single evaluateCandidate duration
+ * measured so far in THIS call, 0 before the first) >= *time_budget_s, the call is skipped and the
+ * search stops (GraspSelection::budget_exhausted = true). Consequences of "soft": the very first
+ * rollout of a call always starts (the estimate is 0 then), and because the estimate is the longest
+ * PAST duration, a rollout that turns out slower than all previous ones is not anticipated - the
+ * actual wall time can exceed time_budget_s by up to about one rollout's duration. A row cut short
+ * mid-way keeps only the variants it managed to evaluate before the budget was hit
+ * (EvaluatedCandidate::row_interrupted_by_budget, rollouts_used < the 2 or 6 it would otherwise have)
+ * and is otherwise scored normally; a row on which the budget blocked even the first variant is not
+ * counted in rows_evaluated at all. @p clock is injectable for tests (see ClockFn); nullptr uses
+ * std::chrono::steady_clock.
  */
 GraspSelection selectGrasp(
     const haptic_dmp_learning::core::CubeSatelliteModel& model,
     const haptic_dmp_learning::core::ProDMP& prodmp_template,
     const std::shared_ptr<franka_cartesian_control::core::RobotModel>& robot,
     const franka_cartesian_control::core::RobotModel::JointVector& q0,
-    const SelectionParams& params);
+    const SelectionParams& params, ClockFn clock = nullptr);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

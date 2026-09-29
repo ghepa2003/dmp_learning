@@ -54,8 +54,11 @@ struct CandidateEval {
  * If !reached, the collision distances describe a configuration that is not the grasp pose and
  * are not meaningful (they are still returned).
  *
- * Cost and threading: a full rollout costs about 7 s. RobotModel is NOT thread-safe (update()
- * mutates its cached FK/Jacobian), so every thread must use its own instance.
+ * Cost and threading: MEASURED 2026-09-29, dev laptop, Release (-O3): production selection = 66
+ * rollouts + scan in 5.2 s (at most ~80 ms per rollout). A build without optimization flags is far
+ * slower: ~7.6 s per rollout / ~500 s per selection were reported on 2026-09-28 (build type not
+ * recorded at the time). RobotModel is NOT thread-safe (update() mutates its cached FK/Jacobian),
+ * so every thread must use its own instance.
  */
 CandidateEval evaluateCandidate(
     const haptic_dmp_learning::core::CubeSatelliteModel& model,
