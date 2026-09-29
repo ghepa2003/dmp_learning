@@ -17,6 +17,9 @@
   <depend>pinocchio</depend>
   <depend>haptic_dmp_learning</depend>
   <depend>franka_cartesian_control</depend>
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>satellite_grasp_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

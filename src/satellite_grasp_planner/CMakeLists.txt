@@ -68,6 +68,59 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
+# ---- ROS2 wrapper: one-shot grasp planner node (Task 1 of 2 - see DESIGN_NOTES.md) ----
+# grasp_planner_ros_lib is split from grasp_planner_node/main so the pure validation
+# (grasp_planner_checks) and the message conversion (grasp_command_conversion) can be linked into
+# tests directly, without needing rclcpp::init(). ${PROJECT_NAME}_core itself stays rclcpp-free.
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(satellite_grasp_msgs REQUIRED)
+
+add_library(grasp_planner_ros_lib
+  src/ros/grasp_planner_checks.cpp
+  src/ros/grasp_command_conversion.cpp
+)
+target_link_libraries(grasp_planner_ros_lib
+  Eigen3::Eigen
+  pinocchio::pinocchio
+  coal::coal
+)
+# grasp_command_conversion.cpp includes grasp_launch.hpp, which transitively pulls in
+# haptic_dmp_learning/franka_cartesian_control headers (CubeSatelliteModel, RobotModel, ...) - needed
+# even though this .cpp never calls into them, matching every other target in this file that includes
+# those headers.
+ament_target_dependencies(grasp_planner_ros_lib
+  rclcpp
+  satellite_grasp_msgs
+  haptic_dmp_learning
+  franka_cartesian_control
+)
+
+add_executable(grasp_planner_node
+  src/ros/grasp_planner_node.cpp
+  src/ros/grasp_planner_main.cpp
+)
+target_link_libraries(grasp_planner_node
+  grasp_planner_ros_lib
+  ${PROJECT_NAME}_core
+  pinocchio::pinocchio
+  coal::coal
+)
+ament_target_dependencies(grasp_planner_node
+  rclcpp
+  nav_msgs
+  satellite_grasp_msgs
+  haptic_dmp_learning
+  franka_cartesian_control
+)
+
+install(TARGETS grasp_planner_node
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
@@ -159,6 +212,35 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_grasp_launch
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  # ---- grasp_planner_node tests (Task 1 of 2) ----
+  ament_add_gtest(test_grasp_planner_checks test/test_grasp_planner_checks.cpp)
+  target_link_libraries(test_grasp_planner_checks
+    grasp_planner_ros_lib
+  )
+
+  ament_add_gtest(test_grasp_command_conversion test/test_grasp_command_conversion.cpp)
+  target_link_libraries(test_grasp_command_conversion
+    grasp_planner_ros_lib
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_grasp_command_conversion
+    rclcpp
+    satellite_grasp_msgs
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_theta_convention test/test_theta_convention.cpp)
+  target_link_libraries(test_theta_convention
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_theta_convention
     haptic_dmp_learning
     franka_cartesian_control
   )

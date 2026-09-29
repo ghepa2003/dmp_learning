@@ -1,0 +1,62 @@
+# Worked example, using the repo's own DEFAULT CubeSatelliteModel::Params (axis_world=z,
+# face_normal_body=x) and the author's 2026-09-28 decision (spin about world Z). satellite_q_ref is
+# identity here BECAUSE free_target_object is spawned at roll=pitch=yaw=0: PhaseTracker's theta=0
+# then coincides with that spawn orientation, and CubeSatelliteModel's internal B matrix cancels out
+# of the theta-tracking identity regardless of its own value (see DESIGN_NOTES.md / the grasp planner
+# node's plan review: R(axis,theta)*B vs. R(axis,theta) - B is theta-independent and factors out).
+# If you change axis_world/face_normal_body/the physical spin axis, satellite_q_ref must still satisfy
+# checkQRefOnAxis (a rotation about satellite_rotation_axis) - it does NOT need to equal any B matrix.
+
+# Satellite center/axis below match the production selection probe (test_grasp_selection.cpp:459-460,
+# SatelliteSelectionFromDemoParamsProbe): snap.center = (0.75, 0.0, 0.35), snap.axis = (0, 0, 1).
+# free_target_object MUST be spawned at exactly x=0.75 y=0.0 z=0.35 (launch args x/y/z): the node's
+# first odometry sample must be within 10 mm of satellite_rotation_center (checkFirstOdomSample) or
+# the node fails loud. The cube must ALREADY be spinning (wz below) when the planner starts: the very
+# first sample is also checked against satellite_rotation_angular_velocity_deg_s
+# (checkOmegaConsistency) - a sample taken before the spin starts (twist ~= 0) fails that check.
+
+/**:
+  ros__parameters:
+    satellite_rotation_axis: [0.0, 0.0, 1.0]
+    satellite_rotation_center: [0.75, 0.0, 0.35]
+    satellite_rotation_angular_velocity_deg_s: -2.0   # signed: CW seen from +axis, matches free_target_object's wz below
+    satellite_odom_topic: "/free_target_object/odometry"
+    satellite_q_ref: [0.0, 0.0, 0.0, 1.0]              # x, y, z, w - identity
+
+grasp_planner_node:
+  ros__parameters:
+    use_sim_time: true
+    demo_params_path: "/absolute/path/to/demo_params.yaml"
+    urdf_path: "/absolute/path/to/robot.urdf"
+    min_delay_s: 0.05
+    robot_base_world: [0.0, 0.0, 0.0]      # MUST be (near-)zero - see checkRobotBaseWorldIsZero
+    # center_world/axis_world below are IGNORED by the selection pipeline (buildSelectionInputs()
+    # overwrites both with the snapshot's satellite_rotation_center/axis) - they exist here only so
+    # checkCubeCenterMatchesRotationCenter/checkCubeAxisMatchesRotationAxis can catch a typo'd mismatch.
+    cube_geometry.center_world: [0.75, 0.0, 0.35]      # MUST equal satellite_rotation_center
+    cube_geometry.axis_world: [0.0, 0.0, 1.0]           # MUST equal satellite_rotation_axis
+    cube_geometry.cube_side_m: 0.20
+    cube_geometry.standoff_m: 0.08
+    cube_geometry.collar_radius_m: 0.05
+    cube_geometry.face_normal_body: [1.0, 0.0, 0.0]
+    cube_geometry.wall_thickness_m: 0.015
+    omega_consistency_tol_deg_per_s: 0.1
+    q_ref_consistency_tol_deg: 0.5
+    robot_base_world_tol_m: 1.0e-6
+    grasp_command_topic: "/grasp_command"
+    # time_budget_s: 10.0   # optional, soft wall-clock budget for the whole selectGrasp() call
+
+# Shown only to document the shared-YAML idea (D3): this node's satellite_rotation_* / satellite_q_ref
+# / satellite_odom_topic parameters above are meant to be read by prodmp_gazebo_executor_node too, via
+# the /**: wildcard section. That node's own parameters (Task 2, out of scope here) are unchanged.
+# prodmp_gazebo_executor_node:
+#   ros__parameters:
+#     ...
+
+# free_target_object (separate package, out of scope - shown for reference only):
+#   ros2 launch free_target_object free_target_object.launch.py x:=0.75 y:=0.0 z:=0.35 \
+#     wx:=0.0 wy:=0.0 wz:=-0.034906585
+#   # x/y/z MUST match satellite_rotation_center above (10 mm tolerance, checkFirstOdomSample).
+#   # -0.034906585 rad/s = -2 deg/s (clockwise seen from +z), matching
+#   # satellite_rotation_angular_velocity_deg_s above. Launch it (and let it start spinning) BEFORE
+#   # the planner node subscribes, or the first sample may be checked against a not-yet-spinning cube.

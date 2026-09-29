@@ -50,6 +50,22 @@ current pipeline). `haptic_dmp_learning/core/satellite_intercept.hpp` (`anchorAn
 `PhaseTracker`, ...) is still used by `prodmp_gazebo_executor_node`'s "continuous" mode.
 Planned for removal together with the ring code (author's plan, not tracked in the repo).
 
+**`satellite_grasp_msgs`**: new interfaces-only package, one message `GraspCommand.msg` (status, goal
+pose, grasp point, theta/psi, contact time, selection diagnostics); depends only on
+`std_msgs`/`geometry_msgs`, no dependency on any other package here.
+**`satellite_grasp_planner/ros/grasp_planner_node`** (Task 1 of 2; not yet consumed by the executor):
+one-shot - on the first `satellite_odom_topic` sample builds a snapshot, runs selection off the ROS
+callback thread, publishes exactly one `GraspCommand` (reliable + transient_local), stays idle. Any
+failure logs FATAL and calls `rclcpp::shutdown()`; destructor joins the worker thread. Its
+`satellite_rotation_*`/`satellite_q_ref`/`satellite_odom_topic` parameters share names with
+`prodmp_gazebo_executor_node`'s, so one YAML `/**:` section serves both.
+**Theta convention** (`test_theta_convention.cpp`): cube spawned at identity, spun about
+`axis_world` - `PhaseTracker`'s `theta` (`q_ref` = identity) then equals `CubeSatelliteModel`'s
+`theta` directly; `CubeSatelliteModel`'s `B` matrix is theta-independent and cancels out, not part of
+this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipeline
+(`buildSelectionInputs()` overwrites both from the snapshot); the node only checks they equal
+`satellite_rotation_center`/`_axis`.
+
 **Selected invariants** (`file` — rule):
 - `cube_satellite_model.hpp` (`CubeSatelliteModel`) — `theta_rad` is an explicit argument of
   every query; "no temporal state", queries are pure functions of `(k, theta_rad, params_)`.
