@@ -6,7 +6,7 @@ namespace ros_wrapper {
 using satellite_grasp_msgs::msg::GraspCommand;
 
 GraspCommand toGraspCommandMsg(const core::GraspLaunchResult& result, const core::SatelliteSnapshot& snapshot,
-                               const rclcpp::Time& stamp) {
+                               const rclcpp::Time& stamp, const GraspCommandProvenance& provenance) {
     GraspCommand msg;
     msg.header.stamp = stamp;
     msg.header.frame_id = "world";
@@ -36,11 +36,17 @@ GraspCommand toGraspCommandMsg(const core::GraspLaunchResult& result, const core
         msg.psi_rad = result.psi_rad.value();
         msg.provisional_delay_s = result.launch->delay_s;
         msg.best_total_cost = result.selection.best.cost.total;
+        msg.start_position.x = provenance.start_position.x();
+        msg.start_position.y = provenance.start_position.y();
+        msg.start_position.z = provenance.start_position.z();
     }
-    // else: goal_pose/k/theta_star_rad/psi_rad/provisional_delay_s/best_total_cost stay at their zero-init defaults.
+    // else: goal_pose/k/theta_star_rad/psi_rad/provisional_delay_s/best_total_cost/start_position stay at their zero-init defaults.
 
     msg.contact_time_s = result.tau_launch_s;  // 0.0 when status != kSelected (GraspLaunchResult's own contract)
     msg.omega_rad_s = snapshot.omega_rad_s;
+    msg.snapshot_theta_rad = snapshot.theta_rad;
+    msg.snapshot_t_s = snapshot.t_s;
+    msg.weights_sha256 = provenance.weights_sha256;
 
     const auto& sel = result.selection;
     msg.rows_evaluated = sel.rows_evaluated;

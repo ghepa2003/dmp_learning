@@ -36,6 +36,10 @@ struct SelectionInputs {
     std::vector<std::string> provenance;           ///< one line per value: value and where it comes from
     bool w_trans_demo_is_proxy = false;            ///< true if w_trans_demo comes from referenceWTrans()
     bool contact_assumed_at_end = false;           ///< true if demo_params had no contact time
+    /// SHA-256 of the weights file the template was loaded from. Equals demo_params.weights_sha256, and
+    /// buildSelectionInputs throws if that differs from the file's actual hash, so it is the hash of the
+    /// file really read.
+    std::string weights_sha256;
 };
 
 /**

@@ -135,6 +135,18 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   `883ffb2ffdaf8d9d4f0581c092cace8ae40037d4663a0cf5bbb4196228d9af6c`;
   `runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml` has the identical hash.
 
+## 2026-09-29 — GraspCommand provenance fields
+
+- `start_position`: planner p0 (`scan.p0`, FK at q0), world frame; zero unless `status == SELECTED`.
+  Equals the robot-base frame only because `robot_base_world = 0` (enforced at node startup).
+- `snapshot_theta_rad` / `snapshot_t_s`: theta and sim-clock time (odometry `header.stamp`) of the
+  snapshot the selection used; always set. Not the same as `header.stamp`, read after selection ends.
+- `weights_sha256`: hash of the weights file the template came from; always set. It is
+  `demo_params.weights_sha256`, which `buildSelectionInputs` verifies against the real file
+  (`verifyWeightsAlignment` throws on mismatch), so no separate re-hash is needed.
+- Plumbing: `toGraspCommandMsg` takes a `GraspCommandProvenance` (named fields) filled by the node from
+  `in.params.scan.p0` and the new `SelectionInputs::weights_sha256`; `GraspLaunchResult` unchanged.
+
 ## 2026-09-29 — Convention of theta and of the virtual collar
 
 - `theta = 0` is the spawn orientation of `free_target_object` (identity, `roll=pitch=yaw=0`),

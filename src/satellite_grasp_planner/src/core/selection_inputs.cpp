@@ -62,6 +62,7 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
                                  e.what());
     }
     SelectionInputs in(haptic_dmp_learning::core::prodmp_io::loadProDmpFromYaml(weights_path));
+    in.weights_sha256 = demo.weights_sha256;  // == actual file hash: verifyWeightsAlignment threw otherwise
 
     // b) robot, q0, p0 (from the robot kinematics)
     std::ifstream urdf(urdf_path);

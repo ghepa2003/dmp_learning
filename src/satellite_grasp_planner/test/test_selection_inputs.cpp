@@ -133,6 +133,32 @@ protected:
 
 }  // namespace
 
+// weights_sha256 is the hash of the weights file actually loaded.
+TEST_F(SelectionInputsTest, WeightsSha256MatchesFile) {
+    dp::DemoParams p = makeFixture(60.0);
+    p.end_joints_rad = toArray(RobotModel::readyPose());
+    rewrite(p);
+    const SelectionInputs in = build();
+    EXPECT_EQ(in.weights_sha256, dp::sha256FileHex(weightsPath()));
+    EXPECT_EQ(in.weights_sha256.size(), 64u);
+}
+
+// Recorded hash different from the file's: buildSelectionInputs throws (never reports the recorded hash).
+TEST_F(SelectionInputsTest, RecordedHashDifferentFromFileThrows) {
+    dp::DemoParams p = makeFixture(60.0);
+    p.end_joints_rad = toArray(RobotModel::readyPose());
+    p.weights_sha256 = dp::sha256Hex("not the weights file");
+    rewrite(p);
+    try {
+        build();
+        ADD_FAILURE() << "expected an exception";
+    } catch (const std::exception& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("hash mismatch"), std::string::npos) << what;
+        EXPECT_NE(what.find(dp::sha256FileHex(weightsPath())), std::string::npos) << what;
+    }
+}
+
 // (a) a byte changed in the weights after writing the demo_params: it must throw and name the file.
 TEST_F(SelectionInputsTest, ChangedWeightsThrowNamingTheParamsFile) {
     dp::DemoParams p = makeFixture(60.0);

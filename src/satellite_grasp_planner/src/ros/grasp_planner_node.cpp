@@ -204,7 +204,10 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
             throw std::runtime_error(m.str());
         }
 
-        const auto msg = toGraspCommandMsg(result, snapshot, now);
+        GraspCommandProvenance provenance;
+        provenance.start_position = in.params.scan.p0;
+        provenance.weights_sha256 = in.weights_sha256;
+        const auto msg = toGraspCommandMsg(result, snapshot, now, provenance);
         pub_->publish(msg);
         RCLCPP_INFO(this->get_logger(),
                     "grasp_planner_node: published GraspCommand (status=%u %s, stop_reason=%u %s, "

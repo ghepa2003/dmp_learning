@@ -47,3 +47,20 @@ float64 max_w_hat_seen
 # when status == STATUS_SELECTED; 0.0 otherwise - 0.0 is a legitimate cost value too, so read status
 # first, never infer "selected" from this field.
 float64 best_total_cost
+
+# Meaningful ONLY when status == STATUS_SELECTED; zero otherwise (0,0,0 is a legitimate point too, so
+# read status first). p0 the planner used for its rollouts (scan.p0 = forward kinematics at q0), so a
+# consumer can reproduce them. Expressed in the WORLD frame; it equals the robot-base frame only
+# because robot_base_world = 0, a constraint the node enforces at startup (checkRobotBaseWorldIsZero).
+geometry_msgs/Point start_position
+
+# Snapshot the selection was run on. ALWAYS set, whatever the status. theta in the planner's theta
+# convention (see DESIGN_NOTES.md); t = SIM clock, from the odometry msg->header.stamp of that sample
+# (not the header.stamp above, which is read after selection ends).
+float64 snapshot_theta_rad
+float64 snapshot_t_s
+
+# SHA-256 (hex) of the weights file the planner loaded the template from. ALWAYS set. It is the hash
+# recorded in demo_params (weights_sha256), which buildSelectionInputs checks against the actual hash
+# of the file and refuses to start on mismatch: it is therefore the hash of the file really read.
+string weights_sha256
