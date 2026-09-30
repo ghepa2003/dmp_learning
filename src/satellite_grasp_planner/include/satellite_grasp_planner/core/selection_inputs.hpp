@@ -8,6 +8,7 @@
  */
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "satellite_grasp_planner/core/grasp_selection.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
+#include "satellite_grasp_planner/core/start_state.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -33,6 +35,9 @@ struct SelectionInputs {
     franka_cartesian_control::core::RobotModel::JointVector q0 =
         franka_cartesian_control::core::RobotModel::JointVector::Zero();
     Eigen::Vector3d p0 = Eigen::Vector3d::Zero();  ///< EE position at q0, from the robot kinematics
+    /// Where q0 comes from: "start_joints_override_rad parameter", "demo_params.demo.start_joints_rad" or
+    /// "RobotModel::readyPose()". Empty in a SelectionInputs built by hand.
+    std::string q0_source;
     std::vector<std::string> provenance;           ///< one line per value: value and where it comes from
     bool w_trans_demo_is_proxy = false;            ///< true if w_trans_demo comes from referenceWTrans()
     bool contact_assumed_at_end = false;           ///< true if demo_params had no contact time
@@ -47,8 +52,11 @@ struct SelectionInputs {
  *  a) demo_params::read + verifyWeightsAlignment on @p demo_params_path (errors are rethrown as
  *     std::runtime_error whose message names that file); the template is loaded from the weights file
  *     resolved relative to the folder of @p demo_params_path.
- *  b) q0 = start_joints_rad if present, else RobotModel::readyPose(); p0 = EE position at q0 (NEVER
- *     start_position_demo_frame_m: that is in the demo frame, not the robot's).
+ *  b) q0 = @p start->q if @p start is given (validated against the URDF joint limits; it wins over the demo
+ *     file's start_joints_rad, which is then reported as ignored in the provenance), else the demo file's
+ *     start_joints_rad if present, else RobotModel::readyPose(); p0 = EE position at q0 (NEVER
+ *     start_position_demo_frame_m: that is in the demo frame, not the robot's). With @p start unset the
+ *     behaviour is exactly the one before @p start existed.
  *  c) cube_params = @p cube_geometry with center_world = snapshot.center and axis_world = snapshot.axis;
  *     theta_center = windowCenterTheta(model, robot_base_world).
  *  d) ScanParams: default window and step, omega = snapshot.omega_rad_s, tau_contact_s =
@@ -66,7 +74,12 @@ struct SelectionInputs {
 SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const std::string& urdf_path,
                                      const SatelliteSnapshot& snapshot,
                                      const haptic_dmp_learning::core::CubeSatelliteModel::Params& cube_geometry,
-                                     const Eigen::Vector3d& robot_base_world);
+                                     const Eigen::Vector3d& robot_base_world,
+                                     const std::optional<StartState>& start = std::nullopt);
+
+/// Multi-line log text for the start of a selection: source of q0, q0, p0, distance from readyPose (joints:
+/// norm and max, task space: mm) and the complete provenance. Leaves in.robot updated at in.q0.
+std::string describeStartState(const SelectionInputs& in);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

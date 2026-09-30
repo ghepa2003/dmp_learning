@@ -8,12 +8,17 @@
  */
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
+    std::shared_ptr<haptic_dmp_learning::ros_wrapper::ProDmpGazeboExecutorNode> node;
     try {
-        auto node = std::make_shared<haptic_dmp_learning::ros_wrapper::ProDmpGazeboExecutorNode>();
+        node = std::make_shared<haptic_dmp_learning::ros_wrapper::ProDmpGazeboExecutorNode>();
         rclcpp::spin(node);
     } catch (const std::exception& e) {
+        // Same sentence as the node's own FATALs: if the hold target was the controller's last target, it stays
+        // the regulation reference after this process exits (no watchdog in the controller).
+        const std::string msg = haptic_dmp_learning::ros_wrapper::hold_target::withHoldNote(
+            e.what(), node && node->holdRemainsInController());
         RCLCPP_FATAL(rclcpp::get_logger("prodmp_gazebo_executor_node"),
-                     "Fatal initialization error: %s", e.what());
+                     "Fatal initialization error: %s", msg.c_str());
         rclcpp::shutdown();
         return 1;
     }

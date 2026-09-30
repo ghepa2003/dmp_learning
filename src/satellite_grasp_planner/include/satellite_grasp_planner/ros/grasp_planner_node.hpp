@@ -43,6 +43,7 @@
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "satellite_grasp_msgs/msg/grasp_command.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
+#include "satellite_grasp_planner/core/start_state.hpp"
 #include "satellite_grasp_planner/ros/grasp_planner_checks.hpp"
 
 namespace satellite_grasp_planner {
@@ -74,6 +75,9 @@ private:
     std::optional<double> time_budget_s_;
     SelectionOverrides selection_overrides_;  ///< optional SelectionParams overrides, see grasp_planner_checks.hpp
     std::string grasp_command_topic_;
+    /// Set iff the start_joints_override_rad parameter is non-empty (validated at startup); unset = readyPose,
+    /// i.e. buildSelectionInputs() keeps its previous behaviour.
+    std::optional<core::StartState> start_state_;
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <rclcpp/rclcpp.hpp>
@@ -19,6 +20,7 @@
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include "haptic_dmp_learning/core/controller_param_sync.hpp"
+#include "haptic_dmp_learning/ros/hold_target.hpp"
 
 #include <memory>
 #include <optional>
@@ -71,6 +73,11 @@ class ProDmpGazeboExecutorNode : public rclcpp::Node {
 public:
     ProDmpGazeboExecutorNode();
 
+    /// True while the hold target (see startHold()) is the last target the controller received, i.e. it
+    /// was published at least once and the rollout has not started: any failure in this window leaves the
+    /// arm regulated to it (the controller has no watchdog). Used by main() for the same FATAL sentence.
+    bool holdRemainsInController() const { return hold_published_count_ > 0 && !hold_superseded_; }
+
 private:
     void startTimer();
     void stepCallback();
@@ -102,6 +109,25 @@ private:
     void publishContinuousStatus();
     /// Single non-blocking TF lookup world_frame_ -> ee_frame_; false if unavailable.
     bool lookupEeNonBlocking(Eigen::Vector3d& ee);
+    /// Same lookup, position AND orientation (TF quaternion, x y z w as stored by tf2).
+    bool lookupEePoseNonBlocking(Eigen::Vector3d& position, Eigen::Quaterniond& orientation);
+
+    // ---- hold target (grasp_goal_source="grasp_command" only, see ros/hold_target.hpp) ----
+    /// Reads the EE pose from TF ONCE and starts republishing it on target_pose_topic at hold_target_rate_hz,
+    /// so the controller (zero torque until its first target, no watchdog afterwards) keeps the TCP still
+    /// while the node waits for the GraspCommand and for the trigger. Must be called AFTER the controller's
+    /// skip_initial_alignment=true is in place. Throws (FATAL) if the TF pose is unavailable or invalid.
+    void startHold();
+    void publishHold();
+    /// Idempotent: cancels the hold timer. Does NOT change holdRemainsInController() (the controller keeps
+    /// the last hold message regardless of this node's timer).
+    void stopHold(const char* reason);
+    /// Called when the rollout takes over: the hold is no longer the controller's last target.
+    void supersedeHold();
+    /// message + the "hold target remains active in the controller (no watchdog)" sentence when it applies.
+    std::string withHoldNote(const std::string& message) const {
+        return hold_target::withHoldNote(message, holdRemainsInController());
+    }
 
     /// @brief Looks up world_frame_ -> ee_frame_ via TF, retrying every 0.1 s
     /// against odom_wait_start_/target_odom_timeout_sec_ until it succeeds or
@@ -205,6 +231,13 @@ private:
     rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
     rclcpp::TimerBase::SharedPtr startup_timer_;
     rclcpp::TimerBase::SharedPtr step_timer_;
+    // Hold target (grasp_command mode). hold_pose_ is set once by startHold() and never updated.
+    bool hold_enabled_ = false;                          ///< parameter hold_target_enabled
+    double hold_rate_hz_ = 10.0;                         ///< parameter hold_target_rate_hz
+    rclcpp::TimerBase::SharedPtr hold_timer_;
+    std::optional<hold_target::HoldPose> hold_pose_;
+    std::uint64_t hold_published_count_ = 0;
+    bool hold_superseded_ = false;                       ///< the rollout has taken over
 
     // Core mathematical models. ProDMP for position, QuaternionDMP for orientation.
     core::ProDMP prodmp_;

@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME}_core
   src/core/grasp_selection.cpp
   src/core/launch_plan.cpp
   src/core/selection_inputs.cpp
+  src/core/start_state.cpp
   src/core/grasp_launch.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
@@ -152,6 +153,16 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_selection_inputs
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_start_state test/test_start_state.cpp)
+  target_link_libraries(test_start_state
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_start_state
     haptic_dmp_learning
     franka_cartesian_control
   )

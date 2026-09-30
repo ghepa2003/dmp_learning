@@ -50,6 +50,10 @@ grasp_planner_node:
     # max_rows: 40           # integer
     # w_hat_upper_bound: 2.5
     # psi_tol_deg: 10.0
+    # Optional start configuration of the selection: 7 values in fer_joint1..7 order (rad), finite and within the
+    # URDF joint limits. Empty / unset (default) = RobotModel::readyPose() (or demo_params start_joints_rad if the
+    # file has it). When set it wins over the demo file. p0 / start_position then are FK(this q).
+    # start_joints_override_rad: [0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]
 
 # Shown only to document the shared-YAML idea (D3): this node's satellite_rotation_* / satellite_q_ref
 # / satellite_odom_topic parameters above are meant to be read by prodmp_gazebo_executor_node too, via

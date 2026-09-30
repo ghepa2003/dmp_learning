@@ -179,6 +179,32 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   logged at acceptance. Planner rollout dt = 0.005 s (`candidate_scan.cpp`, `kinematic_feasibility.hpp`);
   the executor logs its own `dt_` next to it and warns if they differ.
 
+## 2026-09-30 — Hold target (executor) and `start_joints_override_rad` (planner)
+
+- **Why**: with no target `cartesian_impedance_controller` writes zero torque (TCP drift ~0.09 mm/s in Gazebo) and,
+  once it has one, regulates to the last message forever. During the wait for the GraspCommand and for the trigger
+  (~60 s after the snapshot) the TCP moves by ~5-6 mm, past the executor's 5 mm checks (`ee_start` vs `ee_plan`,
+  `start_position`). Also, the planner started from `readyPose` while the resting TCP is ~7 mm from it, so the
+  `start_position` check fails even with no drift.
+- **Executor** (`prodmp_gazebo_executor_node`, grasp_command mode): reads the TF pose (position + quaternion) ONCE and
+  republishes it at `hold_target_rate_hz` (default 10 Hz) from the moment `skip_initial_alignment=true` is in place
+  until the rollout starts. Details in `src/haptic_dmp_learning/DESIGN_NOTES.md` ("Hold target ...").
+- **Planner** (`grasp_planner_node`): optional `start_joints_override_rad` (7 values, fer_joint1..7 order, empty =
+  readyPose = previous behaviour). It becomes `q0` (`SelectionInputs::q0`, `q0_source`) through
+  `buildSelectionInputs(..., std::optional<StartState>)`; precedence override > `demo.start_joints_rad` > readyPose.
+  `start_position` is then FK(q0). No `/joint_states` subscription in this step (the value is passed by the caller).
+- **What else depends on q0** (read): the feasibility/collision rollouts start from it (`kinematic_feasibility.cpp`),
+  it is the nullspace attractor of `JointPathSimulator` (`joint_path_simulator.cpp`), and - with `end_joints_rad: null`,
+  as in the production `weights_demo_params.yaml` - `w_trans_demo` comes from the PROXY rollout started at q0
+  (`selection_inputs.cpp`). So a start other than readyPose can change (theta*, k, cost). The node logs, at the start
+  of every selection, the source of q0, q0, p0, the distance from readyPose (joints: norm and max; task space: mm) and
+  the whole `SelectionInputs::provenance`. `SatelliteSelectionFromDemoParamsProbe` reads `PROBE_START_Q="a,b,c,d,e,f,g"`
+  to run the same selection from another q0 and prints the distance from readyPose.
+- **Message**: unchanged schema. `hash`/`verifyWeightsAlignment` do not depend on q0.
+- **Not done here**: the rollout orientation. The first rollout message carries `qdmp_.q0()` (demo-native); the
+  executor only LOGS the angle to the hold quaternion at the trigger (92.75 deg for production weights and the Z18
+  hold). See the previous section for the planner-vs-executor orientation gap.
+
 ## 2026-09-11 — Quaternion normalization in `learn_and_test_dmp.cpp`'s local CSV loader
 
 **Context**: `demo_csv_io::readDemoCsv` (used by `learn_and_test_prodmp.cpp`)

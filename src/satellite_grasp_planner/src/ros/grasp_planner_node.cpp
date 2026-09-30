@@ -129,6 +129,14 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     }
     validateSelectionOverrides(selection_overrides_);
 
+    // Optional start configuration: 7 values in fer_joint1..7 order. Empty (default) = readyPose (previous
+    // behaviour). Validated here, at startup, against the joint limits of the URDF at urdf_path.
+    {
+        const auto values = this->declare_parameter<std::vector<double>>(core::kStartJointsParameterName,
+                                                                         std::vector<double>{});
+        if (!values.empty()) start_state_ = core::makeStartStateFromOverride(values, urdf_path_);
+    }
+
     // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
     checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
     checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
@@ -144,8 +152,8 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         odom_topic, rclcpp::QoS(10).reliable(),
         std::bind(&GraspPlannerNode::onOdom, this, std::placeholders::_1));
 
-    RCLCPP_INFO(this->get_logger(), "grasp_planner_node: ready, waiting for the first sample on '%s'.",
-                odom_topic.c_str());
+    RCLCPP_INFO(this->get_logger(), "grasp_planner_node: ready, waiting for the first sample on '%s' (start configuration: %s).",
+                odom_topic.c_str(), start_state_ ? start_state_->source.c_str() : "readyPose / demo_params default");
 }
 
 GraspPlannerNode::~GraspPlannerNode() {
@@ -187,7 +195,9 @@ void GraspPlannerNode::onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg) {
 void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
     try {
         core::SelectionInputs in =
-            core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, robot_base_world_);
+            core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, robot_base_world_,
+                                       start_state_);
+        RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
         if (time_budget_s_) in.params.time_budget_s = time_budget_s_;
         applySelectionOverrides(in.params, selection_overrides_);
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: starting selection with %s",

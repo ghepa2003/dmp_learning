@@ -1,10 +1,12 @@
 #include "satellite_grasp_planner/core/selection_inputs.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
@@ -49,7 +51,8 @@ std::string dirOf(const std::string& path) {
 SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const std::string& urdf_path,
                                      const SatelliteSnapshot& snapshot,
                                      const haptic_dmp_learning::core::CubeSatelliteModel::Params& cube_geometry,
-                                     const Eigen::Vector3d& robot_base_world) {
+                                     const Eigen::Vector3d& robot_base_world,
+                                     const std::optional<StartState>& start) {
     // a) demo parameters + alignment with the weights file + template
     dp::DemoParams demo;
     std::string weights_path;
@@ -75,11 +78,20 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
     for (int i = 1; i <= RobotModel::kNumJoints; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
     in.robot = std::make_shared<RobotModel>(urdf_text.str(), joint_names, "fer_hand_tcp");
 
-    const bool q0_from_demo = demo.start_joints_rad.has_value();
-    if (q0_from_demo) {
+    const bool q0_from_start = start.has_value();
+    const bool q0_from_demo = !q0_from_start && demo.start_joints_rad.has_value();
+    if (q0_from_start) {
+        // Same validation the node applies at startup, against the limits of THIS robot model.
+        const std::vector<double> values(start->q.data(), start->q.data() + RobotModel::kNumJoints);
+        validateStartJoints(values, in.robot->jointLowerLimits(), in.robot->jointUpperLimits());
+        in.q0 = start->q;
+        in.q0_source = start->source;
+    } else if (q0_from_demo) {
         for (int i = 0; i < RobotModel::kNumJoints; ++i) in.q0(i) = (*demo.start_joints_rad)[static_cast<std::size_t>(i)];
+        in.q0_source = "demo_params.demo.start_joints_rad";
     } else {
         in.q0 = RobotModel::readyPose();
+        in.q0_source = "RobotModel::readyPose()";
     }
     const RobotModel::JointVector zero = RobotModel::JointVector::Zero();
     in.robot->update(in.q0, zero);
@@ -143,8 +155,11 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
                  (demo.t_contact_s.has_value() ? " (da demo_params.demo.contact_to_end_offset_m)"
                                                 : " (nullo: t_contact_s null, contatto assunto alla fine)"));
     pv.push_back("q0 = " + jointsStr(in.q0) +
-                 (q0_from_demo ? " (da demo_params.demo.start_joints_rad)"
-                               : " (RobotModel::readyPose(): start_joints_rad null)"));
+                 (q0_from_start
+                      ? " (da " + start->source +
+                            (demo.start_joints_rad.has_value() ? "; demo_params.demo.start_joints_rad IGNORATO" : "") + ")"
+                      : q0_from_demo ? " (da demo_params.demo.start_joints_rad)"
+                                     : " (RobotModel::readyPose(): start_joints_rad null)"));
     pv.push_back("p0 = " + vecStr(in.p0) + " (cinematica diretta del robot a q0)");
     pv.push_back("w_trans_demo = " + num(w_trans_demo) + " (" + w_source + ")");
     pv.push_back("omega_rad_s = " + num(snapshot.omega_rad_s) + " (dalla snapshot del satellite)");
@@ -153,6 +168,21 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
     pv.push_back("e_v_ref = " + num(scan.e_v_ref) + " (meanSurfaceSpeedSquared del modello con questo omega)");
     pv.push_back("e_g_ref = " + num(scan.e_g_ref) + " (|delta_g_demo|^2)");
     return in;
+}
+
+std::string describeStartState(const SelectionInputs& in) {
+    const StartDistance d = distanceFromReadyPose(*in.robot, in.q0);
+    std::ostringstream o;
+    o << std::setprecision(9);
+    o << "start state: q0 source = " << in.q0_source << "\n"
+      << "  q0 = " << jointsStr(in.q0) << "\n"
+      << "  p0 = " << vecStr(in.p0) << "\n"
+      << "  distance from readyPose: joints norm " << d.joint_norm_rad << " rad (" << d.joint_norm_rad * 180.0 / M_PI
+      << " deg), max " << d.joint_max_rad << " rad (" << d.joint_max_rad * 180.0 / M_PI << " deg) on fer_joint"
+      << d.joint_max_index << "; task space " << d.task_mm << " mm\n"
+      << "  provenance:";
+    for (const std::string& line : in.provenance) o << "\n    - " << line;
+    return o.str();
 }
 
 }  // namespace core

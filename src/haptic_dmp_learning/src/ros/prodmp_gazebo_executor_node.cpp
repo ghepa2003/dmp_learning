@@ -969,6 +969,10 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
             throw std::invalid_argument("parameter 'grasp_command_phase_tol_deg' must be finite and > 0");
         }
         grasp_command_phase_tol_rad_ = core::degToRad(phase_tol_deg);
+        // Hold target while waiting for the command and the trigger (see ros/hold_target.hpp).
+        hold_enabled_ = this->declare_parameter<bool>("hold_target_enabled", true);
+        hold_rate_hz_ = this->declare_parameter<double>("hold_target_rate_hz", 10.0);
+        hold_target::holdPeriodS(hold_rate_hz_);  // validates: throws std::invalid_argument naming the parameter
         // Mandatory (no default), like the planner's: world == robot base is only true for robot_base_world = 0.
         const double robot_base_tol_m = this->declare_parameter<double>("robot_base_world_tol_m", 1e-6);
         if (!(std::isfinite(robot_base_tol_m) && robot_base_tol_m >= 0.0)) {
@@ -1014,12 +1018,13 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
         const bool dt_differs = std::fabs(dt_ - si::kPlannerRolloutDtS) > 1e-12;
         RCLCPP_INFO(this->get_logger(),
                     "grasp_goal_source=grasp_command: topic '%s' (reliable, transient_local, depth 1), timeout %.1f s, "
-                    "max_age %s, omega tol %.4f rad/s, phase tol %.3f deg, weights sha256 %s.\n"
+                    "max_age %s, omega tol %.4f rad/s, phase tol %.3f deg, weights sha256 %s, hold target %s (%.1f Hz).\n"
                     "  center=[%.4f, %.4f, %.4f] axis=[%.6f, %.6f, %.6f] omega(param)=%.6f rad/s  tau=%.5f s  "
                     "dt_=%.6f s (planner rollout dt %.6f s)",
                     grasp_command_topic_.c_str(), grasp_command_timeout_s_,
                     grasp_command_max_age_s_ > 0.0 ? (std::to_string(grasp_command_max_age_s_) + " s").c_str() : "off",
                     omega_consistency_tol_rad_s_, core::radToDeg(grasp_command_phase_tol_rad_), weights_sha256_.c_str(),
+                    hold_enabled_ ? "on" : "off", hold_rate_hz_,
                     c.center.x(), c.center.y(), c.center.z(), c.axis_unit.x(), c.axis_unit.y(), c.axis_unit.z(),
                     c.omega_rad_s, c.tau, dt_, si::kPlannerRolloutDtS);
         if (dt_differs) {
@@ -1059,6 +1064,67 @@ bool ProDmpGazeboExecutorNode::lookupEeNonBlocking(Eigen::Vector3d& ee) {
     } catch (const tf2::TransformException&) {
         return false;
     }
+}
+
+bool ProDmpGazeboExecutorNode::lookupEePoseNonBlocking(Eigen::Vector3d& position, Eigen::Quaterniond& orientation) {
+    try {
+        const auto tf = tf_buffer_->lookupTransform(world_frame_, ee_frame_, tf2::TimePointZero);
+        position = Eigen::Vector3d(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
+        const auto& q = tf.transform.rotation;
+        orientation = Eigen::Quaterniond(q.w, q.x, q.y, q.z);
+        return true;
+    } catch (const tf2::TransformException&) {
+        return false;
+    }
+}
+
+void ProDmpGazeboExecutorNode::startHold() {
+    if (!hold_enabled_ || hold_timer_ || hold_pose_) return;
+    Eigen::Vector3d p;
+    Eigen::Quaterniond q;
+    if (!lookupEePoseNonBlocking(p, q)) {
+        const std::string m = "hold target: TF " + world_frame_ + " -> " + ee_frame_ +
+                              " unavailable when the hold had to start (hold_target_enabled=true); no target is "
+                              "being sent, the TCP drifts. Set hold_target_enabled:=false to run without it.";
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error(m);
+    }
+    try {
+        hold_pose_ = hold_target::makeHoldPose(p, q);
+    } catch (const std::exception& e) {
+        RCLCPP_FATAL(this->get_logger(), "hold target: invalid EE pose from TF: %s", e.what());
+        throw;
+    }
+    RCLCPP_INFO(this->get_logger(),
+                "hold target STARTED at %.1f Hz on '%s' (read ONCE from TF %s -> %s, never updated): "
+                "position [%.5f, %.5f, %.5f]  quaternion (x,y,z,w) [%.6f, %.6f, %.6f, %.6f]  "
+                "|hold - ee_plan| = %.3f mm",
+                hold_rate_hz_, target_pose_topic_.c_str(), world_frame_.c_str(), ee_frame_.c_str(),
+                p.x(), p.y(), p.z(), hold_pose_->orientation.x(), hold_pose_->orientation.y(),
+                hold_pose_->orientation.z(), hold_pose_->orientation.w(), (p - ee_plan_).norm() * 1000.0);
+    publishHold();  // first message right away, then at hold_rate_hz_ (sim time)
+    hold_timer_ = rclcpp::create_timer(
+        this, this->get_clock(), rclcpp::Duration::from_seconds(hold_target::holdPeriodS(hold_rate_hz_)),
+        std::bind(&ProDmpGazeboExecutorNode::publishHold, this));
+}
+
+void ProDmpGazeboExecutorNode::publishHold() {
+    if (!hold_pose_ || hold_superseded_) return;
+    pose_pub_->publish(hold_target::toPoseStamped(*hold_pose_, frame_id_, this->now()));
+    ++hold_published_count_;
+}
+
+void ProDmpGazeboExecutorNode::stopHold(const char* reason) {
+    if (!hold_timer_) return;
+    hold_timer_->cancel();
+    hold_timer_.reset();
+    RCLCPP_INFO(this->get_logger(), "hold target stopped (%s) after %llu messages.", reason,
+                static_cast<unsigned long long>(hold_published_count_));
+}
+
+void ProDmpGazeboExecutorNode::supersedeHold() {
+    hold_superseded_ = true;
+    stopHold("rollout starts");
 }
 
 void ProDmpGazeboExecutorNode::beginContinuous(const Eigen::Vector3d& ee_plan) {
@@ -1133,6 +1199,8 @@ void ProDmpGazeboExecutorNode::beginWaitingForCommand(const Eigen::Vector3d& ee_
     continuous_status_timer_ = rclcpp::create_timer(
         this, this->get_clock(), rclcpp::Duration::from_seconds(0.05),
         std::bind(&ProDmpGazeboExecutorNode::publishContinuousStatus, this));
+    // skip_initial_alignment=true and the override are in place (above): safe to send the first target.
+    startHold();
     if (pending_command_) {
         const auto msg = pending_command_;
         pending_command_.reset();
@@ -1172,7 +1240,8 @@ void ProDmpGazeboExecutorNode::acceptGraspCommand(const satellite_grasp_msgs::ms
         plan = si::validateGraspCommand(toGraspCommandInputs(msg), p);
         si::checkStartPositionMatches(ee_plan_, plan.start_position);
     } catch (const std::exception& e) {
-        RCLCPP_FATAL(this->get_logger(), "%s", e.what());
+        RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(e.what()).c_str());
+        stopHold("GraspCommand rejected");
         throw;
     }
 
@@ -1271,7 +1340,8 @@ void ProDmpGazeboExecutorNode::onPhaseSample(double stamp_s, double theta_rad, c
         try {
             si::checkPhaseCoherence(residual, grasp_command_phase_tol_rad_);
         } catch (const std::exception& e) {
-            RCLCPP_FATAL(this->get_logger(), "%s", e.what());
+            RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(e.what()).c_str());
+            stopHold("phase coherence check failed");
             throw;
         }
     }
@@ -1281,7 +1351,8 @@ void ProDmpGazeboExecutorNode::onPhaseSample(double stamp_s, double theta_rad, c
         m << "continuous: trigger not reached within timeout " << c.trigger_timeout_s << " s (360/|omega| + T_total + margin). "
           << "theta_sat=" << core::radToDeg(theta_rad) << " deg, theta_trig=" << core::radToDeg(trigger_->thetaTrigRad())
           << " deg. No motion was started.";
-        RCLCPP_FATAL(this->get_logger(), "%s", m.str().c_str());
+        RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m.str()).c_str());
+        stopHold("trigger timeout");
         throw std::runtime_error(m.str());
     }
     if (c.measured && !phase_checker_->validated()) return;  // no trigger before omega is verified
@@ -1310,14 +1381,16 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
     if (!lookupEeNonBlocking(ee)) {
         const std::string m = "continuous: TF " + world_frame_ + " -> " + ee_frame_ +
                               " unavailable at the trigger; no motion started";
-        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m).c_str());
+        stopHold("TF unavailable at the trigger");
         throw std::runtime_error(m);
     }
     const double dev = (ee - ee_plan_).norm();
     if (dev > 0.005) {
         std::ostringstream m;
         m << "continuous: ee_start deviates " << dev * 1000.0 << " mm from ee_plan (limit 5 mm); no motion started";
-        RCLCPP_FATAL(this->get_logger(), "%s", m.str().c_str());
+        RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m.str()).c_str());
+        stopHold("ee_start too far from ee_plan");
         throw std::runtime_error(m.str());
     }
     ee_start_ = ee;
@@ -1326,7 +1399,9 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
         try {
             si::checkStartPositionMatches(ee_start_, p_start_cmd_);
         } catch (const std::exception& e) {
-            RCLCPP_FATAL(this->get_logger(), "continuous: at the trigger: %s; no motion started", e.what());
+            RCLCPP_FATAL(this->get_logger(), "%s",
+                         withHoldNote(std::string("continuous: at the trigger: ") + e.what() + "; no motion started").c_str());
+            stopHold("start_position mismatch at the trigger");
             throw;
         }
     }
@@ -1336,6 +1411,17 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
     prodmp_.setInitialConditions(/*init_time=*/0.0, ee_start_, Eigen::Vector3d::Zero());
     prodmp_.setGoal(p_goal_);
     qdmp_.reset();  // orientation: demo-native, not rotated (as in frozen)
+    if (hold_pose_) {
+        // LOG ONLY, no action: the first rollout message carries qdmp_'s q0 unchanged (skip_initial_alignment=true
+        // means no orientation offset in the controller), so this is the orientation step the controller sees
+        // between the last hold message and the first rollout message.
+        const Eigen::Quaterniond& qh = hold_pose_->orientation;
+        const Eigen::Quaterniond& q0 = qdmp_.q0();
+        RCLCPP_INFO(this->get_logger(),
+                    "orientation check (log only, no action): angle(hold quaternion, qdmp q0) = %.3f deg (q/-q invariant)\n"
+                    "  hold (x,y,z,w) = [%.6f, %.6f, %.6f, %.6f]   qdmp q0 (x,y,z,w) = [%.6f, %.6f, %.6f, %.6f]",
+                    hold_target::quatAngleDeg(qh, q0), qh.x(), qh.y(), qh.z(), qh.w(), q0.x(), q0.y(), q0.z(), q0.w());
+    }
 
     rollout_clock_ = std::make_unique<si::MeasuredTimeBase>(dt_, prodmp_.tau());
     elapsed_ = 0.0;
@@ -1352,6 +1438,9 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
                 core::radToDeg(trigger_e_rad_), phase_latency_s_, ee_start_.x(), ee_start_.y(), ee_start_.z(), dev * 1000.0,
                 p_goal_.x(), p_goal_.y(), p_goal_.z(), rel_goal.x(), rel_goal.y(), rel_goal.z(), dt_, prodmp_.tau());
 
+    // Last statement that can fail is behind us: the hold stops right before the rollout's first tick. The
+    // executor is single-threaded (rclcpp::spin), so no hold message can interleave with the rollout's.
+    supersedeHold();
     step_timer_ = rclcpp::create_timer(
         this, this->get_clock(), rclcpp::Duration::from_seconds(dt_),
         std::bind(&ProDmpGazeboExecutorNode::stepCallback, this));
@@ -1420,14 +1509,16 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
         now_s - t_cmd_wait_start_ > grasp_command_timeout_s_) {
         const std::string m = "continuous: no GraspCommand received on '" + grasp_command_topic_ + "' within " +
                               fmtG(grasp_command_timeout_s_) + " s. No motion was started.";
-        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m).c_str());
+        stopHold("no GraspCommand within the timeout");
         throw std::runtime_error(m);
     }
     if (cstate_ == ContinuousState::kWaiting) {
         if (now_s - t_wait_start_ > c.trigger_timeout_s) {
             const std::string m = "continuous: trigger not reached within timeout " + fmtG(c.trigger_timeout_s) +
                                   " s (no phase sample or crossing missed). No motion was started.";
-            RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+            RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m).c_str());
+            stopHold("trigger timeout");
             throw std::runtime_error(m);
         }
         if (now_s - last_wait_log_ >= 10.0) {
@@ -1486,6 +1577,9 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
     kvd("t_at_end_sim", at_end_recorded_ ? t_at_end_ : nan);
     kvd("duration_sim", at_end_recorded_ ? duration_sim_ : nan);
     kv("timing_ok", timing_ok_ ? "true" : "false");
+    kv("hold_active", hold_timer_ ? "true" : "false");
+    kvd("hold_published", static_cast<double>(hold_published_count_));
+    if (hold_pose_) kv3("hold_pos", hold_pose_->position);
     kvd("tick_count", rollout_clock_ ? static_cast<double>(rollout_clock_->tickCount()) : 0.0);
     kvd("ticks_skipped", rollout_clock_ ? static_cast<double>(rollout_clock_->skippedTicks()) : 0.0);
     kvd("tick_period_mean_s", rollout_clock_ ? rollout_clock_->meanPeriod() : nan);

@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -475,7 +476,32 @@ TEST(SatelliteSelectionFromDemoParamsProbe, PrintsSelection) {
 
     const char* home2 = std::getenv("HOME");
     const std::string urdf = std::string(home2 ? home2 : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-    SelectionInputs in = buildSelectionInputs(params_path, urdf, snap, geometry, base);
+    // PROBE_START_Q="a,b,c,d,e,f,g" (rad, fer_joint1..7) replaces q0 (the planner's start_joints_override_rad).
+    // Unset: exactly the previous behaviour (q0 from the demo file, else readyPose).
+    std::optional<StartState> probe_start;
+    if (const char* env_q = std::getenv("PROBE_START_Q"); env_q != nullptr && env_q[0] != '\0') {
+        std::vector<double> values;
+        std::stringstream ss{std::string(env_q)};
+        for (std::string tok; std::getline(ss, tok, ',');) {
+            std::size_t used = 0;
+            double v = 0.0;
+            try {
+                v = std::stod(tok, &used);
+            } catch (const std::exception&) {
+                used = 0;
+            }
+            ASSERT_TRUE(used > 0 && used == tok.size()) << "PROBE_START_Q: bad number '" << tok << "'";
+            values.push_back(v);
+        }
+        ASSERT_NO_THROW(validateStartJoints(values, probe_robot->jointLowerLimits(), probe_robot->jointUpperLimits()));
+        StartState st;
+        for (int i = 0; i < 7; ++i) st.q(i) = values[static_cast<std::size_t>(i)];
+        st.source = "PROBE_START_Q environment variable";
+        probe_start = st;
+    }
+    SelectionInputs in = probe_start ? buildSelectionInputs(params_path, urdf, snap, geometry, base, probe_start)
+                                     : buildSelectionInputs(params_path, urdf, snap, geometry, base);
+    if (probe_start) std::cout << "[sel2-start] " << describeStartState(in) << std::endl;
     for (const auto& l : in.provenance) std::cout << "[sel2-inputs] " << l << std::endl;
     std::cout << "[sel2-inputs] w_trans_demo=" << in.params.w_trans_demo
               << " w_trans_demo_is_proxy=" << in.w_trans_demo_is_proxy
@@ -515,6 +541,18 @@ TEST(SatelliteSelectionFromDemoParamsProbe, PrintsSelection) {
               << std::endl;
     std::cout << "[sel2-time] total_rollouts=" << sel.total_rollouts << " elapsed=" << sel.elapsed_s << " s"
               << std::endl;
+    if (probe_start) {
+        const StartDistance dist = distanceFromReadyPose(*in.robot, in.q0);
+        std::cout << "[sel2-summary] start=PROBE_START_Q status=" << (sel.found ? "SELECTED" : "NONE_FOUND");
+        if (sel.found) {
+            std::cout << " k=" << names[static_cast<int>(sel.best.row.k)] << " theta*=" << radToDeg(sel.best.row.theta_rad)
+                      << " psi=" << radToDeg(sel.best.psi_rad) << " total=" << sel.best.cost.total;
+        }
+        std::cout << " rows_evaluated=" << sel.rows_evaluated << " total_rollouts=" << sel.total_rollouts
+                  << " start_distance_from_readyPose: joints_norm=" << dist.joint_norm_rad
+                  << " rad joints_max=" << dist.joint_max_rad << " rad (fer_joint" << dist.joint_max_index
+                  << ") task=" << dist.task_mm << " mm" << std::endl;
+    }
 
     // Compare the best with the previous probe's: (kP270, theta=-60, psi=0), total 1.32548,
     // w_trans_demo 0.0912627 there.

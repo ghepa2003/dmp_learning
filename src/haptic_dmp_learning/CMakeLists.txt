@@ -269,6 +269,11 @@ if(BUILD_TESTING)
   target_link_libraries(test_grasp_command_input ${PROJECT_NAME}_core)
   ament_target_dependencies(test_grasp_command_input rclcpp satellite_grasp_msgs)
 
+  # Pure helpers of the executor's hold target (message types only, no node graph).
+  ament_add_gtest(test_hold_target test/test_hold_target.cpp)
+  target_link_libraries(test_hold_target ${PROJECT_NAME}_core)
+  ament_target_dependencies(test_hold_target rclcpp geometry_msgs)
+
   # Pure geometry of the cube satellite model (no ROS).
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)

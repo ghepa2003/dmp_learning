@@ -412,3 +412,32 @@ come fatto accertato finché non isolata con un test specifico.
 
 **Punto 4 della checklist: CHIUSO.** w massimo (proxy) predice correttamente errore minimo (reale)
 entro un margine di errore uniforme del ~4%, su tutte e 5 le fasi testate.
+
+## Hold target in `grasp_goal_source="grasp_command"` (2026-09-30)
+
+`cartesian_impedance_controller` writes zero torque until its first target (`update()`, `target_received_` false,
+unchanged since 2026-08-24) and afterwards regulates to the LAST message forever (no watchdog). With no target the
+TCP drifts (~0.09 mm/s in Gazebo), so a wait of tens of seconds (selection + trigger, ~60 s after the snapshot) moves it
+past the 5 mm checks on `ee_plan` / `ee_start` / `start_position`. Measured (Z18): with `skip_initial_alignment=true`
+and a fixed target equal to the TF pose, the drift stops (static error 0.37 mm at Kt 200, no jump at the first
+publication).
+
+- **What**: `prodmp_gazebo_executor_node` reads the EE pose (position + TF quaternion) ONCE from TF at the end of
+  `beginWaitingForCommand()`, i.e. AFTER `skip_initial_alignment=true` and the override are set (otherwise the
+  controller's first `align()` would capture an offset from the hold message), and republishes it unchanged on
+  `target_pose_topic` at `hold_target_rate_hz` (default 10, sim time) from a dedicated timer. Never updated: a target
+  that followed the TF pose would chase the drifting TCP.
+- **Stops** right before `step_timer_` is created in `startContinuousRollout()` (after its last possible failure). The
+  executor is single-threaded (`rclcpp::spin`), so the two publishers never interleave. The rollout's first message is
+  `prodmp_.step(0)` = `ee_start` (position) - a step of the static error - and `qdmp_.q0()` (orientation).
+- **Orientation step (LOG ONLY)**: `qdmp_.q0()` is the demo-native orientation; `skip_initial_alignment=true` removes the
+  controller's orientation offset. At the trigger the node logs `angle(hold quaternion, qdmp q0)` (production weights vs
+  the Z18 hold: 92.75 deg). No correction, no threshold: deciding the rollout orientation is a separate step
+  ("orientation v2").
+- **Failures**: no watchdog means that when the process dies (rejected message, timeout, trigger error) the last hold
+  message stays the controller's reference. Every FATAL emitted while that is the case contains
+  "hold target remains active in the controller (no watchdog)" (also `main()`'s).
+- **Parameters** (grasp_command mode only): `hold_target_enabled` (bool, true), `hold_target_rate_hz` (double, 10.0,
+  finite, in (0, 200]). `continuous_status` gains `hold_active`, `hold_published`, `hold_pos_*`.
+- Does NOT fix the `start_position` check by itself: the planner's `start_position` is FK(q0) with q0 = readyPose, while
+  the resting TCP is ~7 mm from readyPose. See the planner's `start_joints_override_rad`.

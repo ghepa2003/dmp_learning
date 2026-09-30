@@ -94,6 +94,44 @@ TEST_F(ExecutorNodeParams, DefaultSourceIsParametersAndDeclaresNothingElse) {
     EXPECT_FALSE(node->has_parameter("grasp_command_topic"));
 }
 
+TEST_F(ExecutorNodeParams, HoldParametersAreNotDeclaredOutsideGraspCommandMode) {
+    init({"target_odom_required:=false"});
+    auto node = std::make_shared<ProDmpGazeboExecutorNode>();
+    EXPECT_FALSE(node->has_parameter("hold_target_enabled"));
+    EXPECT_FALSE(node->has_parameter("hold_target_rate_hz"));
+    EXPECT_FALSE(node->holdRemainsInController());
+}
+
+TEST_F(ExecutorNodeParams, HoldParametersDefaultsInGraspCommandMode) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]"}));
+    auto node = std::make_shared<ProDmpGazeboExecutorNode>();
+    EXPECT_TRUE(node->get_parameter("hold_target_enabled").as_bool());
+    EXPECT_DOUBLE_EQ(node->get_parameter("hold_target_rate_hz").as_double(), 10.0);
+    EXPECT_FALSE(node->holdRemainsInController());  // nothing published yet
+}
+
+TEST_F(ExecutorNodeParams, HoldCanBeDisabledAndRateOverridden) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "hold_target_enabled:=false", "hold_target_rate_hz:=20.0"}));
+    auto node = std::make_shared<ProDmpGazeboExecutorNode>();
+    EXPECT_FALSE(node->get_parameter("hold_target_enabled").as_bool());
+    EXPECT_DOUBLE_EQ(node->get_parameter("hold_target_rate_hz").as_double(), 20.0);
+}
+
+TEST_F(ExecutorNodeParams, InvalidHoldRateThrowsNamingTheParameter) {
+    for (const char* bad : {"0.0", "-5.0", "250.0", ".nan"}) {
+        if (rclcpp::ok()) rclcpp::shutdown();
+        init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                    std::string("hold_target_rate_hz:=") + bad}));
+        try {
+            ProDmpGazeboExecutorNode n;
+            FAIL() << "expected std::invalid_argument for hold_target_rate_hz=" << bad;
+        } catch (const std::invalid_argument& e) {
+            EXPECT_NE(std::string(e.what()).find("hold_target_rate_hz"), std::string::npos) << bad;
+        }
+    }
+}
+
 TEST_F(ExecutorNodeParams, InvalidSourceThrows) {
     init({"grasp_goal_source:=planner"});
     EXPECT_THROW(ProDmpGazeboExecutorNode(), std::invalid_argument);
