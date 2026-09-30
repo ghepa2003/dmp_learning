@@ -92,6 +92,20 @@ prodmp_gazebo_executor_node:
     # subscription, wait and retarget entirely and replay the demo's ORIGINAL goal
     # as-is - for an open-loop run with no target at all (e.g. real hardware).
     target_odom_required: true
+    # Goal source. "parameters" (default, nothing below is read) or "grasp_command": the goal, theta_star and
+    # contact_time come from a satellite_grasp_msgs/GraspCommand published by grasp_planner_node. Requires
+    # satellite_rotation_enabled=true, satellite_rotation_mode="continuous", satellite_phase_source="measured",
+    # target_odom_required=false, use_sim_time=true, and satellite_intercept_phase_deg / satellite_contact_time_s
+    # NOT set. satellite_rotation_axis/center/angular_velocity_deg_s, satellite_odom_topic and satellite_q_ref
+    # must be the same values the planner uses.
+    # grasp_goal_source: "grasp_command"
+    # grasp_command_topic: "/grasp_command"
+    # grasp_command_timeout_s: 300.0          # sim time, finite > 0
+    # grasp_command_max_age_s: 0.0            # <= 0 disables the age check (future stamps are always rejected)
+    # omega_consistency_tol_deg_per_s: 0.1    # message omega vs satellite_rotation_angular_velocity_deg_s
+    # grasp_command_phase_tol_deg: 1.0        # phase vs planner snapshot, checked once on the first odometry sample
+    # robot_base_world: [0.0, 0.0, 0.0]       # MANDATORY in this mode, must be ~0
+    # robot_base_world_tol_m: 1.0e-6
     # NOTE: weights_yaml_path / orientation_weights_yaml_path are intentionally
     # NOT set here - they are run_id-dependent and passed via -p by the
     # orchestrator.

@@ -6,6 +6,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <satellite_grasp_msgs/msg/grasp_command.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/empty.hpp>
@@ -76,13 +77,24 @@ private:
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
     // ---- satellite_rotation_mode="continuous" (see class docs) ----
-    enum class ContinuousState { kIdle, kWaiting, kRunning, kFinished };
+    /// kWaitingCommand (grasp_goal_source="grasp_command" only): waiting for the GraspCommand, appended last
+    /// so the values of the other states are unchanged.
+    enum class ContinuousState { kIdle, kWaiting, kRunning, kFinished, kWaitingCommand };
     /// Constructor part: reads/validates parameters (throws on any error), creates the
     /// satellite odometry subscription (measured) and the status publisher.
     void setupContinuous();
     /// Called from startTimer() once ee_plan is known: logs the plan and starts waiting.
     void beginContinuous(const Eigen::Vector3d& ee_plan);
     void onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg);
+    // ---- grasp_goal_source="grasp_command" (unused when the source is "parameters") ----
+    /// Enters kWaitingCommand: syncs the controller (identity alignment) BEFORE waiting, then consumes an
+    /// already-received message, if any.
+    void beginWaitingForCommand(const Eigen::Vector3d& ee_plan);
+    /// One-shot: the first message wins, later ones only log a WARN. Stored until kWaitingCommand is entered.
+    void onGraspCommand(const satellite_grasp_msgs::msg::GraspCommand::SharedPtr msg);
+    /// Validates the message (core::satellite_intercept::validateGraspCommand), then arms the trigger and
+    /// moves to kWaiting. Throws (after a FATAL log) on any rejection.
+    void acceptGraspCommand(const satellite_grasp_msgs::msg::GraspCommand& msg);
     void onModelPhaseTick();
     void onPhaseSample(double stamp_s, double theta_rad, const Eigen::Matrix3d& R_rel);
     void startContinuousRollout(double theta_at_trigger_rad);
@@ -280,6 +292,22 @@ private:
     Eigen::Vector3d p_goal_ = Eigen::Vector3d::Zero();
     Eigen::Vector3d ee_start_ = Eigen::Vector3d::Zero();
     Eigen::Matrix3d latest_R_rel_ = Eigen::Matrix3d::Identity();
+    // ---- grasp_goal_source="grasp_command" state ----
+    std::string grasp_goal_source_ = "parameters";      ///< "parameters" (default) | "grasp_command"
+    bool grasp_command_mode_ = false;
+    std::string grasp_command_topic_;
+    double grasp_command_timeout_s_ = 0.0;
+    double grasp_command_max_age_s_ = 0.0;              ///< <= 0: age check off
+    double omega_consistency_tol_rad_s_ = 0.0;
+    double grasp_command_phase_tol_rad_ = 0.0;
+    std::string weights_sha256_;                        ///< sha256FileHex(weights_yaml_path_)
+    rclcpp::Subscription<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr grasp_command_sub_;
+    satellite_grasp_msgs::msg::GraspCommand::SharedPtr pending_command_;  ///< received before kWaitingCommand
+    bool command_seen_ = false;
+    bool phase_coherence_pending_ = false;
+    Eigen::Vector3d p_start_cmd_ = Eigen::Vector3d::Zero();  ///< the message's start_position
+    double snapshot_theta_rad_ = 0.0, snapshot_t_s_ = 0.0, command_omega_rad_s_ = 0.0;
+    double t_cmd_wait_start_ = 0.0;
     bool have_phase_ = false;
     double theta_sat_ = 0.0;                                ///< latest unwrapped phase [rad]
     double phase_stamp_s_ = 0.0;                            ///< header.stamp (or clock) of that sample

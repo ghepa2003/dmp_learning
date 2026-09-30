@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -532,4 +535,296 @@ TEST(SatelliteInterceptConfig, ContactTimeMismatchIsAnErrorUnlessAllowedExplicit
     in = validInputs(true);
     in.contact_time_s = 60.972930046 + 0.005 + 0.09;
     EXPECT_FALSE(validateContinuous(in).contact_time_mismatch);
+}
+
+// ---------------------------------------------------------------------------------------
+// grasp_goal_source = "grasp_command": pure consumption of a GraspCommand
+// ---------------------------------------------------------------------------------------
+namespace {
+
+GraspCommandInputs validCommand(double tau) {
+    GraspCommandInputs in;
+    in.status = kGraspStatusSelected;
+    in.frame_id = "world";
+    in.stamp_s = 100.0;
+    in.goal_position = Eigen::Vector3d(0.5, 0.1, 0.4);
+    in.start_position = Eigen::Vector3d(0.3, 0.0, 0.5);
+    in.theta_star_rad = 0.7;
+    in.omega_rad_s = -deg(2.0);
+    in.contact_time_s = tau;
+    in.snapshot_theta_rad = 0.2;
+    in.snapshot_t_s = 90.0;
+    in.weights_sha256 = std::string(64, 'a');
+    return in;
+}
+
+GraspCommandCheckParams checkParams(double tau) {
+    GraspCommandCheckParams p;
+    p.now_s = 101.0;
+    p.world_frame = "world";
+    p.omega_param_rad_s = -deg(2.0);
+    p.omega_tol_rad_s = deg(0.1);
+    p.tau_s = tau;
+    p.local_weights_sha256 = std::string(64, 'a');
+    return p;
+}
+
+std::string rejectionOf(const GraspCommandInputs& in, const GraspCommandCheckParams& p) {
+    try {
+        validateGraspCommand(in, p);
+    } catch (const std::runtime_error& e) {
+        return e.what();
+    }
+    return "";
+}
+
+}  // namespace
+
+TEST(GraspCommandTheta, ThetaTrigIsWrapPiOfThetaStarMinusOmegaContact) {
+    for (const double omega : {deg(2.0), -deg(2.0)}) {
+        for (const double theta_star : {-3.0, -0.5, 0.0, 1.0, 3.0, M_PI, 3.0 * M_PI, -4.0}) {
+            for (const double T : {0.5, 3.4, 90.0}) {
+                const double t = plannerThetaTrigRad(theta_star, omega, T);
+                EXPECT_GT(t, -M_PI - 1e-12);
+                EXPECT_LE(t, M_PI + 1e-12);
+                // Same angle as InterceptTrigger's [0, 2pi) representation.
+                const InterceptTrigger trig(theta_star, omega, T);
+                EXPECT_NEAR(wrapDeg(radToDeg(t - trig.thetaTrigRad())), 0.0, 1e-9);
+            }
+        }
+    }
+    EXPECT_NEAR(std::fabs(plannerThetaTrigRad(0.0, deg(2.0), 90.0)), M_PI, 1e-9);  // +-pi boundary
+}
+
+TEST(GraspCommandTrigger, FiresOnCrossingInTheDirectionOfOmega) {
+    for (const double omega : {deg(2.0), -deg(2.0)}) {
+        const double theta_star = 3.0, T = 20.0;
+        InterceptTrigger trig(theta_star, omega, T);
+        const double theta_trig = plannerThetaTrigRad(theta_star, omega, T);
+        const double dt = 0.1;
+        // Phase sequence theta(t) = theta_trig - omega * 5 s + omega * t, wrapped like PhaseTracker's first sample.
+        double t_fire = -1.0;
+        for (int i = 0; i < 2000 && t_fire < 0.0; ++i) {
+            const double th = haptic_dmp_learning::core::wrapPi(theta_trig - omega * 5.0 + omega * i * dt);
+            if (trig.update(th).fired) t_fire = i * dt;
+        }
+        ASSERT_GT(t_fire, 0.0);
+        // Crosses theta_trig at t = 5 s, fired on the first sample at or past it (never before).
+        EXPECT_GE(t_fire, 5.0 - 1e-9);
+        EXPECT_LE(t_fire, 5.0 + dt + 1e-9);
+    }
+}
+
+TEST(GraspCommandTrigger, AlreadyPastWaitsForTheNextLapAndBackwardsPhaseDoesNotFire) {
+    const double omega = deg(2.0);
+    InterceptTrigger trig(1.0, omega, 10.0);
+    const double theta_trig = plannerThetaTrigRad(1.0, omega, 10.0);
+    EXPECT_TRUE(trig.update(theta_trig + deg(1.0)).first_sample_past);  // already past
+    EXPECT_FALSE(trig.update(theta_trig + deg(2.0)).fired);             // not armed yet
+    EXPECT_FALSE(trig.update(theta_trig - deg(30.0)).fired);            // "before" side: arms, no fire
+    EXPECT_FALSE(trig.update(theta_trig - deg(10.0)).fired);            // approaching
+    EXPECT_FALSE(trig.update(theta_trig - deg(20.0)).fired);            // phase going backwards: no fire
+    EXPECT_TRUE(trig.update(theta_trig + deg(0.5)).fired);              // crossing, next lap
+}
+
+TEST(GraspCommandValidate, AcceptsAValidCommandAndComputesTheTrigger) {
+    const double tau = 4.0;
+    const auto plan = validateGraspCommand(validCommand(tau), checkParams(tau));
+    EXPECT_NEAR(plan.theta_trig_rad, plannerThetaTrigRad(0.7, -deg(2.0), tau), 1e-15);
+    EXPECT_NEAR(plan.age_s, 1.0, 1e-12);
+    EXPECT_TRUE(plan.goal_position.isApprox(Eigen::Vector3d(0.5, 0.1, 0.4)));
+}
+
+TEST(GraspCommandValidate, RejectsEveryNonSelectedStatus) {
+    const double tau = 4.0;
+    for (const auto st : {kGraspStatusUnset, kGraspStatusNoFeasibleCandidate,
+                          kGraspStatusBudgetExhaustedNoCandidate, static_cast<std::uint8_t>(9)}) {
+        auto in = validCommand(tau);
+        in.status = st;
+        const std::string why = rejectionOf(in, checkParams(tau));
+        EXPECT_NE(why.find("not STATUS_SELECTED"), std::string::npos) << why;
+        EXPECT_NE(why.find(graspStatusName(st)), std::string::npos) << why;
+    }
+}
+
+TEST(GraspCommandValidate, RejectsFrameStampOmegaHashAndNonFinite) {
+    const double tau = 4.0;
+    auto p = checkParams(tau);
+    {
+        auto in = validCommand(tau);
+        in.frame_id = "map";
+        EXPECT_NE(rejectionOf(in, p).find("frame_id"), std::string::npos);
+    }
+    {
+        auto in = validCommand(tau);
+        in.stamp_s = p.now_s + 5.0;  // future
+        EXPECT_NE(rejectionOf(in, p).find("FUTURE"), std::string::npos);
+        in.stamp_s = p.now_s + 5e-4;  // within the 1 ms tolerance
+        EXPECT_EQ(rejectionOf(in, p), "");
+    }
+    {
+        auto in = validCommand(tau);
+        in.stamp_s = 1.0;  // 100 s old: age check is OFF by default (max_age_s = 0) ...
+        EXPECT_EQ(rejectionOf(in, p), "");
+        p.max_age_s = 30.0;  // ... and active when > 0
+        EXPECT_NE(rejectionOf(in, p).find("old"), std::string::npos);
+        p.max_age_s = 0.0;
+    }
+    {
+        auto in = validCommand(tau);
+        in.omega_rad_s = 0.0;
+        EXPECT_NE(rejectionOf(in, p).find("omega_rad_s == 0"), std::string::npos);
+        in.omega_rad_s = -deg(2.0) + deg(0.2);  // 0.2 deg/s off, tol 0.1
+        EXPECT_NE(rejectionOf(in, p).find("differs"), std::string::npos);
+        in.omega_rad_s = -deg(2.0) + deg(0.05);
+        EXPECT_EQ(rejectionOf(in, p), "");
+    }
+    {
+        auto in = validCommand(tau);
+        in.weights_sha256 = std::string(64, 'b');
+        const std::string why = rejectionOf(in, p);
+        EXPECT_NE(why.find(std::string(64, 'b')), std::string::npos) << why;  // both hashes in the message
+        EXPECT_NE(why.find(std::string(64, 'a')), std::string::npos) << why;
+    }
+    for (int field = 0; field < 4; ++field) {
+        auto in = validCommand(tau);
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        if (field == 0) in.goal_position.x() = nan;
+        if (field == 1) in.theta_star_rad = std::numeric_limits<double>::infinity();
+        if (field == 2) in.snapshot_t_s = nan;
+        if (field == 3) in.start_position.z() = nan;
+        EXPECT_NE(rejectionOf(in, p).find("not finite"), std::string::npos) << field;
+    }
+}
+
+TEST(GraspCommandValidate, ContactTimeMustEqualTauInclusiveWithTolerance) {
+    const double tau = 4.0;
+    const auto p = checkParams(tau);
+    auto in = validCommand(tau);
+    for (const double d : {0.0, 1e-7, -1e-7, 9e-7, -9e-7}) {
+        in.contact_time_s = tau + d;
+        EXPECT_EQ(rejectionOf(in, p), "") << d;
+    }
+    in.contact_time_s = tau - 1e-3;
+    EXPECT_NE(rejectionOf(in, p).find("v1 supporta solo contatto assunto alla fine del rollout"), std::string::npos);
+    in.contact_time_s = 1.0;
+    EXPECT_NE(rejectionOf(in, p).find("v1 supporta solo contatto assunto alla fine del rollout"), std::string::npos);
+    in.contact_time_s = tau + 1e-3;
+    EXPECT_NE(rejectionOf(in, p).find("> tau"), std::string::npos);
+    in.contact_time_s = 0.0;
+    EXPECT_NE(rejectionOf(in, p).find("must be > 0"), std::string::npos);
+}
+
+TEST(GraspCommandCoherence, ResidualAndTolerance) {
+    const double omega = -deg(2.0), th0 = 0.2, t0 = 90.0;
+    // Perfectly consistent sample 10 s later.
+    const double th_ok = th0 + omega * 10.0;
+    EXPECT_NEAR(phaseResidualRad(th_ok, th0, t0, omega, 100.0), 0.0, 1e-12);
+    // Wrap: measured phase differs by exactly 2*pi (tracker unwrapping offset) -> residual 0.
+    EXPECT_NEAR(phaseResidualRad(th_ok + 2.0 * M_PI, th0, t0, omega, 100.0), 0.0, 1e-9);
+    // 3 deg off: rejected at 1 deg, accepted at 5 deg.
+    const double r = phaseResidualRad(th_ok + deg(3.0), th0, t0, omega, 100.0);
+    EXPECT_NEAR(radToDeg(r), 3.0, 1e-9);
+    EXPECT_THROW(checkPhaseCoherence(r, deg(1.0)), std::runtime_error);
+    EXPECT_NO_THROW(checkPhaseCoherence(r, deg(5.0)));
+    EXPECT_THROW(checkPhaseCoherence(std::nan(""), deg(5.0)), std::runtime_error);
+}
+
+TEST(GraspCommandChecks, StartPositionAndRobotBase) {
+    const Eigen::Vector3d start(0.3, 0.0, 0.5);
+    EXPECT_NO_THROW(checkStartPositionMatches(start + Eigen::Vector3d(0.004, 0.0, 0.0), start));
+    try {
+        checkStartPositionMatches(start + Eigen::Vector3d(0.006, 0.0, 0.0), start);
+        FAIL() << "no throw";
+    } catch (const std::runtime_error& e) {
+        const std::string m = e.what();
+        EXPECT_NE(m.find("0.306"), std::string::npos) << m;  // both positions printed
+        EXPECT_NE(m.find("0.3 "), std::string::npos) << m;
+    }
+    EXPECT_NO_THROW(checkRobotBaseWorldIsZero(Eigen::Vector3d::Zero(), 1e-6));
+    EXPECT_THROW(checkRobotBaseWorldIsZero(Eigen::Vector3d(0.01, 0, 0), 1e-6), std::invalid_argument);
+}
+
+TEST(GraspCommandConfig, GraspCommandModeRules) {
+    auto valid = []() {
+        ContinuousInputs in;
+        in.rotation_enabled = true;
+        in.use_sim_time = true;
+        in.target_odom_required = false;
+        in.axis_explicit = in.center_explicit = in.omega_explicit = true;
+        in.axis = Eigen::Vector3d(0, 0, 1);
+        in.center = Eigen::Vector3d(0.75, 0, 0.35);
+        in.omega_deg_s = -2.0;
+        in.phase_source = std::string("measured");
+        in.odom_topic = std::string("/free_target_object/odometry");
+        in.q_ref = std::vector<double>{0, 0, 0, 1};
+        in.contact_time_tolerance_s = 0.1;
+        in.phase_consistency_window_s = 5.0;
+        in.phase_consistency_tol_deg = 1.0;
+        in.trigger_timeout_margin_s = 30.0;
+        in.rollout_time_tol_s = 0.05;
+        in.tau = 4.0;
+        in.dt = 0.005;
+        in.grasp_command_mode = true;
+        return in;
+    };
+    // Neither theta_int nor T_total is needed, and no tau + dt check applies.
+    EXPECT_NO_THROW(validateContinuous(valid()));
+    const auto c = validateContinuous(valid());
+    EXPECT_FALSE(c.contact_time_mismatch);
+    EXPECT_EQ(c.contact_time_s, 0.0);
+
+    auto a = valid();
+    a.intercept_phase_deg = 10.0;
+    EXPECT_THROW(validateContinuous(a), std::invalid_argument);
+    auto b = valid();
+    b.contact_time_s = 4.0;
+    EXPECT_THROW(validateContinuous(b), std::invalid_argument);
+    auto m = valid();
+    m.phase_source = std::string("model");
+    m.model_phase0_deg = 0.0;
+    EXPECT_THROW(validateContinuous(m), std::invalid_argument);
+    auto o = valid();
+    o.target_odom_required = true;
+    EXPECT_THROW(validateContinuous(o), std::invalid_argument);
+}
+
+// Regression: with grasp_command_mode = false (the default) validateContinuous is exactly what it was.
+TEST(GraspCommandConfig, DefaultModeIsUnchanged) {
+    ContinuousInputs in;
+    in.rotation_enabled = true;
+    in.use_sim_time = true;
+    in.target_odom_required = false;
+    in.axis_explicit = in.center_explicit = in.omega_explicit = true;
+    in.axis = Eigen::Vector3d(0, 0, 2.0);
+    in.center = Eigen::Vector3d(0.75, 0, 0.35);
+    in.omega_deg_s = -2.0;
+    in.intercept_phase_deg = 30.0;
+    in.contact_time_s = 4.005;
+    in.phase_source = std::string("measured");
+    in.odom_topic = std::string("/odom");
+    in.q_ref = std::vector<double>{0, 0, 0, 1};
+    in.contact_time_tolerance_s = 0.1;
+    in.phase_consistency_window_s = 5.0;
+    in.phase_consistency_tol_deg = 1.0;
+    in.trigger_timeout_margin_s = 30.0;
+    in.rollout_time_tol_s = 0.05;
+    in.tau = 4.0;
+    in.dt = 0.005;
+    EXPECT_FALSE(in.grasp_command_mode);
+    const auto c = validateContinuous(in);
+    EXPECT_DOUBLE_EQ(c.theta_int_rad, deg(30.0));
+    EXPECT_DOUBLE_EQ(c.contact_time_s, 4.005);
+    EXPECT_DOUBLE_EQ(c.expected_contact_time_s, 4.005);
+    EXPECT_FALSE(c.contact_time_mismatch);
+    EXPECT_DOUBLE_EQ(c.trigger_timeout_s, 360.0 / 2.0 + 4.005 + 30.0);
+    EXPECT_DOUBLE_EQ(c.omega_rad_s, -deg(2.0));
+    EXPECT_TRUE(c.axis_unit.isApprox(Eigen::Vector3d::UnitZ()));
+    // The tau + dt check is still enforced, and the parameters are still mandatory.
+    auto bad = in;
+    bad.contact_time_s = 4.5;
+    EXPECT_THROW(validateContinuous(bad), std::invalid_argument);
+    auto missing = in;
+    missing.intercept_phase_deg.reset();
+    EXPECT_THROW(validateContinuous(missing), std::invalid_argument);
 }

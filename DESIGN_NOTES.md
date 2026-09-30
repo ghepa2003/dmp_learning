@@ -164,6 +164,21 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
 - The collar exists ONLY in `CubeSatelliteModel` (planner geometry and collision model). It is
   NOT in the Gazebo SDF of `free_target_object`: the simulated cube has no collar geometry.
 
+## 2026-09-29 — `prodmp_gazebo_executor_node` with `grasp_goal_source=grasp_command` (v1 limits)
+
+- **The executed orientation is not the planner's.** The planner checks kinematic feasibility and
+  collision with `applyRoll(orientation_nominal, psi)` and a SLERP from the start orientation
+  (`kinematic_feasibility.cpp`, `candidate_eval.cpp`); the executor runs `QuaternionDMP` with its
+  demo-native goal and uses only the position of the message. The planner's feasibility and collision
+  checks therefore do NOT cover the pose that is executed. The gap SLERP vs `QuaternionDMP`
+  (checklist 3a) is not measured yet.
+- Contact is assumed at the end of the rollout: `|contact_time_s - tau| <= 1e-6 s` is required, otherwise
+  the executor refuses (the planner's feasibility rollout goes to `contact_point` without
+  `contact_to_end_offset`, so it only matches the executed goal when `t_contact_s` is null).
+- Trigger: `theta_trig = wrapPi(theta_star - omega*contact_time_s)`, no `+dt`; the residual `omega*dt` is
+  logged at acceptance. Planner rollout dt = 0.005 s (`candidate_scan.cpp`, `kinematic_feasibility.hpp`);
+  the executor logs its own `dt_` next to it and warns if they differ.
+
 ## 2026-09-11 — Quaternion normalization in `learn_and_test_dmp.cpp`'s local CSV loader
 
 **Context**: `demo_csv_io::readDemoCsv` (used by `learn_and_test_prodmp.cpp`)

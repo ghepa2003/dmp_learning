@@ -21,6 +21,8 @@ find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+# Interfaces-only package (no dependency on the planner): GraspCommand for prodmp_gazebo_executor_node.
+find_package(satellite_grasp_msgs REQUIRED)
 
 include_directories(include)
 
@@ -96,6 +98,7 @@ ament_target_dependencies(prodmp_gazebo_executor_node
   diagnostic_msgs
   tf2_ros
   ament_index_cpp
+  satellite_grasp_msgs
 )
 
 # ---- ProDMP offline fit tool (STANDALONE, no ROS - links only the core
@@ -261,6 +264,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_satellite_intercept test/test_satellite_intercept.cpp)
   target_link_libraries(test_satellite_intercept ${PROJECT_NAME}_core)
 
+  # GraspCommand -> GraspCommandInputs conversion (message types only, no node graph).
+  ament_add_gtest(test_grasp_command_input test/test_grasp_command_input.cpp)
+  target_link_libraries(test_grasp_command_input ${PROJECT_NAME}_core)
+  ament_target_dependencies(test_grasp_command_input rclcpp satellite_grasp_msgs)
+
   # Pure geometry of the cube satellite model (no ROS).
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)
@@ -282,6 +290,15 @@ if(BUILD_TESTING)
   # the header-only tests above.
   ament_add_gtest(test_param_client_executor_regression test/test_param_client_executor_regression.cpp)
   ament_target_dependencies(test_param_client_executor_regression rclcpp)
+
+  # Constructor-level parameter tests of prodmp_gazebo_executor_node (the node's own source is
+  # compiled in; its main() lives in prodmp_executor_main.cpp, which is NOT). No spin, no Gazebo.
+  ament_add_gtest(test_prodmp_executor_node_params
+    test/test_prodmp_executor_node_params.cpp
+    src/ros/prodmp_gazebo_executor_node.cpp)
+  target_link_libraries(test_prodmp_executor_node_params ${PROJECT_NAME}_core)
+  ament_target_dependencies(test_prodmp_executor_node_params
+    rclcpp geometry_msgs std_msgs nav_msgs diagnostic_msgs tf2_ros ament_index_cpp satellite_grasp_msgs)
 endif()
 
 ament_export_include_directories(include)

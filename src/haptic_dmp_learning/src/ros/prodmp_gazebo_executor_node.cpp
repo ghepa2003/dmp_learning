@@ -4,6 +4,8 @@
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
+#include "haptic_dmp_learning/core/demo_params.hpp"
+#include "haptic_dmp_learning/ros/grasp_command_input.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -113,6 +115,14 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
         this->declare_parameter<double>("satellite_rotation_angular_velocity_deg_s", 2.0);
     satellite_rotation_frozen_phase_deg_ =
         this->declare_parameter<double>("satellite_rotation_frozen_phase_deg", 0.0);
+    // Where the grasp goal comes from. "parameters" (default) = every existing branch, unchanged.
+    // "grasp_command" = satellite_grasp_msgs/GraspCommand from grasp_planner_node (continuous mode only).
+    grasp_goal_source_ = this->declare_parameter<std::string>("grasp_goal_source", "parameters");
+    if (grasp_goal_source_ != "parameters" && grasp_goal_source_ != "grasp_command") {
+        throw std::invalid_argument("parameter 'grasp_goal_source' must be 'parameters' or 'grasp_command', got '" +
+                                    grasp_goal_source_ + "'");
+    }
+    grasp_command_mode_ = (grasp_goal_source_ == "grasp_command");
 
     // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
     // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
@@ -286,6 +296,11 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     // error: main() logs it as fatal and exits), create the odometry subscription / status topic.
     // Untouched for satellite_rotation_enabled=false and for mode="frozen".
     continuous_ = satellite_rotation_enabled_ && satellite_rotation_mode_ == "continuous";
+    if (grasp_command_mode_ && !continuous_) {
+        throw std::invalid_argument(
+            "grasp_goal_source='grasp_command' requires satellite_rotation_enabled=true and "
+            "satellite_rotation_mode='continuous'");
+    }
     if (continuous_) {
         setupContinuous();
     }
@@ -928,11 +943,55 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
     in.rollout_time_tol_s = this->declare_parameter<double>("rollout_time_tol_s", 0.05);
     in.tau = prodmp_.tau();
     in.dt = dt_;
+    in.grasp_command_mode = grasp_command_mode_;
+
+    if (grasp_command_mode_) {
+        // Parameters that exist ONLY in grasp_command mode (nothing new is declared in "parameters" mode
+        // except grasp_goal_source itself).
+        grasp_command_topic_ = this->declare_parameter<std::string>("grasp_command_topic", "/grasp_command");
+        if (grasp_command_topic_.empty()) throw std::invalid_argument("parameter 'grasp_command_topic' must not be empty");
+        grasp_command_timeout_s_ = this->declare_parameter<double>("grasp_command_timeout_s", 300.0);
+        if (!(std::isfinite(grasp_command_timeout_s_) && grasp_command_timeout_s_ > 0.0)) {
+            throw std::invalid_argument("parameter 'grasp_command_timeout_s' must be finite and > 0");
+        }
+        // <= 0 disables the age check (stamps in the future are always rejected).
+        grasp_command_max_age_s_ = this->declare_parameter<double>("grasp_command_max_age_s", 0.0);
+        if (!std::isfinite(grasp_command_max_age_s_)) {
+            throw std::invalid_argument("parameter 'grasp_command_max_age_s' must be finite (<= 0 disables the check)");
+        }
+        const double omega_tol_deg_s = this->declare_parameter<double>("omega_consistency_tol_deg_per_s", 0.1);
+        if (!(std::isfinite(omega_tol_deg_s) && omega_tol_deg_s > 0.0)) {
+            throw std::invalid_argument("parameter 'omega_consistency_tol_deg_per_s' must be finite and > 0");
+        }
+        omega_consistency_tol_rad_s_ = core::degToRad(omega_tol_deg_s);
+        const double phase_tol_deg = this->declare_parameter<double>("grasp_command_phase_tol_deg", 1.0);
+        if (!(std::isfinite(phase_tol_deg) && phase_tol_deg > 0.0)) {
+            throw std::invalid_argument("parameter 'grasp_command_phase_tol_deg' must be finite and > 0");
+        }
+        grasp_command_phase_tol_rad_ = core::degToRad(phase_tol_deg);
+        // Mandatory (no default), like the planner's: world == robot base is only true for robot_base_world = 0.
+        const double robot_base_tol_m = this->declare_parameter<double>("robot_base_world_tol_m", 1e-6);
+        if (!(std::isfinite(robot_base_tol_m) && robot_base_tol_m >= 0.0)) {
+            throw std::invalid_argument("parameter 'robot_base_world_tol_m' must be finite and >= 0");
+        }
+        const auto rbw = opt_vec("robot_base_world");
+        if (!rbw) {
+            throw std::invalid_argument(
+                "grasp_goal_source='grasp_command': mandatory parameter 'robot_base_world' was not provided");
+        }
+        if (rbw->size() != 3) throw std::invalid_argument("parameter 'robot_base_world' must have exactly 3 elements");
+        si::checkRobotBaseWorldIsZero(Eigen::Vector3d((*rbw)[0], (*rbw)[1], (*rbw)[2]), robot_base_tol_m);
+        // Hash of the file the ProDMP was loaded from, compared with the message's weights_sha256.
+        weights_sha256_ = core::demo_params::sha256FileHex(weights_yaml_path_);
+    }
 
     cc_ = si::validateContinuous(in);  // throws std::invalid_argument naming the parameter
     const auto& c = *cc_;
 
-    trigger_ = std::make_unique<si::InterceptTrigger>(c.theta_int_rad, c.omega_rad_s, c.contact_time_s);
+    // grasp_command mode: theta_int and T_total are not known yet, the trigger is built on acceptance.
+    if (!grasp_command_mode_) {
+        trigger_ = std::make_unique<si::InterceptTrigger>(c.theta_int_rad, c.omega_rad_s, c.contact_time_s);
+    }
     if (c.measured) {
         phase_tracker_ = std::make_unique<si::PhaseTracker>(c.axis_unit, c.q_ref, 0.5);
         phase_checker_ = std::make_unique<si::PhaseConsistencyChecker>(
@@ -941,9 +1000,36 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
             c.odom_topic, rclcpp::QoS(100),
             std::bind(&ProDmpGazeboExecutorNode::onSatelliteOdom, this, std::placeholders::_1));
     }
+    if (grasp_command_mode_) {
+        // Same QoS as the planner's publisher: reliable + transient_local + depth 1 (one-shot, retained).
+        // Created here so a message published before beginContinuous() is buffered, not lost.
+        grasp_command_sub_ = this->create_subscription<satellite_grasp_msgs::msg::GraspCommand>(
+            grasp_command_topic_, rclcpp::QoS(1).reliable().transient_local(),
+            std::bind(&ProDmpGazeboExecutorNode::onGraspCommand, this, std::placeholders::_1));
+    }
     continuous_status_pub_ = this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
         "~/continuous_status", rclcpp::QoS(10));
 
+    if (grasp_command_mode_) {
+        const bool dt_differs = std::fabs(dt_ - si::kPlannerRolloutDtS) > 1e-12;
+        RCLCPP_INFO(this->get_logger(),
+                    "grasp_goal_source=grasp_command: topic '%s' (reliable, transient_local, depth 1), timeout %.1f s, "
+                    "max_age %s, omega tol %.4f rad/s, phase tol %.3f deg, weights sha256 %s.\n"
+                    "  center=[%.4f, %.4f, %.4f] axis=[%.6f, %.6f, %.6f] omega(param)=%.6f rad/s  tau=%.5f s  "
+                    "dt_=%.6f s (planner rollout dt %.6f s)",
+                    grasp_command_topic_.c_str(), grasp_command_timeout_s_,
+                    grasp_command_max_age_s_ > 0.0 ? (std::to_string(grasp_command_max_age_s_) + " s").c_str() : "off",
+                    omega_consistency_tol_rad_s_, core::radToDeg(grasp_command_phase_tol_rad_), weights_sha256_.c_str(),
+                    c.center.x(), c.center.y(), c.center.z(), c.axis_unit.x(), c.axis_unit.y(), c.axis_unit.z(),
+                    c.omega_rad_s, c.tau, dt_, si::kPlannerRolloutDtS);
+        if (dt_differs) {
+            RCLCPP_WARN(this->get_logger(),
+                        "executor dt_=%.6f s differs from the planner's rollout dt %.6f s: the trajectory the planner "
+                        "validated was integrated with a different step (measured-time stepping makes the executor "
+                        "path near, not identical to it).", dt_, si::kPlannerRolloutDtS);
+        }
+        return;  // no theta_trig / T_total yet: they come from the message
+    }
     const std::string source_desc = c.measured ? ("measured, odom=" + c.odom_topic) : std::string("model");
     RCLCPP_INFO(this->get_logger(),
                 "satellite_rotation_mode=continuous (v0, open-loop predictive intercept):\n"
@@ -987,6 +1073,10 @@ void ProDmpGazeboExecutorNode::beginContinuous(const Eigen::Vector3d& ee_plan) {
     }
 
     ee_plan_ = ee_plan;
+    if (grasp_command_mode_) {
+        beginWaitingForCommand(ee_plan);
+        return;
+    }
     // Same anchoring + rotation function as the frozen branch, evaluated at theta_int.
     const si::AnchoredGoal plan = si::anchorAndRotate(ee_plan, demo_grasp_goal_, c.center, c.axis_unit, c.theta_int_rad);
     p0_ = plan.p_demo_world;          // grasp point at theta = 0
@@ -1024,6 +1114,99 @@ void ProDmpGazeboExecutorNode::beginContinuous(const Eigen::Vector3d& ee_plan) {
             this, this->get_clock(), rclcpp::Duration::from_seconds(dt_),
             std::bind(&ProDmpGazeboExecutorNode::onModelPhaseTick, this));
     }
+}
+
+void ProDmpGazeboExecutorNode::beginWaitingForCommand(const Eigen::Vector3d& ee_plan) {
+    // Controller state BEFORE any wait (as the frozen branch does right before its rollout): the goal is an
+    // absolute world position, so the FrameAligner must be the identity. skip_initial_alignment is a plain
+    // controller parameter: it does not expire and survives FrameAligner::reset() (ros_utils.hpp,
+    // cartesian_impedance_controller.cpp: reset() only in on_activate()), so a long wait cannot undo it.
+    syncControllerAlignmentOverride(ee_plan);
+    syncControllerSkipInitialAlignment(true);
+
+    const double now_s = this->now().seconds();
+    t_cmd_wait_start_ = now_s;
+    cstate_ = ContinuousState::kWaitingCommand;
+    RCLCPP_INFO(this->get_logger(),
+                "continuous: WAITING for a GraspCommand on '%s' (ee_plan=[%.4f, %.4f, %.4f], timeout %.1f s).",
+                grasp_command_topic_.c_str(), ee_plan.x(), ee_plan.y(), ee_plan.z(), grasp_command_timeout_s_);
+    continuous_status_timer_ = rclcpp::create_timer(
+        this, this->get_clock(), rclcpp::Duration::from_seconds(0.05),
+        std::bind(&ProDmpGazeboExecutorNode::publishContinuousStatus, this));
+    if (pending_command_) {
+        const auto msg = pending_command_;
+        pending_command_.reset();
+        acceptGraspCommand(*msg);
+    }
+}
+
+void ProDmpGazeboExecutorNode::onGraspCommand(const satellite_grasp_msgs::msg::GraspCommand::SharedPtr msg) {
+    if (command_seen_) {
+        RCLCPP_WARN(this->get_logger(),
+                    "GraspCommand (stamp %.4f s, status %u) ignored: v1 is one-shot, the first message was already taken.",
+                    rclcpp::Time(msg->header.stamp).seconds(), static_cast<unsigned>(msg->status));
+        return;
+    }
+    command_seen_ = true;
+    if (cstate_ == ContinuousState::kWaitingCommand) {
+        acceptGraspCommand(*msg);
+    } else {
+        pending_command_ = msg;  // consumed by beginWaitingForCommand()
+        RCLCPP_INFO(this->get_logger(), "GraspCommand received before the executor is ready: kept for later.");
+    }
+}
+
+void ProDmpGazeboExecutorNode::acceptGraspCommand(const satellite_grasp_msgs::msg::GraspCommand& msg) {
+    namespace si = core::satellite_intercept;
+    auto& c = *cc_;
+    si::GraspCommandPlan plan;
+    try {
+        si::GraspCommandCheckParams p;
+        p.now_s = this->now().seconds();
+        p.world_frame = world_frame_;
+        p.omega_param_rad_s = c.omega_rad_s;
+        p.omega_tol_rad_s = omega_consistency_tol_rad_s_;
+        p.tau_s = prodmp_.tau();
+        p.local_weights_sha256 = weights_sha256_;
+        p.max_age_s = grasp_command_max_age_s_;
+        plan = si::validateGraspCommand(toGraspCommandInputs(msg), p);
+        si::checkStartPositionMatches(ee_plan_, plan.start_position);
+    } catch (const std::exception& e) {
+        RCLCPP_FATAL(this->get_logger(), "%s", e.what());
+        throw;
+    }
+
+    // From here the config carries the message's theta_int / T_total, so the shared code (status,
+    // at_end report, timeout) reads them exactly as it reads the parameters in the other mode.
+    c.theta_int_rad = plan.theta_star_rad;
+    c.contact_time_s = plan.contact_time_s;
+    c.trigger_timeout_s = si::InterceptTrigger::timeoutS(core::radToDeg(plan.omega_rad_s), plan.contact_time_s,
+                                                          c.trigger_timeout_margin_s);
+    trigger_ = std::make_unique<si::InterceptTrigger>(plan.theta_star_rad, plan.omega_rad_s, plan.contact_time_s);
+    p_goal_ = plan.goal_position;
+    // Grasp point at theta = 0, so that p_handle (diagnostics) = center + R(theta)(p0 - center) equals the goal
+    // at theta_star.
+    p0_ = si::rotateAboutCenter(c.center, c.axis_unit, -plan.theta_star_rad, p_goal_);
+    p_start_cmd_ = plan.start_position;
+    snapshot_theta_rad_ = plan.snapshot_theta_rad;
+    snapshot_t_s_ = plan.snapshot_t_s;
+    command_omega_rad_s_ = plan.omega_rad_s;
+    phase_coherence_pending_ = true;
+
+    const double now_s = this->now().seconds();
+    t_wait_start_ = now_s;
+    last_wait_log_ = now_s;
+    cstate_ = ContinuousState::kWaiting;
+    RCLCPP_INFO(this->get_logger(),
+                "GraspCommand ACCEPTED (stamp %.4f s, age %.3f s): goal=[%.4f, %.4f, %.4f] start_position=[%.4f, %.4f, %.4f]\n"
+                "  theta_star=%.4f deg omega=%.6f rad/s contact_time=%.6f s (tau %.6f s)  weights sha256 %s\n"
+                "  theta_trig=wrapPi(theta_star - omega*contact_time)=%.4f deg (mod 360)  timeout %.1f s\n"
+                "  omega*dt residual (first tick comes dt_=%.4f s after the trigger, not modelled)=%.5f deg",
+                rclcpp::Time(msg.header.stamp).seconds(), plan.age_s, p_goal_.x(), p_goal_.y(), p_goal_.z(),
+                plan.start_position.x(), plan.start_position.y(), plan.start_position.z(),
+                core::radToDeg(plan.theta_star_rad), plan.omega_rad_s, plan.contact_time_s, prodmp_.tau(),
+                weights_sha256_.c_str(), core::radToDeg(plan.theta_trig_rad), c.trigger_timeout_s, dt_,
+                core::radToDeg(plan.omega_rad_s * dt_));
 }
 
 void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -1074,6 +1257,25 @@ void ProDmpGazeboExecutorNode::onPhaseSample(double stamp_s, double theta_rad, c
     have_phase_ = true;
     if (cstate_ != ContinuousState::kWaiting) return;
 
+    if (phase_coherence_pending_) {
+        // grasp_command mode, once: the FIRST odometry sample after acceptance. Residual against the phase the
+        // planner's snapshot predicts for this stamp; always logged.
+        phase_coherence_pending_ = false;
+        const double residual = si::phaseResidualRad(theta_rad, snapshot_theta_rad_, snapshot_t_s_,
+                                                     command_omega_rad_s_, stamp_s);
+        RCLCPP_INFO(this->get_logger(),
+                    "phase coherence with the planner snapshot: measured theta %.4f deg at stamp %.4f s, snapshot "
+                    "theta %.4f deg at %.4f s, residual %.5f deg (tol %.3f deg)",
+                    core::radToDeg(theta_rad), stamp_s, core::radToDeg(snapshot_theta_rad_), snapshot_t_s_,
+                    core::radToDeg(residual), core::radToDeg(grasp_command_phase_tol_rad_));
+        try {
+            si::checkPhaseCoherence(residual, grasp_command_phase_tol_rad_);
+        } catch (const std::exception& e) {
+            RCLCPP_FATAL(this->get_logger(), "%s", e.what());
+            throw;
+        }
+    }
+
     if (now_s - t_wait_start_ > c.trigger_timeout_s) {
         std::ostringstream m;
         m << "continuous: trigger not reached within timeout " << c.trigger_timeout_s << " s (360/|omega| + T_total + margin). "
@@ -1119,6 +1321,15 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
         throw std::runtime_error(m.str());
     }
     ee_start_ = ee;
+    if (grasp_command_mode_) {
+        // The planner validated a rollout that starts at its start_position (FK at q0).
+        try {
+            si::checkStartPositionMatches(ee_start_, p_start_cmd_);
+        } catch (const std::exception& e) {
+            RCLCPP_FATAL(this->get_logger(), "continuous: at the trigger: %s; no motion started", e.what());
+            throw;
+        }
+    }
 
     // Same call chain as the frozen branch: relative goal, anchor init at the real EE pose, goal in world.
     prodmp_.setRelativeGoal(true);
@@ -1205,6 +1416,13 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
     const double now_s = this->now().seconds();
     const double nan = std::nan("");
 
+    if (cstate_ == ContinuousState::kWaitingCommand &&
+        now_s - t_cmd_wait_start_ > grasp_command_timeout_s_) {
+        const std::string m = "continuous: no GraspCommand received on '" + grasp_command_topic_ + "' within " +
+                              fmtG(grasp_command_timeout_s_) + " s. No motion was started.";
+        RCLCPP_FATAL(this->get_logger(), "%s", m.c_str());
+        throw std::runtime_error(m);
+    }
     if (cstate_ == ContinuousState::kWaiting) {
         if (now_s - t_wait_start_ > c.trigger_timeout_s) {
             const std::string m = "continuous: trigger not reached within timeout " + fmtG(c.trigger_timeout_s) +
@@ -1227,7 +1445,8 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
     diagnostic_msgs::msg::DiagnosticStatus st;
     st.name = "continuous_status";
     st.hardware_id = "prodmp_gazebo_executor_node";
-    const char* state_name = cstate_ == ContinuousState::kWaiting ? "waiting"
+    const char* state_name = cstate_ == ContinuousState::kWaitingCommand ? "waiting_command"
+                             : cstate_ == ContinuousState::kWaiting ? "waiting"
                              : cstate_ == ContinuousState::kRunning ? "running"
                              : cstate_ == ContinuousState::kFinished ? "finished" : "idle";
     st.message = state_name;
@@ -1248,9 +1467,11 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
 
     const double theta_now = have_phase_ ? theta_sat_ : nan;
     kv("state", state_name);
+    if (grasp_command_mode_) kv("goal_source", "grasp_command");
     kvd("theta_sat_deg", core::radToDeg(theta_now));
-    kvd("theta_trig_deg", core::radToDeg(trigger_->thetaTrigRad()));
-    kvd("e_deg", have_phase_ ? core::radToDeg(core::wrapPi(theta_sat_ - trigger_->thetaTrigRad())) : nan);
+    // trigger_ does not exist yet in grasp_command mode while waiting for the message.
+    kvd("theta_trig_deg", trigger_ ? core::radToDeg(trigger_->thetaTrigRad()) : nan);
+    kvd("e_deg", (have_phase_ && trigger_) ? core::radToDeg(core::wrapPi(theta_sat_ - trigger_->thetaTrigRad())) : nan);
     kvd("omega_deg_s", c.omega_deg_s);
     kvd("theta_int_deg", core::radToDeg(c.theta_int_rad));
     kvd("T_total_s", c.contact_time_s);

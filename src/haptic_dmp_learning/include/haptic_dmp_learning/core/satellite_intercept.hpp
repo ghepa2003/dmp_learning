@@ -332,6 +332,10 @@ struct ContinuousInputs {
 
     double tau = 0.0;  ///< prodmp tau [s]
     double dt = 0.0;   ///< nominal tick period [s]
+
+    /// grasp_goal_source == "grasp_command": theta_int and T_total come from a GraspCommand message
+    /// (validateGraspCommand), not from parameters. Default false = the original behaviour, bit for bit.
+    bool grasp_command_mode = false;
 };
 
 struct ContinuousConfig {
@@ -389,12 +393,23 @@ inline ContinuousConfig validateContinuous(const ContinuousInputs& in) {
     c.omega_deg_s = in.omega_deg_s;
     c.omega_rad_s = degToRad(in.omega_deg_s);
 
-    if (!in.intercept_phase_deg) missing("satellite_intercept_phase_deg");
-    c.theta_int_rad = degToRad(*in.intercept_phase_deg);
-    if (!in.contact_time_s) missing("satellite_contact_time_s");
-    if (!(*in.contact_time_s > 0.0)) invalid("satellite_contact_time_s", "must be > 0");
-    c.contact_time_s = *in.contact_time_s;
+    if (in.grasp_command_mode) {
+        // theta_int / T_total arrive in the GraspCommand: setting them as well would be ambiguous.
+        if (in.intercept_phase_deg) invalid("satellite_intercept_phase_deg", "must not be set when grasp_goal_source='grasp_command' (it comes from the message)");
+        if (in.contact_time_s) invalid("satellite_contact_time_s", "must not be set when grasp_goal_source='grasp_command' (it comes from the message)");
+        c.theta_int_rad = 0.0;   // filled in when the message is accepted
+        c.contact_time_s = 0.0;  // idem
+    } else {
+        if (!in.intercept_phase_deg) missing("satellite_intercept_phase_deg");
+        c.theta_int_rad = degToRad(*in.intercept_phase_deg);
+        if (!in.contact_time_s) missing("satellite_contact_time_s");
+        if (!(*in.contact_time_s > 0.0)) invalid("satellite_contact_time_s", "must be > 0");
+        c.contact_time_s = *in.contact_time_s;
+    }
     if (!in.phase_source) missing("satellite_phase_source");
+    if (in.grasp_command_mode && *in.phase_source != "measured") {
+        invalid("satellite_phase_source", "must be 'measured' when grasp_goal_source='grasp_command' (got '" + *in.phase_source + "')");
+    }
     if (*in.phase_source == "measured") {
         c.measured = true;
         if (!in.odom_topic || in.odom_topic->empty()) missing("satellite_odom_topic");
@@ -428,7 +443,10 @@ inline ContinuousConfig validateContinuous(const ContinuousInputs& in) {
 
     c.expected_contact_time_s = expectedContactTimeS(in.tau, in.dt);
     c.contact_time_mismatch_allowed = in.allow_contact_time_mismatch;
-    c.contact_time_mismatch = std::fabs(c.contact_time_s - c.expected_contact_time_s) > in.contact_time_tolerance_s;
+    // The tau + dt check compares the contact_time PARAMETER with the code; in grasp_command mode there is
+    // none (T_total comes from the message and is checked by validateGraspCommand).
+    c.contact_time_mismatch = !in.grasp_command_mode &&
+                              std::fabs(c.contact_time_s - c.expected_contact_time_s) > in.contact_time_tolerance_s;
     if (c.contact_time_mismatch && !in.allow_contact_time_mismatch) {
         std::ostringstream m;
         m << "satellite_contact_time_s=" << c.contact_time_s << " differs from the value expected from the code ("
@@ -437,8 +455,211 @@ inline ContinuousConfig validateContinuous(const ContinuousInputs& in) {
           << " (set allow_contact_time_mismatch=true to override explicitly)";
         throw std::invalid_argument(m.str());
     }
-    c.trigger_timeout_s = InterceptTrigger::timeoutS(c.omega_deg_s, c.contact_time_s, c.trigger_timeout_margin_s);
+    // grasp_command mode: contact_time_s is still 0 here; the real timeout is set on acceptance of the message.
+    c.trigger_timeout_s = InterceptTrigger::timeoutS(
+        c.omega_deg_s, in.grasp_command_mode ? in.tau : c.contact_time_s, c.trigger_timeout_margin_s);
     return c;
+}
+
+// ---------------------------------------------------------------------------------------
+// 7. Consumption of a GraspCommand (grasp_goal_source = "grasp_command"), ROS-free
+// ---------------------------------------------------------------------------------------
+
+/// Rollout step of the planner's offline simulations: candidate_scan.cpp (kDt) and
+/// kinematic_feasibility.hpp (dt default). The executor logs it next to its own dt_.
+inline constexpr double kPlannerRolloutDtS = 0.005;
+
+/// GraspCommand::status values (mirrored, checked against the message constants in
+/// ros/grasp_command_input.hpp).
+inline constexpr std::uint8_t kGraspStatusUnset = 0;
+inline constexpr std::uint8_t kGraspStatusSelected = 1;
+inline constexpr std::uint8_t kGraspStatusNoFeasibleCandidate = 2;
+inline constexpr std::uint8_t kGraspStatusBudgetExhaustedNoCandidate = 3;
+
+inline const char* graspStatusName(std::uint8_t status) {
+    switch (status) {
+        case kGraspStatusUnset: return "STATUS_UNSET";
+        case kGraspStatusSelected: return "STATUS_SELECTED";
+        case kGraspStatusNoFeasibleCandidate: return "STATUS_NO_FEASIBLE_CANDIDATE";
+        case kGraspStatusBudgetExhaustedNoCandidate: return "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE";
+        default: return "STATUS_<unknown>";
+    }
+}
+
+/// The fields of a GraspCommand the executor uses, as plain values (position only: goal orientation,
+/// psi, k, provisional_delay_s and best_total_cost are deliberately not used in v1).
+struct GraspCommandInputs {
+    std::uint8_t status = kGraspStatusUnset;
+    std::string frame_id;
+    double stamp_s = 0.0;                       ///< header.stamp, planner's sim clock
+    Eigen::Vector3d goal_position = Eigen::Vector3d::Zero();
+    Eigen::Vector3d start_position = Eigen::Vector3d::Zero();
+    double theta_star_rad = 0.0;
+    double omega_rad_s = 0.0;
+    double contact_time_s = 0.0;
+    double snapshot_theta_rad = 0.0;
+    double snapshot_t_s = 0.0;
+    std::string weights_sha256;
+    // Diagnostics only, for the error text of a non-SELECTED command.
+    int rows_evaluated = 0;
+    std::uint8_t stop_reason = 0;
+    bool bound_violated = false;
+};
+
+struct GraspCommandCheckParams {
+    double now_s = 0.0;                 ///< executor's sim clock
+    std::string world_frame;
+    double omega_param_rad_s = 0.0;     ///< satellite_rotation_angular_velocity_deg_s, in rad/s
+    double omega_tol_rad_s = 0.0;
+    double tau_s = 0.0;                 ///< tau of the template loaded by the executor
+    double tau_tol_s = 1e-6;
+    std::string local_weights_sha256;   ///< sha256FileHex(weights_yaml_path)
+    double max_age_s = 0.0;             ///< <= 0: age check disabled
+    double future_stamp_tol_s = 1e-3;
+};
+
+struct GraspCommandPlan {
+    Eigen::Vector3d goal_position = Eigen::Vector3d::Zero();
+    Eigen::Vector3d start_position = Eigen::Vector3d::Zero();
+    double theta_star_rad = 0.0;
+    double omega_rad_s = 0.0;       ///< the message's (checked against the parameter)
+    double contact_time_s = 0.0;
+    double theta_trig_rad = 0.0;    ///< wrapPi(theta_star - omega * contact_time_s), in (-pi, pi]
+    double snapshot_theta_rad = 0.0;
+    double snapshot_t_s = 0.0;
+    double age_s = 0.0;             ///< now - stamp
+};
+
+/// theta_trig = wrapPi(theta_star - omega * contact_time), in (-pi, pi]. No "+ dt": the first tick of
+/// step_timer_ comes one period after the trigger, an error of omega*dt that the executor only logs.
+inline double plannerThetaTrigRad(double theta_star_rad, double omega_rad_s, double contact_time_s) {
+    return wrapPi(theta_star_rad - omega_rad_s * contact_time_s);
+}
+
+namespace detail {
+[[noreturn]] inline void rejectCommand(const std::string& why) {
+    throw std::runtime_error("GraspCommand rejected: " + why);
+}
+inline bool finite3(const Eigen::Vector3d& v) { return v.allFinite(); }
+}  // namespace detail
+
+/// Validates one GraspCommand and returns what the executor needs from it.
+/// @throws std::runtime_error, with an explicit reason, if: status != SELECTED; frame_id != world_frame;
+/// a used field is not finite; stamp is in the future (> now + future_stamp_tol_s) or, when max_age_s > 0,
+/// older than max_age_s; |omega| <= 1e-9 or |omega - omega_param| > omega_tol; weights_sha256 differs from
+/// the executor's; contact_time_s not within tau_tol_s of tau (v1 assumes contact at the end of the rollout).
+inline GraspCommandPlan validateGraspCommand(const GraspCommandInputs& in, const GraspCommandCheckParams& p) {
+    using detail::rejectCommand;
+    if (in.status != kGraspStatusSelected) {
+        std::ostringstream m;
+        m << "status=" << static_cast<int>(in.status) << " (" << graspStatusName(in.status)
+          << "), not STATUS_SELECTED; rows_evaluated=" << in.rows_evaluated
+          << " stop_reason=" << static_cast<int>(in.stop_reason)
+          << " bound_violated=" << (in.bound_violated ? "true" : "false") << ". No motion is started.";
+        rejectCommand(m.str());
+    }
+    if (in.frame_id != p.world_frame) {
+        rejectCommand("header.frame_id '" + in.frame_id + "' != world_frame '" + p.world_frame + "'");
+    }
+    if (!detail::finite3(in.goal_position) || !detail::finite3(in.start_position) ||
+        !std::isfinite(in.theta_star_rad) || !std::isfinite(in.omega_rad_s) ||
+        !std::isfinite(in.contact_time_s) || !std::isfinite(in.snapshot_theta_rad) ||
+        !std::isfinite(in.snapshot_t_s) || !std::isfinite(in.stamp_s)) {
+        rejectCommand("a field used by the executor is not finite");
+    }
+    const double age = p.now_s - in.stamp_s;
+    if (age < -p.future_stamp_tol_s) {
+        std::ostringstream m;
+        m << "header.stamp " << in.stamp_s << " s is in the FUTURE of the executor clock " << p.now_s
+          << " s (by " << -age << " s): stale message from a run with a different sim clock?";
+        rejectCommand(m.str());
+    }
+    if (p.max_age_s > 0.0 && age > p.max_age_s) {
+        std::ostringstream m;
+        m << "message is " << age << " s old (> grasp_command_max_age_s " << p.max_age_s << " s)";
+        rejectCommand(m.str());
+    }
+    if (!(std::fabs(in.omega_rad_s) > 1e-9)) rejectCommand("omega_rad_s == 0: no phase trigger possible");
+    if (std::fabs(in.omega_rad_s - p.omega_param_rad_s) > p.omega_tol_rad_s) {
+        std::ostringstream m;
+        m << "omega_rad_s " << in.omega_rad_s << " differs from the executor's parameter "
+          << p.omega_param_rad_s << " rad/s by more than " << p.omega_tol_rad_s << " rad/s";
+        rejectCommand(m.str());
+    }
+    if (in.weights_sha256 != p.local_weights_sha256) {
+        rejectCommand("weights_sha256 mismatch: message " + in.weights_sha256 + " != executor's weights file " +
+                      p.local_weights_sha256);
+    }
+    if (!(p.tau_s > 0.0)) rejectCommand("executor template tau <= 0");
+    if (!(in.contact_time_s > 0.0)) rejectCommand("contact_time_s must be > 0");
+    if (in.contact_time_s < p.tau_s - p.tau_tol_s) {
+        std::ostringstream m;
+        m << "contact_time_s " << in.contact_time_s << " < tau " << p.tau_s
+          << ": v1 supporta solo contatto assunto alla fine del rollout";
+        rejectCommand(m.str());
+    }
+    if (in.contact_time_s > p.tau_s + p.tau_tol_s) {
+        std::ostringstream m;
+        m << "contact_time_s " << in.contact_time_s << " > tau " << p.tau_s
+          << " (tolerance " << p.tau_tol_s << " s)";
+        rejectCommand(m.str());
+    }
+
+    GraspCommandPlan plan;
+    plan.goal_position = in.goal_position;
+    plan.start_position = in.start_position;
+    plan.theta_star_rad = in.theta_star_rad;
+    plan.omega_rad_s = in.omega_rad_s;
+    plan.contact_time_s = in.contact_time_s;
+    plan.theta_trig_rad = plannerThetaTrigRad(in.theta_star_rad, in.omega_rad_s, in.contact_time_s);
+    plan.snapshot_theta_rad = in.snapshot_theta_rad;
+    plan.snapshot_t_s = in.snapshot_t_s;
+    plan.age_s = age;
+    return plan;
+}
+
+/// Signed phase residual wrapPi(theta_measured - (snapshot_theta + omega * (t_odom - snapshot_t))).
+/// Both thetas are in the same convention (same q_ref, same axis); a residual far from 0 means a different
+/// q_ref/axis/clock between planner and executor.
+inline double phaseResidualRad(double theta_measured_rad, double snapshot_theta_rad, double snapshot_t_s,
+                               double omega_rad_s, double t_odom_s) {
+    return wrapPi(theta_measured_rad - (snapshot_theta_rad + omega_rad_s * (t_odom_s - snapshot_t_s)));
+}
+
+/// @throws std::runtime_error if |residual| > tol_rad.
+inline void checkPhaseCoherence(double residual_rad, double tol_rad) {
+    if (!(std::fabs(residual_rad) <= tol_rad)) {
+        std::ostringstream m;
+        m << "phase coherence with the planner's snapshot failed: residual " << radToDeg(residual_rad)
+          << " deg (> " << radToDeg(tol_rad) << " deg): planner and executor disagree on q_ref, axis or clock";
+        throw std::runtime_error(m.str());
+    }
+}
+
+/// @throws std::runtime_error if |ee - start_position| > tol_m (default 5 mm, as ee_plan vs ee_start).
+inline void checkStartPositionMatches(const Eigen::Vector3d& ee, const Eigen::Vector3d& start_position,
+                                      double tol_m = 0.005) {
+    const double d = (ee - start_position).norm();
+    if (!(d <= tol_m)) {
+        std::ostringstream m;
+        m << "end-effector [" << ee.transpose() << "] is " << d * 1000.0 << " mm from the planner's start_position ["
+          << start_position.transpose() << "] (limit " << tol_m * 1000.0
+          << " mm): the rollout would differ from the one the planner validated";
+        throw std::runtime_error(m.str());
+    }
+}
+
+/// @throws std::invalid_argument if @p robot_base_world is farther than @p tol_m from the origin. The planner's
+/// goal is in world coordinates; the executor publishes it as robot-base coordinates, which is right only
+/// because robot_base_world = 0 (same check as the planner's checkRobotBaseWorldIsZero).
+inline void checkRobotBaseWorldIsZero(const Eigen::Vector3d& robot_base_world, double tol_m) {
+    const double off = robot_base_world.norm();
+    if (!(off <= tol_m)) {
+        std::ostringstream m;
+        m << "robot_base_world [" << robot_base_world.transpose() << "] is " << off << " m from the origin (limit "
+          << tol_m << " m): world != robot base, and the executor applies no transform";
+        throw std::invalid_argument(m.str());
+    }
 }
 
 }  // namespace satellite_intercept
