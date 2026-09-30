@@ -55,6 +55,41 @@
   <xacro:arg name="use_velocity_control" default="false"/>
   <xacro:arg name="initial_linear" default="0 0 0"/>
   <xacro:arg name="initial_angular" default="0 0 0"/>
+  <!--
+  COLLAR PROXY (optional; xacro args below). Kept in a top-level comment because xacro copies the
+  header comment into every expanded SDF and with_collar=false must stay byte-identical.
+
+    with_collar       add the hollow-collar proxy to link `body`     (default false -> output
+                      IDENTICAL to a model without this feature)
+    collar_collision  give the collar <collision> elements; read     (default true)
+                      only if with_collar=true (false = visual only)
+    collar_segments   N boxes approximating the hollow cylinder      (default 24)
+    collar_radius_m   OUTER radius [m]                               (default 0.05)
+    wall_thickness_m  radial wall [m]; inner radius = R - wall       (default 0.015)
+    standoff_m        collar length along +x from the cube face [m]  (default 0.08)
+    The last three names and defaults are those of the grasp planner's
+    CubeSatelliteModel::Params (collar_radius_m, wall_thickness_m, standoff_m); the cube side is
+    size_x. tools/check_collar_defaults.py fails if they diverge.
+
+  Collar (with_collar=true): a hollow cylinder on the +x face of the cube, axis = link +x, from
+  x = size_x/2 to size_x/2 + standoff_m. The axis must coincide with face_normal_body = [1,0,0]
+  of the planner's example YAML and with the CubeSatelliteModel::Params default. The dimensions
+  are a PROXY (Phi10cm collar, 15 mm wall, 8 cm standoff), not measurements of a real object; no
+  CAD mesh. It is built inside link `body` (no new link/joint): odometry, twist and <inertial>
+  are unchanged, i.e. the collar ADDS NO MASS and does not move the centre of mass or the
+  inertia. Geometry: N rectangular boxes (x-length standoff, radial thickness wall, tangential
+  width 2 R tan(pi/N) * (1 + overlap)), radial flats at R and R - wall, centred on the
+  mid-radius; adjacent boxes overlap by `overlap` (5 %) so there are no gaps. The bore stays
+  free: its flats sit at radius r = R - wall (polygon circumscribing the inner circle, so the
+  clearance is >= r everywhere, at most r/cos(pi/N) at the vertices), the outer box corners
+  reach hypot(R, w/2) (N=24: 0.47 mm beyond R; the bore is up to 0.30 mm wider than r).
+  -->
+  <xacro:arg name="with_collar" default="false"/>
+  <xacro:arg name="collar_collision" default="true"/>
+  <xacro:arg name="collar_segments" default="24"/>
+  <xacro:arg name="collar_radius_m" default="0.05"/>
+  <xacro:arg name="wall_thickness_m" default="0.015"/>
+  <xacro:arg name="standoff_m" default="0.08"/>
 
   <!-- Bind args as numbers -->
   <xacro:property name="m"  value="${float('$(arg mass)')}"/>
@@ -74,6 +109,55 @@
   <xacro:property name="final_ixx" value="${ixx_arg if ixx_arg > 0.0 else box_ixx}"/>
   <xacro:property name="final_iyy" value="${iyy_arg if iyy_arg > 0.0 else box_iyy}"/>
   <xacro:property name="final_izz" value="${izz_arg if izz_arg > 0.0 else box_izz}"/>
+
+  <!-- Collar proxy (only used when with_collar=true; see header). Every value below is inert
+       when the collar is off. Validation raises (generator throw) so a bad value fails loudly; xacro properties are lazy,
+       so collar_check is referenced from the with_collar guard below. -->
+  <xacro:property name="with_collar" value="${'$(arg with_collar)'.lower() == 'true'}"/>
+  <xacro:property name="collar_collision" value="${'$(arg collar_collision)'.lower() == 'true'}"/>
+  <xacro:property name="collar_n" value="${int('$(arg collar_segments)')}"/>
+  <xacro:property name="collar_R" value="${float('$(arg collar_radius_m)')}"/>
+  <xacro:property name="collar_wall" value="${float('$(arg wall_thickness_m)')}"/>
+  <xacro:property name="collar_len" value="${float('$(arg standoff_m)')}"/>
+  <xacro:property name="collar_overlap" value="0.05"/>
+  <xacro:property name="collar_valid" value="${(not with_collar) or (collar_n >= 8 and 0.0 &lt; collar_wall &lt; collar_R and collar_len > 0.0 and collar_R &lt;= 0.5 * min(sy, sz))}"/>
+  <xacro:property name="collar_check" value="${True if collar_valid else (_ for _ in ()).throw(ValueError('free_target_object: invalid collar arguments: need collar_segments at least 8, wall_thickness_m in (0, collar_radius_m), collar_radius_m at most min(size_y, size_z)/2, standoff_m positive'))}"/>
+  <xacro:property name="collar_rm" value="${0.5 * (collar_R + (collar_R - collar_wall))}"/>
+  <xacro:property name="collar_w" value="${2.0 * collar_R * tan(pi / collar_n) * (1.0 + collar_overlap)}"/>
+  <xacro:property name="collar_xc" value="${0.5 * sx + 0.5 * collar_len}"/>
+
+  <!-- One collar segment, recursive (xacro has no loop): segment i at angle phi = 2 pi i / N
+       about +x. Local box axes: x = along the collar, y = radial, z = tangential. -->
+  <xacro:macro name="collar_segment" params="i">
+    <xacro:if value="${i &lt; collar_n}">
+      <xacro:property name="phi" value="${2.0 * pi * i / collar_n}"/>
+      <xacro:property name="seg_pose" value="${'%.9f %.9f %.9f %.9f 0 0' % (collar_xc, collar_rm * cos(phi), collar_rm * sin(phi), phi)}"/>
+      <xacro:if value="${collar_collision}">
+        <collision name="collar_seg_${i}">
+          <pose>${seg_pose}</pose>
+          <geometry>
+            <box>
+              <size>${collar_len} ${collar_wall} ${collar_w}</size>
+            </box>
+          </geometry>
+        </collision>
+      </xacro:if>
+      <visual name="collar_seg_${i}_visual">
+        <pose>${seg_pose}</pose>
+        <geometry>
+          <box>
+            <size>${collar_len} ${collar_wall} ${collar_w}</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.90 0.55 0.10 0.5</ambient>
+          <diffuse>0.90 0.55 0.10 0.5</diffuse>
+          <specular>0.10 0.10 0.10 1</specular>
+        </material>
+      </visual>
+      <xacro:collar_segment i="${i + 1}"/>
+    </xacro:if>
+  </xacro:macro>
 
   <model name="$(arg name)">
     <!-- Spawn pose is supplied by the spawner (`ros_gz_sim create -x -y -z ...`);
@@ -118,6 +202,10 @@
           <specular>0.10 0.10 0.10 1</specular>
         </material>
       </visual>
+
+      <xacro:if value="${with_collar and collar_check}">
+        <xacro:collar_segment i="0"/>
+      </xacro:if>
     </link>
 
     <!-- Pose + twist readout for ROS 2. OdometryPublisher ships with Fortress

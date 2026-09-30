@@ -97,6 +97,14 @@ _ARG_DEFAULTS = {
     "vx": ("0.0", "Initial linear velocity along world X [m/s]"),
     "vy": ("0.0", "Initial linear velocity along world Y [m/s]"),
     "vz": ("0.0", "Initial linear velocity along world Z [m/s]"),
+    "with_collar": ("false", "Add the hollow-collar PROXY (+x face of the cube) to the model"),
+    "collar_collision": ("true", "Collar has collision geometry (read only if with_collar:=true)"),
+    "collar_segments": ("24", "Number of boxes approximating the hollow collar cylinder"),
+    # Same names/defaults as satellite_grasp_planner's CubeSatelliteModel::Params;
+    # tools/check_collar_defaults.py fails if they diverge.
+    "collar_radius_m": ("0.05", "Collar OUTER radius [m]"),
+    "wall_thickness_m": ("0.015", "Collar radial wall thickness [m]"),
+    "standoff_m": ("0.08", "Collar length along +x from the cube face [m]"),
 }
 
 
@@ -134,6 +142,12 @@ def _spawn(context, *_args, **_kwargs):
         "ixx": cfg("ixx"),
         "iyy": cfg("iyy"),
         "izz": cfg("izz"),
+        "with_collar": cfg("with_collar"),
+        "collar_collision": cfg("collar_collision"),
+        "collar_segments": cfg("collar_segments"),
+        "collar_radius_m": cfg("collar_radius_m"),
+        "wall_thickness_m": cfg("wall_thickness_m"),
+        "standoff_m": cfg("standoff_m"),
         "use_velocity_control": "true" if use_velocity_control else "false",
         "initial_linear": f"{vx} {vy} {vz}",
         "initial_angular": f"{wx} {wy} {wz}",
@@ -193,8 +207,17 @@ def _spawn(context, *_args, **_kwargs):
            else "no plugin: fully free body")
     )
 
+    collar_msg = (
+        "collar: none"
+        if cfg("with_collar").lower() != "true"
+        else f"collar: {cfg('collar_segments')} segments, R={cfg('collar_radius_m')} m, "
+             f"wall={cfg('wall_thickness_m')} m, standoff={cfg('standoff_m')} m, "
+             f"collision={cfg('collar_collision')} (proxy, no added mass)"
+    )
+
     return [
         LogInfo(msg=f"[free_target_object] world: {world}"),
+        LogInfo(msg=f"[free_target_object] {collar_msg}"),
         LogInfo(msg=f"[free_target_object] expanded SDF: {tmp.name}"),
         LogInfo(msg=f"[free_target_object] {twist_msg}"),
         LogInfo(msg=f"[free_target_object] odometry bridge: {gz_odom_topic} "

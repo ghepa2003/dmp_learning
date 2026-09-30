@@ -128,6 +128,24 @@ ros2 launch free_target_object free_target_object.launch.py \
 | `ixx iyy izz` | `0.0` | principal inertia [kg m²]; `0` ⇒ use the homogeneous-box formula from `mass` + `size_*` |
 | `wx wy wz` | `0.0` | initial angular velocity [rad/s] (world frame) |
 | `vx vy vz` | `0.0` | initial linear velocity [m/s] (world frame) |
+| `with_collar` | `false` | add the hollow-collar PROXY to link `body` (see below) |
+| `collar_collision` | `true` | collar has collision geometry; read only if `with_collar:=true` |
+| `collar_segments` | `24` | boxes approximating the hollow cylinder |
+| `collar_radius_m` | `0.05` | collar OUTER radius [m] |
+| `wall_thickness_m` | `0.015` | collar radial wall [m]; inner radius = outer − wall |
+| `standoff_m` | `0.08` | collar length along +x from the cube face [m] |
+
+### Optional collar proxy
+
+With `with_collar:=true` the link `body` gains a hollow cylinder (ring of `collar_segments` boxes) on
+its +x face: axis = link +x, from `x = size_x/2` to `size_x/2 + standoff_m`. The axis matches
+`face_normal_body = [1,0,0]` of the grasp planner (`CubeSatelliteModel::Params` default and its example
+YAML); `collar_radius_m`, `wall_thickness_m`, `standoff_m` have the planner's names and defaults
+(`tools/check_collar_defaults.py` in the repository root fails if they diverge). The dimensions are a
+**proxy**, not measurements of a real object (no CAD mesh). No new link or joint: odometry, twist and the
+`<inertial>` block are unchanged, the collar adds no mass. The bore stays free for the gripper fingers.
+With the default `with_collar:=false` the expanded SDF is byte-identical to the model without the feature.
+`tools/check_collar_sdf.py <expanded.sdf>` checks the segment count, radial extent, x interval and axis.
 
 Default inertia for the 5 kg / 0.2 m cube: `Ixx = Iyy = Izz = 5·(0.2²+0.2²)/12 ≈ 0.03333 kg m²`.
 
