@@ -4,6 +4,29 @@ Short technical notes on design decisions / non-issues that came up during
 investigation but did not warrant (or did not need) a code change. These
 supplement, and do not replace, any existing documentation.
 
+## 2026-09-30 — grasp_orientation_mode (executor, orientation v2)
+
+`prodmp_gazebo_executor_node` with `grasp_goal_source=grasp_command` has a MANDATORY parameter
+`grasp_orientation_mode` in {`planner_goal`, `demo_native`} (no default; a missing or unknown value is a
+start-up `std::invalid_argument` naming the parameter; not declared in the other modes).
+- `demo_native`: the QuaternionDMP of the demonstration, unchanged (the previous behaviour).
+- `planner_goal`: SLERP from the hold quaternion (read once from TF by the hold target, which is therefore
+  required: `hold_target_enabled=true`) to `GraspCommand.goal_pose.orientation` (psi is already in it, never
+  re-applied), shortest path (q and -q equivalent). Pure logic in `haptic_dmp_learning/core/grasp_orientation.hpp`.
+- s(t) is the planner's own (`kinematic_feasibility.cpp`): `s = min(1, t / tau)`, a function of TIME, not of the
+  ProDMP phase (planner sample i: t = (i+1)*dt; executor: t = elapsed = now - t_roll0, 0 on the first tick). Same
+  function `core::slerpShortestPath` (math_utils.hpp), so there is no second copy to keep in sync; a test replays
+  the planner's expression sample by sample and requires bit-identical quaternions.
+- The first rollout tick (elapsed = 0) carries exactly the hold quaternion: no orientation step at the hand-over
+  (with demo_native the step is ~92.7 deg). At and after at_end the orientation stays q_goal (in the hemisphere of
+  the SLERP start; same rotation).
+- Twist topic: angular velocity is the constant omega = R(q_start) * log(q_start^-1 q_goal) / tau (zero after
+  at_end), consistent with the SLERP; demo_native keeps qdmp_.omega().
+- Message checks (FATAL with the "hold target remains active..." sentence): quaternion finite, |q| = 1 +/- 1e-6,
+  |z_tcp . rotation_axis| < 1e-3 (z_tcp = third column of R(q)).
+- Logs: hold -> goal angle at acceptance; angle(TF, commanded) at acceptance (commanded = hold), at the trigger
+  (commanded = SLERP start: small when the planner started from the real configuration) and at at_end.
+
 ## Module map — grasp selection pipeline (as of 2026-09-29)
 
 **Dependency direction** (`package.xml`/`CMakeLists.txt`): `satellite_grasp_planner` depends

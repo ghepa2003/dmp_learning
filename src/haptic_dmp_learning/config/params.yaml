@@ -111,6 +111,13 @@ prodmp_gazebo_executor_node:
     # target, no watchdog afterwards) does not let the TCP drift while the node waits for the command and the trigger.
     # hold_target_enabled: true               # bool
     # hold_target_rate_hz: 10.0               # finite, in (0, 200]
+    # Rollout orientation, MANDATORY in grasp_command mode (no default; a missing or unknown value is a start-up error
+    # naming the parameter). Not declared in any other mode.
+    #   demo_native : the QuaternionDMP of the demonstration (the behaviour before this parameter existed).
+    #   planner_goal: SLERP from the hold quaternion (read once from TF) to GraspCommand.goal_pose.orientation with the
+    #                 planner's s(t) = min(1, elapsed/tau); constant angular velocity on the twist topic; the goal
+    #                 orientation is kept after at_end. Requires hold_target_enabled=true.
+    # grasp_orientation_mode: "planner_goal"  # or "demo_native"
     # NOTE: weights_yaml_path / orientation_weights_yaml_path are intentionally
     # NOT set here - they are run_id-dependent and passed via -p by the
     # orchestrator.

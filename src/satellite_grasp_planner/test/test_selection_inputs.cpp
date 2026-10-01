@@ -262,7 +262,9 @@ TEST_F(SelectionInputsTest, StartOverrideWinsOverDemoStartJoints) {
     const SelectionInputs b = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
                                                    Eigen::Vector3d::Zero(), st);
     for (const auto& l : b.provenance) {
-        if (l.rfind("q0 =", 0) == 0) EXPECT_EQ(l.find("IGNORATO"), std::string::npos) << l;
+        if (l.rfind("q0 =", 0) == 0) {
+            EXPECT_EQ(l.find("IGNORATO"), std::string::npos) << l;
+        }
     }
 }
 

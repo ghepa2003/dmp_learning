@@ -92,6 +92,7 @@ TEST_F(ExecutorNodeParams, DefaultSourceIsParametersAndDeclaresNothingElse) {
     EXPECT_EQ(node->get_parameter("grasp_goal_source").as_string(), "parameters");
     EXPECT_FALSE(node->has_parameter("robot_base_world"));
     EXPECT_FALSE(node->has_parameter("grasp_command_topic"));
+    EXPECT_FALSE(node->has_parameter("grasp_orientation_mode"));
 }
 
 TEST_F(ExecutorNodeParams, HoldParametersAreNotDeclaredOutsideGraspCommandMode) {
@@ -103,7 +104,8 @@ TEST_F(ExecutorNodeParams, HoldParametersAreNotDeclaredOutsideGraspCommandMode) 
 }
 
 TEST_F(ExecutorNodeParams, HoldParametersDefaultsInGraspCommandMode) {
-    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]"}));
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "grasp_orientation_mode:=demo_native"}));
     auto node = std::make_shared<ProDmpGazeboExecutorNode>();
     EXPECT_TRUE(node->get_parameter("hold_target_enabled").as_bool());
     EXPECT_DOUBLE_EQ(node->get_parameter("hold_target_rate_hz").as_double(), 10.0);
@@ -112,7 +114,8 @@ TEST_F(ExecutorNodeParams, HoldParametersDefaultsInGraspCommandMode) {
 
 TEST_F(ExecutorNodeParams, HoldCanBeDisabledAndRateOverridden) {
     init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
-                                "hold_target_enabled:=false", "hold_target_rate_hz:=20.0"}));
+                                "grasp_orientation_mode:=demo_native", "hold_target_enabled:=false",
+                                "hold_target_rate_hz:=20.0"}));
     auto node = std::make_shared<ProDmpGazeboExecutorNode>();
     EXPECT_FALSE(node->get_parameter("hold_target_enabled").as_bool());
     EXPECT_DOUBLE_EQ(node->get_parameter("hold_target_rate_hz").as_double(), 20.0);
@@ -143,7 +146,8 @@ TEST_F(ExecutorNodeParams, GraspCommandRequiresContinuousMode) {
 }
 
 TEST_F(ExecutorNodeParams, GraspCommandModeConstructsAndDeclaresItsParameters) {
-    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]"}));
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "grasp_orientation_mode:=demo_native"}));
     auto node = std::make_shared<ProDmpGazeboExecutorNode>();
     EXPECT_EQ(node->get_parameter("grasp_goal_source").as_string(), "grasp_command");
     EXPECT_EQ(node->get_parameter("grasp_command_topic").as_string(), "/grasp_command");
@@ -183,12 +187,70 @@ TEST_F(ExecutorNodeParams, RobotBaseWorldNonZeroThrows) {
 
 TEST_F(ExecutorNodeParams, InterceptPhaseParameterIsRejectedInGraspCommandMode) {
     init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
-                                "satellite_intercept_phase_deg:=90.0"}));
+                                "grasp_orientation_mode:=demo_native", "satellite_intercept_phase_deg:=90.0"}));
     EXPECT_THROW(ProDmpGazeboExecutorNode(), std::invalid_argument);
 }
 
 TEST_F(ExecutorNodeParams, ModelPhaseSourceIsRejectedInGraspCommandMode) {
     init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
-                                "satellite_phase_source:=model"}));
+                                "grasp_orientation_mode:=demo_native", "satellite_phase_source:=model"}));
     EXPECT_THROW(ProDmpGazeboExecutorNode(), std::invalid_argument);
+}
+
+// ---- grasp_orientation_mode (mandatory in grasp_command mode, no default) ----
+
+TEST_F(ExecutorNodeParams, MissingOrientationModeThrowsNamingTheParameter) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]"}));
+    try {
+        ProDmpGazeboExecutorNode n;
+        FAIL() << "expected std::invalid_argument";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("grasp_orientation_mode"), std::string::npos);
+    }
+}
+
+TEST_F(ExecutorNodeParams, UnknownOrientationModeThrowsNamingTheParameterAndValue) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "grasp_orientation_mode:=slerp"}));
+    try {
+        ProDmpGazeboExecutorNode n;
+        FAIL() << "expected std::invalid_argument";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("grasp_orientation_mode"), std::string::npos);
+        EXPECT_NE(std::string(e.what()).find("'slerp'"), std::string::npos);
+    }
+}
+
+TEST_F(ExecutorNodeParams, BothOrientationModesConstruct) {
+    for (const char* mode : {"planner_goal", "demo_native"}) {
+        if (rclcpp::ok()) rclcpp::shutdown();
+        init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                    std::string("grasp_orientation_mode:=") + mode}));
+        auto node = std::make_shared<ProDmpGazeboExecutorNode>();
+        EXPECT_EQ(node->get_parameter("grasp_orientation_mode").as_string(), mode);
+    }
+}
+
+TEST_F(ExecutorNodeParams, PlannerGoalRequiresTheHoldTarget) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "grasp_orientation_mode:=planner_goal", "hold_target_enabled:=false"}));
+    try {
+        ProDmpGazeboExecutorNode n;
+        FAIL() << "expected std::invalid_argument";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("hold_target_enabled"), std::string::npos);
+    }
+}
+
+TEST_F(ExecutorNodeParams, DemoNativeWorksWithoutTheHoldTarget) {
+    init(with(kContinuousBase, {"grasp_goal_source:=grasp_command", "robot_base_world:=[0.0,0.0,0.0]",
+                                "grasp_orientation_mode:=demo_native", "hold_target_enabled:=false"}));
+    EXPECT_NO_THROW(ProDmpGazeboExecutorNode());
+}
+
+TEST_F(ExecutorNodeParams, OrientationModeIsIgnoredOutsideGraspCommandMode) {
+    init({"target_odom_required:=false", "grasp_orientation_mode:=planner_goal"});
+    auto node = std::make_shared<ProDmpGazeboExecutorNode>();
+    EXPECT_FALSE(node->has_parameter("grasp_orientation_mode"));
+    EXPECT_EQ(node->get_parameter("grasp_goal_source").as_string(), "parameters");
 }

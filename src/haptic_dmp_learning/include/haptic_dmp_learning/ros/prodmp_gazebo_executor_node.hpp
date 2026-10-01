@@ -20,6 +20,7 @@
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include "haptic_dmp_learning/core/controller_param_sync.hpp"
+#include "haptic_dmp_learning/core/grasp_orientation.hpp"
 #include "haptic_dmp_learning/ros/hold_target.hpp"
 
 #include <memory>
@@ -124,6 +125,13 @@ private:
     void stopHold(const char* reason);
     /// Called when the rollout takes over: the hold is no longer the controller's last target.
     void supersedeHold();
+    /// Logs the angle between the orientation TF reports now and @p commanded (log only, never throws).
+    /// WARN above 1 deg. @p when names the moment (acceptance, trigger, at_end).
+    void logOrientationVsCommanded(const char* when, const Eigen::Quaterniond& commanded);
+    /// grasp_orientation_mode == "planner_goal" (grasp_command mode only).
+    bool orientationPlannerGoal() const {
+        return grasp_command_mode_ && orientation_mode_ == core::grasp_orientation::Mode::kPlannerGoal;
+    }
     /// message + the "hold target remains active in the controller (no watchdog)" sentence when it applies.
     std::string withHoldNote(const std::string& message) const {
         return hold_target::withHoldNote(message, holdRemainsInController());
@@ -334,6 +342,13 @@ private:
     double omega_consistency_tol_rad_s_ = 0.0;
     double grasp_command_phase_tol_rad_ = 0.0;
     std::string weights_sha256_;                        ///< sha256FileHex(weights_yaml_path_)
+    // Rollout orientation (grasp_command mode). Parameter grasp_orientation_mode, mandatory, no default.
+    core::grasp_orientation::Mode orientation_mode_ = core::grasp_orientation::Mode::kDemoNative;
+    Eigen::Quaterniond q_goal_cmd_ = Eigen::Quaterniond::Identity();    ///< message goal_pose.orientation (planner_goal)
+    Eigen::Quaterniond q_slerp_start_ = Eigen::Quaterniond::Identity(); ///< hold quaternion, set at the trigger
+    Eigen::Quaterniond q_slerp_goal_ = Eigen::Quaterniond::Identity();  ///< q_goal_cmd_ in the hemisphere of q_slerp_start_
+    Eigen::Vector3d omega_slerp_ = Eigen::Vector3d::Zero();             ///< constant angular velocity of the SLERP [rad/s]
+    double angle_hold_to_goal_deg_ = std::nan("");
     rclcpp::Subscription<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr grasp_command_sub_;
     satellite_grasp_msgs::msg::GraspCommand::SharedPtr pending_command_;  ///< received before kWaitingCommand
     bool command_seen_ = false;

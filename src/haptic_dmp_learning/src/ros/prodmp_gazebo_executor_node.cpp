@@ -811,12 +811,17 @@ void ProDmpGazeboExecutorNode::stepCallback() {
     if (!at_end) {
         // Step the ProDMP (position) and QuaternionDMP (orientation) forward by dt.
         Eigen::Vector3d pos = prodmp_.step(step_dt);
-        Eigen::Quaterniond quat = qdmp_.step(step_dt);
+        // grasp_orientation_mode=planner_goal: the planner's SLERP profile (constant angular velocity), not the
+        // QuaternionDMP; every other mode: qdmp_ exactly as before.
+        const bool slerp_orientation = orientationPlannerGoal();
+        Eigen::Quaterniond quat =
+            slerp_orientation ? core::grasp_orientation::slerpAt(q_slerp_start_, q_slerp_goal_, elapsed_, prodmp_.tau())
+                              : qdmp_.step(step_dt);
         // Analytic velocity state, already integrated inside step() above (see
         // core::ProDMP::velocity() / core::QuaternionDMP::omega()) - not a
         // finite-difference reconstruction.
         Eigen::Vector3d vel = prodmp_.velocity();
-        Eigen::Vector3d omega = qdmp_.omega();
+        Eigen::Vector3d omega = slerp_orientation ? omega_slerp_ : qdmp_.omega();
         if (!rollout_clock_) {
             // elapsed_ still starts at 0.0 and advances by step_dt each tick - only the
             // increment itself changes: 0.0 on the freebie first tick, dt_ every tick after.
@@ -846,7 +851,8 @@ void ProDmpGazeboExecutorNode::stepCallback() {
         msg.pose.position.x = goal.x();
         msg.pose.position.y = goal.y();
         msg.pose.position.z = goal.z();
-        Eigen::Quaterniond qgoal = qdmp_.goal();
+        // planner_goal: the message's goal orientation (sign as used by the SLERP, same rotation).
+        Eigen::Quaterniond qgoal = orientationPlannerGoal() ? q_slerp_goal_ : qdmp_.goal();
         msg.pose.orientation.w = qgoal.w();
         msg.pose.orientation.x = qgoal.x();
         msg.pose.orientation.y = qgoal.y();
@@ -985,6 +991,14 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
         }
         if (rbw->size() != 3) throw std::invalid_argument("parameter 'robot_base_world' must have exactly 3 elements");
         si::checkRobotBaseWorldIsZero(Eigen::Vector3d((*rbw)[0], (*rbw)[1], (*rbw)[2]), robot_base_tol_m);
+        // Rollout orientation: MANDATORY, no default. "demo_native" = the QuaternionDMP of the demonstration (previous
+        // behaviour, unchanged); "planner_goal" = SLERP hold quaternion -> GraspCommand goal_pose.orientation.
+        orientation_mode_ = core::grasp_orientation::parseMode(opt_string("grasp_orientation_mode"));
+        if (orientation_mode_ == core::grasp_orientation::Mode::kPlannerGoal && !hold_enabled_) {
+            throw std::invalid_argument(
+                "parameter 'grasp_orientation_mode'='planner_goal' requires 'hold_target_enabled'=true (the SLERP starts "
+                "from the quaternion of the hold target)");
+        }
         // Hash of the file the ProDMP was loaded from, compared with the message's weights_sha256.
         weights_sha256_ = core::demo_params::sha256FileHex(weights_yaml_path_);
     }
@@ -1018,13 +1032,14 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
         const bool dt_differs = std::fabs(dt_ - si::kPlannerRolloutDtS) > 1e-12;
         RCLCPP_INFO(this->get_logger(),
                     "grasp_goal_source=grasp_command: topic '%s' (reliable, transient_local, depth 1), timeout %.1f s, "
-                    "max_age %s, omega tol %.4f rad/s, phase tol %.3f deg, weights sha256 %s, hold target %s (%.1f Hz).\n"
+                    "max_age %s, omega tol %.4f rad/s, phase tol %.3f deg, weights sha256 %s, hold target %s (%.1f Hz), "
+                    "grasp_orientation_mode=%s.\n"
                     "  center=[%.4f, %.4f, %.4f] axis=[%.6f, %.6f, %.6f] omega(param)=%.6f rad/s  tau=%.5f s  "
                     "dt_=%.6f s (planner rollout dt %.6f s)",
                     grasp_command_topic_.c_str(), grasp_command_timeout_s_,
                     grasp_command_max_age_s_ > 0.0 ? (std::to_string(grasp_command_max_age_s_) + " s").c_str() : "off",
                     omega_consistency_tol_rad_s_, core::radToDeg(grasp_command_phase_tol_rad_), weights_sha256_.c_str(),
-                    hold_enabled_ ? "on" : "off", hold_rate_hz_,
+                    hold_enabled_ ? "on" : "off", hold_rate_hz_, core::grasp_orientation::modeName(orientation_mode_),
                     c.center.x(), c.center.y(), c.center.z(), c.axis_unit.x(), c.axis_unit.y(), c.axis_unit.z(),
                     c.omega_rad_s, c.tau, dt_, si::kPlannerRolloutDtS);
         if (dt_differs) {
@@ -1228,6 +1243,7 @@ void ProDmpGazeboExecutorNode::acceptGraspCommand(const satellite_grasp_msgs::ms
     namespace si = core::satellite_intercept;
     auto& c = *cc_;
     si::GraspCommandPlan plan;
+    Eigen::Quaterniond q_goal_msg = Eigen::Quaterniond::Identity();
     try {
         si::GraspCommandCheckParams p;
         p.now_s = this->now().seconds();
@@ -1239,6 +1255,17 @@ void ProDmpGazeboExecutorNode::acceptGraspCommand(const satellite_grasp_msgs::ms
         p.max_age_s = grasp_command_max_age_s_;
         plan = si::validateGraspCommand(toGraspCommandInputs(msg), p);
         si::checkStartPositionMatches(ee_plan_, plan.start_position);
+        if (orientationPlannerGoal()) {
+            // Finite, |q| = 1 +/- 1e-6, approach axis orthogonal to the satellite rotation axis. psi is already in
+            // the message's orientation: it is used as is.
+            const auto& o = msg.goal_pose.orientation;
+            q_goal_msg = Eigen::Quaterniond(o.w, o.x, o.y, o.z);
+            core::grasp_orientation::checkGoalOrientation(q_goal_msg, c.axis_unit);
+            if (!hold_pose_) {
+                throw std::runtime_error(
+                    "grasp_orientation_mode='planner_goal': no hold quaternion available (the hold target did not start)");
+            }
+        }
     } catch (const std::exception& e) {
         RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(e.what()).c_str());
         stopHold("GraspCommand rejected");
@@ -1276,6 +1303,45 @@ void ProDmpGazeboExecutorNode::acceptGraspCommand(const satellite_grasp_msgs::ms
                 core::radToDeg(plan.theta_star_rad), plan.omega_rad_s, plan.contact_time_s, prodmp_.tau(),
                 weights_sha256_.c_str(), core::radToDeg(plan.theta_trig_rad), c.trigger_timeout_s, dt_,
                 core::radToDeg(plan.omega_rad_s * dt_));
+
+    if (orientationPlannerGoal()) {
+        q_goal_cmd_ = q_goal_msg;
+        const Eigen::Quaterniond& qh = hold_pose_->orientation;
+        angle_hold_to_goal_deg_ = core::radToDeg(core::grasp_orientation::quatAngleRad(qh, q_goal_cmd_));
+        RCLCPP_INFO(this->get_logger(),
+                    "orientation (planner_goal): angle(hold -> goal_pose.orientation) = %.3f deg (SLERP over tau = %.4f s)\n"
+                    "  hold (x,y,z,w) = [%.6f, %.6f, %.6f, %.6f]   goal (x,y,z,w) = [%.6f, %.6f, %.6f, %.6f]",
+                    angle_hold_to_goal_deg_, prodmp_.tau(), qh.x(), qh.y(), qh.z(), qh.w(), q_goal_cmd_.x(),
+                    q_goal_cmd_.y(), q_goal_cmd_.z(), q_goal_cmd_.w());
+        logOrientationVsCommanded("acceptance (commanded = hold)", qh);
+    }
+}
+
+void ProDmpGazeboExecutorNode::logOrientationVsCommanded(const char* when, const Eigen::Quaterniond& commanded) {
+    constexpr double kWarnDeg = 1.0;
+    Eigen::Vector3d p;
+    Eigen::Quaterniond q;
+    if (!lookupEePoseNonBlocking(p, q)) {
+        RCLCPP_WARN(this->get_logger(), "orientation @ %s: TF %s -> %s unavailable, angle TF vs commanded not logged.",
+                    when, world_frame_.c_str(), ee_frame_.c_str());
+        return;
+    }
+    double deg = std::nan("");
+    try {
+        deg = core::radToDeg(core::grasp_orientation::quatAngleRad(q, commanded));
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(this->get_logger(), "orientation @ %s: angle TF vs commanded not computable: %s", when, e.what());
+        return;
+    }
+    if (deg > kWarnDeg) {
+        RCLCPP_WARN(this->get_logger(),
+                    "orientation @ %s: angle(TF, commanded) = %.3f deg (> %.1f deg)  TF (x,y,z,w) = [%.6f, %.6f, %.6f, %.6f]  "
+                    "commanded = [%.6f, %.6f, %.6f, %.6f]",
+                    when, deg, kWarnDeg, q.x(), q.y(), q.z(), q.w(), commanded.x(), commanded.y(), commanded.z(),
+                    commanded.w());
+    } else {
+        RCLCPP_INFO(this->get_logger(), "orientation @ %s: angle(TF, commanded) = %.3f deg", when, deg);
+    }
 }
 
 void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -1411,7 +1477,30 @@ void ProDmpGazeboExecutorNode::startContinuousRollout(double theta_at_trigger_ra
     prodmp_.setInitialConditions(/*init_time=*/0.0, ee_start_, Eigen::Vector3d::Zero());
     prodmp_.setGoal(p_goal_);
     qdmp_.reset();  // orientation: demo-native, not rotated (as in frozen)
-    if (hold_pose_) {
+    if (orientationPlannerGoal()) {
+        if (!hold_pose_) {
+            const std::string m = "continuous: grasp_orientation_mode='planner_goal' but no hold quaternion is available "
+                                  "at the trigger; no motion started";
+            RCLCPP_FATAL(this->get_logger(), "%s", withHoldNote(m).c_str());
+            stopHold("no hold quaternion at the trigger");
+            throw std::runtime_error(m);
+        }
+        // SLERP start = the hold quaternion (the last orientation the controller received, read from TF once).
+        // s(t) = min(1, elapsed / tau) as in the planner's feasibility rollout; the first tick (elapsed = 0)
+        // therefore carries exactly the hold quaternion: no orientation step at the hand-over.
+        q_slerp_start_ = hold_pose_->orientation;
+        q_slerp_goal_ = core::grasp_orientation::alignShortestPath(q_slerp_start_, q_goal_cmd_);
+        omega_slerp_ = core::grasp_orientation::slerpAngularVelocityWorld(q_slerp_start_, q_slerp_goal_, prodmp_.tau());
+        RCLCPP_INFO(this->get_logger(),
+                    "orientation (planner_goal) SLERP: start = hold (x,y,z,w) [%.6f, %.6f, %.6f, %.6f] -> goal (aligned) "
+                    "[%.6f, %.6f, %.6f, %.6f], angle %.3f deg over tau %.4f s, |omega| = %.5f rad/s "
+                    "(omega_world [%.5f, %.5f, %.5f])",
+                    q_slerp_start_.x(), q_slerp_start_.y(), q_slerp_start_.z(), q_slerp_start_.w(), q_slerp_goal_.x(),
+                    q_slerp_goal_.y(), q_slerp_goal_.z(), q_slerp_goal_.w(), angle_hold_to_goal_deg_, prodmp_.tau(),
+                    omega_slerp_.norm(), omega_slerp_.x(), omega_slerp_.y(), omega_slerp_.z());
+        // Should be small: with the planner's start configuration (B-lite) FK(q0) and the hold pose coincide.
+        logOrientationVsCommanded("trigger / rollout start (commanded = SLERP start)", q_slerp_start_);
+    } else if (hold_pose_) {
         // LOG ONLY, no action: the first rollout message carries qdmp_'s q0 unchanged (skip_initial_alignment=true
         // means no orientation offset in the controller), so this is the orientation step the controller sees
         // between the last hold message and the first rollout message.
@@ -1496,6 +1585,9 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
                     "does not tick at dt_ in sim time; elapsed is MEASURED on the clock, so the rollout duration is unaffected.",
                     mean_p, 100.0 * std::fabs(mean_p - dt_) / dt_, dt_);
     }
+    if (orientationPlannerGoal()) {
+        logOrientationVsCommanded("at_end (commanded = goal)", q_slerp_goal_);
+    }
     cstate_ = ContinuousState::kFinished;
 }
 
@@ -1558,7 +1650,11 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
 
     const double theta_now = have_phase_ ? theta_sat_ : nan;
     kv("state", state_name);
-    if (grasp_command_mode_) kv("goal_source", "grasp_command");
+    if (grasp_command_mode_) {
+        kv("goal_source", "grasp_command");
+        kv("orientation_mode", core::grasp_orientation::modeName(orientation_mode_));
+        if (orientationPlannerGoal()) kvd("orientation_hold_to_goal_deg", angle_hold_to_goal_deg_);
+    }
     kvd("theta_sat_deg", core::radToDeg(theta_now));
     // trigger_ does not exist yet in grasp_command mode while waiting for the message.
     kvd("theta_trig_deg", trigger_ ? core::radToDeg(trigger_->thetaTrigRad()) : nan);

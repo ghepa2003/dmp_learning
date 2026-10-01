@@ -274,6 +274,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_hold_target ${PROJECT_NAME}_core)
   ament_target_dependencies(test_hold_target rclcpp geometry_msgs)
 
+  # grasp_orientation_mode: mode parsing, goal quaternion checks, SLERP profile (header-only, no ROS).
+  ament_add_gtest(test_grasp_orientation test/test_grasp_orientation.cpp)
+  target_link_libraries(test_grasp_orientation ${PROJECT_NAME}_core)
+
   # Pure geometry of the cube satellite model (no ROS).
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)
