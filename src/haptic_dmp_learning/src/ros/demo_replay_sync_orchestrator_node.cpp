@@ -91,6 +91,7 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     tsy_ = this->declare_parameter<double>("target_size_y", 0.045);
     tsz_ = this->declare_parameter<double>("target_size_z", 0.045);
     tmass_ = this->declare_parameter<double>("target_mass", 5.0);
+    target_yaw_ = this->declare_parameter<double>("target_yaw", 0.0);
     target_with_collar_ = this->declare_parameter<bool>("target_with_collar", false);
     target_collar_collision_ = this->declare_parameter<bool>("target_collar_collision", true);
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
@@ -325,7 +326,8 @@ void DemoReplaySyncOrchestratorNode::tick() {
                 numArg("size_x", tsx_), numArg("size_y", tsy_), numArg("size_z", tsz_),
                 numArg("mass", tmass_),
                 std::string("with_collar:=") + (target_with_collar_ ? "true" : "false"),
-                std::string("collar_collision:=") + (target_collar_collision_ ? "true" : "false")};
+                std::string("collar_collision:=") + (target_collar_collision_ ? "true" : "false"),
+                numArg("yaw", target_yaw_)};
             launchChild(argv, "free_target_object");
             odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
                 "/" + target_name_ + "/odometry", rclcpp::QoS(10),
