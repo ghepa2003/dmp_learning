@@ -90,6 +90,18 @@
           <cmd_min>-100</cmd_min>
         </plugin>
       </gazebo>
+      <!-- second finger: the URDF mimic does not reach the SDF, so finger 2 needs its own controller -->
+      <gazebo>
+        <plugin filename="ignition-gazebo-joint-position-controller-system" name="ignition::gazebo::systems::JointPositionController">
+          <joint_name>${arm_id}_finger_joint2</joint_name>
+          <topic>gripper_position_cmd</topic>
+          <p_gain>300</p_gain>
+          <i_gain>0</i_gain>
+          <d_gain>60.0</d_gain>
+          <cmd_max>100</cmd_max>
+          <cmd_min>-100</cmd_min>
+        </plugin>
+      </gazebo>
     </xacro:if>
 
   </xacro:macro>
