@@ -102,6 +102,8 @@ private:
     std::string target_name_;
     double tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_;
     double tsx_, tsy_, tsz_, tmass_;  // free_target_object box size + mass
+    bool target_with_collar_;         // forwarded to free_target_object (with_collar)
+    bool target_collar_collision_;    // forwarded to free_target_object (collar_collision)
     std::string buttons_topic_;
     std::string buttons_synced_topic_;
     bool use_csv_playback_;

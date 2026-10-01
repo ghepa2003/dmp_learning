@@ -259,6 +259,7 @@ target_name (free_target_object)
 target_x (0.6)  target_y (0.0)  target_z (0.5)
 target_vx/vy/vz (0.0)   target_wx/wy/wz (0.0)
 target_size_x/y/z (0.045)   target_mass (5.0)
+target_with_collar (false)   target_collar_collision (true)
 buttons_topic (/touch0/buttons)   buttons_synced_topic (/touch0/buttons_synced)
 use_csv_playback (true)
 ```
