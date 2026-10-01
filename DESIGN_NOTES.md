@@ -20,8 +20,11 @@ start-up `std::invalid_argument` naming the parameter; not declared in the other
 - The first rollout tick (elapsed = 0) carries exactly the hold quaternion: no orientation step at the hand-over
   (with demo_native the step is ~92.7 deg). At and after at_end the orientation stays q_goal (in the hemisphere of
   the SLERP start; same rotation).
-- Twist topic: angular velocity is the constant omega = R(q_start) * log(q_start^-1 q_goal) / tau (zero after
-  at_end), consistent with the SLERP; demo_native keeps qdmp_.omega().
+- Twist topic: angular velocity is the constant omega = R(q_start) * phi / tau, in the world frame, where phi is the
+  rotation vector (angle * axis, Log map of SO(3); not the quaternion log, which is half the angle) of
+  q_start^-1 q_goal on the shortest path; zero after at_end. Consistent with the SLERP. demo_native keeps
+  qdmp_.omega() (also world frame). planner_goal exists only in continuous mode (grasp_command requires it), so the
+  frozen-mode one-tick lag between the ProDMP and the orientation does not apply.
 - Message checks (FATAL with the "hold target remains active..." sentence): quaternion finite, |q| = 1 +/- 1e-6,
   |z_tcp . rotation_axis| < 1e-3 (z_tcp = third column of R(q)).
 - Logs: hold -> goal angle at acceptance; angle(TF, commanded) at acceptance (commanded = hold), at the trigger
