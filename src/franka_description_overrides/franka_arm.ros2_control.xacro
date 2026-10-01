@@ -45,13 +45,21 @@
         </joint>
       </xacro:macro>
 
-      <xacro:configure_joint joint_name="${arm_id}_joint1" initial_position="0.0"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint2" initial_position="${-pi/4}"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint3" initial_position="0.0"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint4" initial_position="${-3*pi/4}"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint5" initial_position="0.0"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint6" initial_position="${pi/2}"/>
-      <xacro:configure_joint joint_name="${arm_id}_joint7" initial_position="${pi/4}"/>
+      <!-- initial pose, selected with the FRANKA_START_POSE env var (default: ready) -->
+      <xacro:property name="start_pose" value="$(optenv FRANKA_START_POSE ready)"/>
+      <xacro:property name="start_poses" value="${dict(
+          ready=[0.0, -pi/4, 0.0, -3*pi/4, 0.0, pi/2, pi/4],
+          capture=[0.896498512761, 0.791459807260, -0.053859353227, -1.258118193175, -1.334405725411, 1.215534447462, 1.297872758350])}"/>
+      <!-- unknown value: the failing KeyError carries the message (xacro has no plain "error" tag) -->
+      <xacro:property name="start_q" value="${start_poses.get(start_pose) or start_poses['ERROR: FRANKA_START_POSE must be one of ready, capture (got ' + start_pose + ')']}"/>
+
+      <xacro:configure_joint joint_name="${arm_id}_joint1" initial_position="${start_q[0]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint2" initial_position="${start_q[1]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint3" initial_position="${start_q[2]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint4" initial_position="${start_q[3]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint5" initial_position="${start_q[4]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint6" initial_position="${start_q[5]}"/>
+      <xacro:configure_joint joint_name="${arm_id}_joint7" initial_position="${start_q[6]}"/>
     <xacro:if value="${gazebo and hand}">
       <joint name="${arm_id}_finger_joint1">
         <command_interface name="position"/>

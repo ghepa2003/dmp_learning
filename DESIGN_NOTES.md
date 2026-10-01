@@ -4,6 +4,27 @@ Short technical notes on design decisions / non-issues that came up during
 investigation but did not warrant (or did not need) a code change. These
 supplement, and do not replace, any existing documentation.
 
+## 2026-10-01 — Initial arm pose: `FRANKA_START_POSE` ("ready" | "capture")
+
+`src/franka_description_overrides/franka_arm.ros2_control.xacro` takes the
+`initial_value` of the seven arm joints from the env var `FRANKA_START_POSE`
+(read when the xacro is expanded, so it must be set in the shell that launches
+the bringup).
+
+- `ready` (default, also when unset): the usual Franka ready pose
+  `[0, -pi/4, 0, -3pi/4, 0, pi/2, pi/4]`; the expanded xacro is the same as before.
+- `capture`: q = `[0.896498512761, 0.791459807260, -0.053859353227,
+  -1.258118193175, -1.334405725411, 1.215534447462, 1.297872758350]`. TCP at
+  (0.589, 0.344, 0.35) m, nominal orientation, fingers vertical.
+- Any other value makes the xacro fail with a message naming `FRANKA_START_POSE`
+  and the allowed values.
+
+Usage: `FRANKA_START_POSE=capture ros2 launch ...`.
+
+When the pose changes, the following depend on it and must be redone: the
+planner start (`start_joints_override_rad`, from the measured joints, not the
+old ready values), the demonstrations, and the weights learned from them.
+
 ## 2026-09-30 — grasp_orientation_mode (executor, orientation v2)
 
 `prodmp_gazebo_executor_node` with `grasp_goal_source=grasp_command` has a MANDATORY parameter
