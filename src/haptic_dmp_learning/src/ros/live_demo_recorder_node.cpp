@@ -61,6 +61,32 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
         "output_joint_states_csv_path",
         core::joint_states_csv_io::deriveJointStatesCsvPath(output_demo_csv_path_));
 
+    // 2b. Optional anchored /target_pose. An empty array means "not provided". Wrong length or a
+    // non-unit quaternion is a start-up error naming the parameter; so is enabling the anchor
+    // with either array missing.
+    anchor_enabled_ = this->declare_parameter<bool>("anchor_enabled", false);
+    const auto anchor_p_param = this->declare_parameter<std::vector<double>>(
+        "anchor_position_m", std::vector<double>{});
+    const auto anchor_q_param = this->declare_parameter<std::vector<double>>(
+        "anchor_orientation_xyzw", std::vector<double>{});
+    if (!anchor_p_param.empty()) {
+        anchor_position_ = core::anchored_target::parseAnchorPosition(anchor_p_param, "anchor_position_m");
+    }
+    if (!anchor_q_param.empty()) {
+        anchor_orientation_ = core::anchored_target::parseAnchorOrientation(
+            anchor_q_param, "anchor_orientation_xyzw");
+    }
+    if (anchor_enabled_) {
+        if (anchor_p_param.empty()) {
+            throw std::runtime_error("live_demo_recorder_node: anchor_enabled=true but "
+                                     "anchor_position_m was not provided");
+        }
+        if (anchor_q_param.empty()) {
+            throw std::runtime_error("live_demo_recorder_node: anchor_enabled=true but "
+                                     "anchor_orientation_xyzw was not provided");
+        }
+    }
+
     // 3. Locate feature flags configuration YAML (absolute default;
     // dmp_io::applyFeatureConfig has its own fallback chain and will refuse
     // to continue rather than silently reverting to unfiltered LWR)
@@ -129,13 +155,23 @@ void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStam
     // base frame name used across the project (FrameAligner / franka URDF).
     geometry_msgs::msg::PoseStamped corrected = *msg;
     corrected.header.frame_id = "fer_link0";
-    corrected.pose.position.x = position.x();
-    corrected.pose.position.y = position.y();
-    corrected.pose.position.z = position.z();
-    corrected.pose.orientation.w = orient.w();
-    corrected.pose.orientation.x = orient.x();
-    corrected.pose.orientation.y = orient.y();
-    corrected.pose.orientation.z = orient.z();
+    // With anchor_enabled the published pose is the master motion relative to its first sample,
+    // applied on the anchor; the CSV buffer below still gets the corrected master pose.
+    Eigen::Vector3d pub_position = position;
+    Eigen::Quaterniond pub_orient = orient;
+    if (anchor_enabled_) {
+        const auto anchored = core::anchored_target::computeAnchoredTarget(
+            anchor_state_, anchor_position_, anchor_orientation_, position, orient);
+        pub_position = anchored.position;
+        pub_orient = anchored.orientation;
+    }
+    corrected.pose.position.x = pub_position.x();
+    corrected.pose.position.y = pub_position.y();
+    corrected.pose.position.z = pub_position.z();
+    corrected.pose.orientation.w = pub_orient.w();
+    corrected.pose.orientation.x = pub_orient.x();
+    corrected.pose.orientation.y = pub_orient.y();
+    corrected.pose.orientation.z = pub_orient.z();
     target_pose_pub_->publish(corrected);
 
     // Sample time base. Prefer msg->header.stamp: it carries the publisher's
@@ -265,6 +301,7 @@ void LiveDemoRecorderNode::startRecording() {
     has_last_orientation_ = false;
     quat_negate_parity_ = false;
     quat_sign_flips_corrected_ = 0;
+    anchor_state_ = core::anchored_target::State();
     record_start_time_ = this->now();
     RCLCPP_INFO(this->get_logger(), "Recording started.");
 }

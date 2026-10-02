@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
+#include "haptic_dmp_learning/core/anchored_target.hpp"
 #include "haptic_dmp_learning/core/demonstration_recorder.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include "haptic_dmp_learning/core/joint_states_csv_io.hpp"
@@ -73,6 +74,12 @@ private:
     Eigen::Quaterniond last_corrected_orientation_ = Eigen::Quaterniond::Identity();
     bool quat_negate_parity_ = false;
     std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
+
+    // Anchored /target_pose (see core/anchored_target.hpp); off by default
+    bool anchor_enabled_ = false;
+    Eigen::Vector3d anchor_position_ = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond anchor_orientation_ = Eigen::Quaterniond::Identity();
+    core::anchored_target::State anchor_state_;
 
     // Parameters
     std::string master_pose_topic_;

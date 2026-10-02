@@ -441,3 +441,18 @@ publication).
   finite, in (0, 200]). `continuous_status` gains `hold_active`, `hold_published`, `hold_pos_*`.
 - Does NOT fix the `start_position` check by itself: the planner's `start_position` is FK(q0) with q0 = readyPose, while
   the resting TCP is ~7 mm from readyPose. See the planner's `start_joints_override_rad`.
+
+## Anchored `/target_pose` in `live_demo_recorder_node` (`anchor_enabled`)
+
+Optional, off by default. With `anchor_enabled=true` the recorder no longer mirrors the absolute master pose: at the
+first sample after `startRecording()` it stores the R_z-corrected master pose `(p_corr0, q_corr0)`, and every sample is
+published on `/target_pose` as `p_pub = anchor_p + (p_corr - p_corr0)` and
+`q_pub = normalize(anchor_q ⊗ (q_corr0⁻¹ ⊗ q_corr))` (sign chosen so `q_pub · q_pub_prev >= 0`). The first message is
+exactly the anchor. The CSV buffer and the DMP weights keep receiving the corrected master pose, NOT the anchored one.
+Parameters: `anchor_enabled`, `anchor_position_m` (3), `anchor_orientation_xyzw` (4, |q| = 1 ± 1e-6); a wrong length,
+a non-unit quaternion, or `anchor_enabled=true` with either array missing is a start-up error naming the parameter.
+Pure math: `core/anchored_target.hpp`, tested in `test/test_anchored_target.cpp`.
+
+**Requires `skip_initial_alignment=true` in the controller.** The anchored stream already starts at the anchor; if the
+controller's `FrameAligner` also runs its initial alignment it adds a second offset (current TCP vs. first target) on top
+of the one built in here, and the TCP ends up displaced by that extra offset.

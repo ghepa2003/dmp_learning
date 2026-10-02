@@ -254,6 +254,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_frame_correction test/test_frame_correction.cpp)
   target_link_libraries(test_frame_correction ${PROJECT_NAME}_core)
 
+  # Anchored /target_pose of the live recorder (pure Eigen math, no ROS).
+  ament_add_gtest(test_anchored_target test/test_anchored_target.cpp)
+  target_link_libraries(test_anchored_target ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_gripper_ramp test/test_gripper_ramp.cpp)
   target_link_libraries(test_gripper_ramp ${PROJECT_NAME}_core)
 
