@@ -262,7 +262,27 @@ target_size_x/y/z (0.045)   target_mass (5.0)   target_yaw (0.0, rad)
 target_with_collar (false)   target_collar_collision (true)
 buttons_topic (/touch0/buttons)   buttons_synced_topic (/touch0/buttons_synced)
 use_csv_playback (true)
+anchor_enabled (false)   anchor_position_m ([])   anchor_orientation_xyzw ([])
 ```
+
+**Ancoraggio di `/target_pose` (opzionale, solo `mode:=demo`).** Con `anchor_enabled:=true` il
+recorder pubblica il moto del master relativo al suo primo campione, applicato sulla posa di
+ancoraggio (il CSV/DMP restano sulla posa corretta del master). Richiede
+`skip_initial_alignment=true` nel controllore (vedi `DESIGN_NOTES.md`). Con `true` i due array
+sono obbligatori: lunghezza 3 (`x,y,z` in m) e 4 (`x,y,z,w`, |q| = 1 ± 1e-6), altrimenti
+errore all'avvio dell'orchestratore.
+
+```bash
+ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args \
+  --params-file /root/thesis_ws/src/haptic_dmp_learning/config/params.yaml \
+  -p mode:=demo -p anchor_enabled:=true \
+  -p anchor_position_m:="[0.589, 0.344, 0.35]" \
+  -p anchor_orientation_xyzw:="[0.6903455270798549, 0.15304591873303097, 0.15304591873303086, 0.6903455270798549]"
+```
+
+I numeri nella riga di comando vanno scritti con il punto decimale (`1.0`, non `1`: un array di
+soli interi sarebbe `integer_array`). L'orchestratore li inoltra al launch come lista separata da
+virgole con 17 cifre significative. `anchor_enabled:=false` (default): argv del launch invariato.
 
 ### 3.3 Replay orchestrato (stesso `run_id`)
 

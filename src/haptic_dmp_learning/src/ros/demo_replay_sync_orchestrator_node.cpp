@@ -1,6 +1,7 @@
 #include "haptic_dmp_learning/ros/demo_replay_sync_orchestrator_node.hpp"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include "haptic_dmp_learning/core/anchored_target.hpp"
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
 
 #include <sys/types.h>
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <cstdio>
 #include <stdexcept>
 
 namespace haptic_dmp_learning {
@@ -30,6 +32,18 @@ constexpr double kStartEdgeGapSec = 0.2;
 
 std::string numArg(const std::string& key, double v) {
     return key + ":=" + std::to_string(v);
+}
+// "%.17g" round-trips a double; std::to_string (6 decimals) would break the unit-norm check of
+// the anchor quaternion in the recorder.
+std::string listArg(const std::string& key, const std::vector<double>& v) {
+    std::string out = key + ":=";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%.17g", v[i]);
+        out += (i ? "," : "");
+        out += buf;
+    }
+    return out;
 }
 double secElapsed(std::chrono::steady_clock::time_point since) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
@@ -98,6 +112,26 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     buttons_synced_topic_ = this->declare_parameter<std::string>(
         "buttons_synced_topic", "/touch0/buttons_synced");
     use_csv_playback_ = this->declare_parameter<bool>("use_csv_playback", true);
+    // Anchored recorder /target_pose (default off). Same checks as the recorder, so a bad value
+    // fails here at start-up instead of inside the child launch.
+    anchor_enabled_ = this->declare_parameter<bool>("anchor_enabled", false);
+    anchor_position_m_ = this->declare_parameter<std::vector<double>>(
+        "anchor_position_m", std::vector<double>{});
+    anchor_orientation_xyzw_ = this->declare_parameter<std::vector<double>>(
+        "anchor_orientation_xyzw", std::vector<double>{});
+    if (anchor_enabled_) {
+        if (anchor_position_m_.empty()) {
+            throw std::runtime_error("demo_replay_sync_orchestrator: anchor_enabled=true but "
+                                     "anchor_position_m was not provided");
+        }
+        if (anchor_orientation_xyzw_.empty()) {
+            throw std::runtime_error("demo_replay_sync_orchestrator: anchor_enabled=true but "
+                                     "anchor_orientation_xyzw was not provided");
+        }
+        core::anchored_target::parseAnchorPosition(anchor_position_m_, "anchor_position_m");
+        core::anchored_target::parseAnchorOrientation(anchor_orientation_xyzw_,
+                                                      "anchor_orientation_xyzw");
+    }
     // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
     // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
     gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
@@ -300,6 +334,11 @@ void DemoReplaySyncOrchestratorNode::tick() {
                 "ros2", "launch", "haptic_dmp_learning", "demo_replay_sync.launch.py",
                 "run_id:=" + run_id_,
                 std::string("use_csv_playback:=") + (use_csv_playback_ ? "true" : "false")};
+            if (anchor_enabled_) {  // anchor_enabled=false: argv identical to before
+                argv.push_back("anchor_enabled:=true");
+                argv.push_back(listArg("anchor_position_m", anchor_position_m_));
+                argv.push_back(listArg("anchor_orientation_xyzw", anchor_orientation_xyzw_));
+            }
             launchChild(argv, "recording_launch");
             buttons_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
                 buttons_topic_, rclcpp::QoS(10),

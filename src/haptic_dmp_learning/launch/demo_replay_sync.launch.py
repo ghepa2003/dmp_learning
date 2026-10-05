@@ -15,6 +15,7 @@
 # Does NOT bring up Gazebo or the Franka controller stack (impedance) - those
 # run in the franka container and are assumed already active.
 
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -24,6 +25,25 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _parse_anchor(context, key, length):
+    """Comma-separated list of `length` finite floats from launch argument `key`."""
+    raw = LaunchConfiguration(key).perform(context).strip()
+    if not raw:
+        raise RuntimeError(
+            "demo_replay_sync.launch.py: anchor_enabled=true but '{}' is empty".format(key))
+    try:
+        values = [float(x) for x in raw.split(',')]
+    except ValueError:
+        raise RuntimeError(
+            "demo_replay_sync.launch.py: '{}' must be {} comma-separated numbers, got '{}'"
+            .format(key, length, raw))
+    if len(values) != length or not all(math.isfinite(v) for v in values):
+        raise RuntimeError(
+            "demo_replay_sync.launch.py: '{}' must be {} finite comma-separated numbers, got '{}'"
+            .format(key, length, raw))
+    return values
 
 
 def _nodes(context, *_args, **_kwargs):
@@ -41,6 +61,24 @@ def _nodes(context, *_args, **_kwargs):
     demo_csv = os.path.join(ws_root, 'demo_raw_{}.csv'.format(run_id))
     weights_yaml = os.path.join(ws_root, 'dmp_weights_{}.yaml'.format(run_id))
 
+    # anchor_enabled is ALWAYS passed to the recorder (true or false) so an enabled
+    # anchor_enabled key left in params.yaml cannot silently override the launch argument.
+    anchor_enabled_raw = LaunchConfiguration('anchor_enabled').perform(context).strip().lower()
+    if anchor_enabled_raw not in ('true', 'false'):
+        raise RuntimeError(
+            "demo_replay_sync.launch.py: 'anchor_enabled' must be 'true' or 'false', got '{}'"
+            .format(anchor_enabled_raw))
+    anchor_params = {'anchor_enabled': anchor_enabled_raw == 'true'}
+    if anchor_params['anchor_enabled']:
+        anchor_p = _parse_anchor(context, 'anchor_position_m', 3)
+        anchor_q = _parse_anchor(context, 'anchor_orientation_xyzw', 4)
+        if abs(math.sqrt(sum(v * v for v in anchor_q)) - 1.0) > 1e-6:
+            raise RuntimeError(
+                "demo_replay_sync.launch.py: 'anchor_orientation_xyzw' must be a unit "
+                "quaternion (|q| = 1 +- 1e-6)")
+        anchor_params['anchor_position_m'] = anchor_p
+        anchor_params['anchor_orientation_xyzw'] = anchor_q
+
     live_demo_recorder_node = Node(
         package='haptic_dmp_learning',
         executable='live_demo_recorder_node',
@@ -53,6 +91,7 @@ def _nodes(context, *_args, **_kwargs):
             'use_sim_time': True,
             'output_demo_csv_path': demo_csv,
             'output_yaml_path': weights_yaml,
+            **anchor_params,
         }],
         remappings=[('/touch0/buttons', '/touch0/buttons_synced')],
     )
@@ -85,5 +124,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file', default_value=default_params_file,
             description='YAML file with ros__parameters for both nodes.'),
+        DeclareLaunchArgument(
+            'anchor_enabled', default_value='false',
+            description="'true' anchors the recorder's /target_pose (see DESIGN_NOTES.md).",
+        ),
+        DeclareLaunchArgument(
+            'anchor_position_m', default_value='',
+            description='Anchor position "x,y,z" [m]; required when anchor_enabled=true.'),
+        DeclareLaunchArgument(
+            'anchor_orientation_xyzw', default_value='',
+            description='Anchor unit quaternion "x,y,z,w"; required when anchor_enabled=true.'),
         OpaqueFunction(function=_nodes),
     ])

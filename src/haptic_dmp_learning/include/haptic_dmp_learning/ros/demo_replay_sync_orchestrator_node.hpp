@@ -108,6 +108,10 @@ private:
     std::string buttons_topic_;
     std::string buttons_synced_topic_;
     bool use_csv_playback_;
+    // Anchored /target_pose of the recorder (demo mode); forwarded to demo_replay_sync.launch.py.
+    bool anchor_enabled_ = false;
+    std::vector<double> anchor_position_m_;
+    std::vector<double> anchor_orientation_xyzw_;
     double hard_force_limit_n_;  // forwarded to grasp_state_machine (replay)
     // Forwarded to dmp_gazebo_executor_node (replay): whether it waits for /
     // retargets to the live target odometry, and the topic + timeout it uses.
