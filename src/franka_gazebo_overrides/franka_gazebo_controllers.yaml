@@ -125,7 +125,7 @@ cartesian_impedance_controller:
     nullspace_stiffness: 0.2         # Nullspace posture stiffness K_ns (Nm/rad)
     joint1_nullspace_stiffness: 100.0 # High stiffness dedicated to base yaw joint to prevent drift
     delta_tau_max: 1.0               # Maximum torque rate of change per iteration (Nm/ms)
-    nullspace_pinv_damping: 0.05     # Damping for Jacobian transpose nullspace pseudoinverse
+    nullspace_pinv_damping: 0.02     # Damping for Jacobian transpose nullspace pseudoinverse
     compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
     enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics
     enable_contact_force_estimation: true
