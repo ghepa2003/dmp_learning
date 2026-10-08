@@ -16,6 +16,9 @@ demo_raw_*.csv
 
 # dati generati da sessioni di test
 pinocchio_test/
+/backup_1007/
+/verify_prepos_1007/
+/traj_q6pi_1007/
 # tools/: lista bianca ancorata alla radice (l'ultima regola che corrisponde vince)
 /tools/**
 !/tools/**/
@@ -28,6 +31,8 @@ pinocchio_test/
 !/tools/**/*.md
 !/tools/**/CMakeLists.txt
 !/tools/COLCON_IGNORE
+!/tools/backup_1007_files/*.patch
+!/tools/backup_1007_files/*.txt
 /tools/**/__pycache__/
 /tools/**/build/
 /tools/**/data/
