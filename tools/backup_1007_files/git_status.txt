@@ -1,0 +1,22 @@
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/franka_gazebo_overrides/franka_gazebo_controllers.yaml
+	modified:   src/haptic_dmp_learning/CMakeLists.txt
+	modified:   src/haptic_dmp_learning/DESIGN_NOTES.md
+	modified:   src/haptic_dmp_learning/config/params.yaml
+	modified:   src/haptic_dmp_learning/include/haptic_dmp_learning/core/satellite_intercept.hpp
+	modified:   src/haptic_dmp_learning/include/haptic_dmp_learning/ros/prodmp_gazebo_executor_node.hpp
+	modified:   src/haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	backup_1007/
+	src/haptic_dmp_learning/test/test_axis_deviation.cpp
+	tools/test_trim_demo_at_trigger.py
+	tools/trim_demo_at_trigger.py
+
+no changes added to commit (use "git add" and/or "git commit -a")

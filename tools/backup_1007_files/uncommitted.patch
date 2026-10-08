@@ -1,0 +1,276 @@
+diff --git a/src/franka_gazebo_overrides/franka_gazebo_controllers.yaml b/src/franka_gazebo_overrides/franka_gazebo_controllers.yaml
+index fa6bff2..67eea91 100644
+--- a/src/franka_gazebo_overrides/franka_gazebo_controllers.yaml
++++ b/src/franka_gazebo_overrides/franka_gazebo_controllers.yaml
+@@ -125,7 +125,7 @@ cartesian_impedance_controller:
+     nullspace_stiffness: 0.2         # Nullspace posture stiffness K_ns (Nm/rad)
+     joint1_nullspace_stiffness: 100.0 # High stiffness dedicated to base yaw joint to prevent drift
+     delta_tau_max: 1.0               # Maximum torque rate of change per iteration (Nm/ms)
+-    nullspace_pinv_damping: 0.05     # Damping for Jacobian transpose nullspace pseudoinverse
++    nullspace_pinv_damping: 0.02     # Damping for Jacobian transpose nullspace pseudoinverse
+     compensate_gravity_internally: false # Set false in Gazebo (Gazebo physics engine applies gravity)
+     enable_nullspace_leak_diagnostics: true # Publish nullspace task-space leak acceleration diagnostics
+     enable_contact_force_estimation: true
+diff --git a/src/haptic_dmp_learning/CMakeLists.txt b/src/haptic_dmp_learning/CMakeLists.txt
+index 2f19258..c96b191 100644
+--- a/src/haptic_dmp_learning/CMakeLists.txt
++++ b/src/haptic_dmp_learning/CMakeLists.txt
+@@ -174,6 +174,9 @@ add_executable(demo_replay_sync_orchestrator_node
+   src/ros/demo_replay_sync_orchestrator_node.cpp
+   src/ros/demo_replay_sync_orchestrator_main.cpp
+ )
++target_link_libraries(demo_replay_sync_orchestrator_node
++  ${PROJECT_NAME}_core
++)
+ ament_target_dependencies(demo_replay_sync_orchestrator_node
+   rclcpp
+   std_msgs
+@@ -268,6 +271,10 @@ if(BUILD_TESTING)
+   ament_add_gtest(test_satellite_intercept test/test_satellite_intercept.cpp)
+   target_link_libraries(test_satellite_intercept ${PROJECT_NAME}_core)
+ 
++  # PhaseTracker::update(throw_on_off_axis) and AxisDeviationMonitor (header-only, no ROS).
++  ament_add_gtest(test_axis_deviation test/test_axis_deviation.cpp)
++  target_link_libraries(test_axis_deviation ${PROJECT_NAME}_core)
++
+   # GraspCommand -> GraspCommandInputs conversion (message types only, no node graph).
+   ament_add_gtest(test_grasp_command_input test/test_grasp_command_input.cpp)
+   target_link_libraries(test_grasp_command_input ${PROJECT_NAME}_core)
+diff --git a/src/haptic_dmp_learning/DESIGN_NOTES.md b/src/haptic_dmp_learning/DESIGN_NOTES.md
+index 691c4c4..3f5139e 100644
+--- a/src/haptic_dmp_learning/DESIGN_NOTES.md
++++ b/src/haptic_dmp_learning/DESIGN_NOTES.md
+@@ -291,6 +291,28 @@ routes its (unchanged) anchoring + rotation arithmetic through `anchorAndRotate(
+ - The detectable omega error of the consistency check is `tol / (omega * window)`: with 1 deg, 2 deg/s and 5 s
+   it is 10 %. Tighten `phase_consistency_tol_deg` / widen `phase_consistency_window_s` for a stricter check.
+ 
++### `axis_deviation_fatal_after_trigger` (off-axis rotation after the grasp trigger)
++
++`PhaseTracker::update` used to throw in every state when the rotation vector's component orthogonal to the
++configured axis exceeded 0.5 deg; the exception reaches `prodmp_executor_main.cpp`, which prints it as "Fatal
++initialization error" and the process dies. In the grasp the contact with the cube is intended, so after the
++trigger this must not be fatal.
++
++- **Parameter** `axis_deviation_fatal_after_trigger` (bool, default `true` = unchanged behaviour, continuous mode
++  only). `false`: in `kRunning` / `kFinished` `onSatelliteOdom` calls `update(q, throw_on_off_axis=false)`;
++  **before the trigger** (any other state) the check stays fatal in every case.
++- `PhaseTracker::update(q, throw_on_off_axis = true)`: the default is the old behaviour; `false` returns the sample
++  (`off_axis_deg` carries the deviation, `theta_rad` is computed as usual).
++- `AxisDeviationMonitor` (`satellite_intercept.hpp`) records every measured sample's `off_axis_deg` (header.stamp
++  as time): maximum, first instant above 0.25 deg and above 0.5 deg (-1 = never crossed), counts above each,
++  non-finite values ignored. Strictly "above".
++- **Where it shows up**: one line in the `continuous AT_END` log, `axis_dev_*` and
++  `axis_deviation_fatal_after_trigger` keys in `~/continuous_status` (erased 20 s after at_end), a one-off WARN at
++  the first sample above 0.5 deg after the trigger, and the node destructor logs the same summary at shutdown.
++- Tests: `test/test_axis_deviation.cpp`; the existing `RejectsRotationOutOfAxis` still covers the default.
++- A deviation above 0.5 deg after the trigger also leaves `theta_rad` as measured about the axis only: the phase
++  used by the report is the projection, not the full rotation.
++
+ ### 2026-09-22 fix: `anchorAndRotate()` goal was off by the demo's own init position (~192 mm)
+ 
+ `demo_grasp_goal_` was captured as `prodmp_.goal()` - the raw absolute grasp coordinate stored in
+diff --git a/src/haptic_dmp_learning/config/params.yaml b/src/haptic_dmp_learning/config/params.yaml
+index 33eff81..46af465 100644
+--- a/src/haptic_dmp_learning/config/params.yaml
++++ b/src/haptic_dmp_learning/config/params.yaml
+@@ -106,6 +106,11 @@ prodmp_gazebo_executor_node:
+     # target_odom_required=false, use_sim_time=true, and satellite_intercept_phase_deg / satellite_contact_time_s
+     # NOT set. satellite_rotation_axis/center/angular_velocity_deg_s, satellite_odom_topic and satellite_q_ref
+     # must be the same values the planner uses.
++    # Continuous mode only. true (default): a satellite rotation more than 0.5 deg off satellite_rotation_axis is fatal
++    # in every state. false: still fatal BEFORE the trigger; from the trigger on (contact with the cube is intended)
++    # the deviation is only recorded (max, first instant above 0.25 / 0.5 deg, counts) in the AT_END log, in
++    # ~/continuous_status (axis_dev_*) and in the node's shutdown log.
++    # axis_deviation_fatal_after_trigger: true
+     # grasp_goal_source: "grasp_command"
+     # grasp_command_topic: "/grasp_command"
+     # grasp_command_timeout_s: 300.0          # sim time, finite > 0
+diff --git a/src/haptic_dmp_learning/include/haptic_dmp_learning/core/satellite_intercept.hpp b/src/haptic_dmp_learning/include/haptic_dmp_learning/core/satellite_intercept.hpp
+index 8adcd1a..9bdfd3e 100644
+--- a/src/haptic_dmp_learning/include/haptic_dmp_learning/core/satellite_intercept.hpp
++++ b/src/haptic_dmp_learning/include/haptic_dmp_learning/core/satellite_intercept.hpp
+@@ -90,15 +90,18 @@ public:
+           R_ref_(q_ref.normalized().toRotationMatrix()),
+           tol_deg_(off_axis_tol_deg) {}
+ 
+-    /// @throws std::runtime_error if the rotation is not about the configured axis.
+-    PhaseSample update(const Eigen::Quaterniond& q_body) {
++    /// @param throw_on_off_axis true (default): throws when the orthogonal component exceeds the tolerance.
++    ///        false: the sample is returned anyway (off_axis_deg tells the deviation); used after the
++    ///        grasp trigger, where contact with the cube is intended.
++    /// @throws std::runtime_error if throw_on_off_axis and the rotation is not about the configured axis.
++    PhaseSample update(const Eigen::Quaterniond& q_body, bool throw_on_off_axis = true) {
+         PhaseSample s;
+         s.R_rel = q_body.normalized().toRotationMatrix() * R_ref_.transpose();
+         const Eigen::AngleAxisd aa(s.R_rel);
+         const Eigen::Vector3d v = aa.angle() * aa.axis();  // rotation vector, |v| in [0, pi]
+         const double raw = v.dot(axis_);
+         s.off_axis_deg = radToDeg((v - raw * axis_).norm());
+-        if (s.off_axis_deg > tol_deg_) {
++        if (throw_on_off_axis && s.off_axis_deg > tol_deg_) {
+             std::ostringstream m;
+             m << "satellite phase: rotation is off the configured axis (orthogonal component "
+               << s.off_axis_deg << " deg > " << tol_deg_ << " deg)";
+@@ -126,6 +129,68 @@ private:
+     double prev_ = 0.0;
+ };
+ 
++/// Records how far the satellite rotation strays from the configured axis (PhaseSample::off_axis_deg):
++/// maximum, first instant above a warning and above a tolerance threshold, and the number of samples
++/// above each. Non-finite samples are ignored (counted separately). "Above" means strictly greater.
++class AxisDeviationMonitor {
++public:
++    explicit AxisDeviationMonitor(double warn_deg = 0.25, double tol_deg = 0.5)
++        : warn_deg_(warn_deg), tol_deg_(tol_deg) {}
++
++    /// @param t_s instant of the sample (header.stamp seconds); @param off_axis_deg deviation [deg]
++    void add(double t_s, double off_axis_deg) {
++        if (!std::isfinite(off_axis_deg) || !std::isfinite(t_s)) {
++            ++ignored_;
++            return;
++        }
++        ++samples_;
++        max_deg_ = std::max(max_deg_, off_axis_deg);
++        if (off_axis_deg > warn_deg_) {
++            if (count_above_warn_ == 0) first_above_warn_t_ = t_s;
++            ++count_above_warn_;
++        }
++        if (off_axis_deg > tol_deg_) {
++            if (count_above_tol_ == 0) first_above_tol_t_ = t_s;
++            ++count_above_tol_;
++        }
++    }
++
++    double warnDeg() const { return warn_deg_; }
++    double tolDeg() const { return tol_deg_; }
++    std::uint64_t samples() const { return samples_; }
++    std::uint64_t ignored() const { return ignored_; }
++    /// Maximum deviation [deg]; 0 while no sample has been recorded (check samples()).
++    double maxDeg() const { return max_deg_; }
++    /// First instant above warnDeg(), -1 if never crossed.
++    double firstAboveWarnT() const { return first_above_warn_t_; }
++    /// First instant above tolDeg(), -1 if never crossed.
++    double firstAboveTolT() const { return first_above_tol_t_; }
++    std::uint64_t countAboveWarn() const { return count_above_warn_; }
++    std::uint64_t countAboveTol() const { return count_above_tol_; }
++
++    /// One-line human-readable summary (instants are -1 when not crossed).
++    std::string summary() const {
++        std::ostringstream m;
++        if (samples_ == 0) {
++            m << "axis deviation: no samples";
++        } else {
++            m << "axis deviation: max " << max_deg_ << " deg over " << samples_ << " samples; first above "
++              << warn_deg_ << " deg at t=" << first_above_warn_t_ << " s (" << count_above_warn_
++              << " samples), first above " << tol_deg_ << " deg at t=" << first_above_tol_t_ << " s ("
++              << count_above_tol_ << " samples) [-1 = never]";
++        }
++        if (ignored_ > 0) m << "; " << ignored_ << " non-finite samples ignored";
++        return m.str();
++    }
++
++private:
++    double warn_deg_, tol_deg_;
++    std::uint64_t samples_ = 0, ignored_ = 0;
++    std::uint64_t count_above_warn_ = 0, count_above_tol_ = 0;
++    double max_deg_ = 0.0;
++    double first_above_warn_t_ = -1.0, first_above_tol_t_ = -1.0;
++};
++
+ // ---------------------------------------------------------------------------------------
+ // 3. Phase-vs-time consistency (measured omega against configured omega)
+ // ---------------------------------------------------------------------------------------
+diff --git a/src/haptic_dmp_learning/include/haptic_dmp_learning/ros/prodmp_gazebo_executor_node.hpp b/src/haptic_dmp_learning/include/haptic_dmp_learning/ros/prodmp_gazebo_executor_node.hpp
+index c228482..d0c0dd6 100644
+--- a/src/haptic_dmp_learning/include/haptic_dmp_learning/ros/prodmp_gazebo_executor_node.hpp
++++ b/src/haptic_dmp_learning/include/haptic_dmp_learning/ros/prodmp_gazebo_executor_node.hpp
+@@ -73,6 +73,8 @@ namespace ros_wrapper {
+ class ProDmpGazeboExecutorNode : public rclcpp::Node {
+ public:
+     ProDmpGazeboExecutorNode();
++    /// Prints the axis-deviation summary (the status is erased 20 s after at_end).
++    ~ProDmpGazeboExecutorNode() override;
+ 
+     /// True while the hold target (see startHold()) is the last target the controller received, i.e. it
+     /// was published at least once and the rollout has not started: any failure in this window leaves the
+@@ -323,6 +325,10 @@ private:
+     rclcpp::TimerBase::SharedPtr continuous_status_timer_;
+     rclcpp::TimerBase::SharedPtr model_phase_timer_;
+     std::unique_ptr<core::satellite_intercept::PhaseTracker> phase_tracker_;
++    /// Deviation from the configured axis, recorded on every measured sample (see onSatelliteOdom).
++    core::satellite_intercept::AxisDeviationMonitor axis_deviation_{0.25, 0.5};
++    /// Parameter axis_deviation_fatal_after_trigger (default true = off-axis > 0.5 deg is fatal in every state).
++    bool axis_deviation_fatal_after_trigger_ = true;
+     std::unique_ptr<core::satellite_intercept::PhaseConsistencyChecker> phase_checker_;
+     std::unique_ptr<core::satellite_intercept::InterceptTrigger> trigger_;
+     std::unique_ptr<core::satellite_intercept::MeasuredTimeBase> rollout_clock_;
+diff --git a/src/haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp b/src/haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp
+index 43b391b..ffd42ce 100644
+--- a/src/haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp
++++ b/src/haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp
+@@ -947,6 +947,9 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
+     in.phase_consistency_tol_deg = this->declare_parameter<double>("phase_consistency_tol_deg", 1.0);
+     in.trigger_timeout_margin_s = this->declare_parameter<double>("trigger_timeout_margin_s", 30.0);
+     in.rollout_time_tol_s = this->declare_parameter<double>("rollout_time_tol_s", 0.05);
++    // true (default): off-axis rotation > 0.5 deg throws in every state. false: it throws only BEFORE the trigger;
++    // from the trigger on (kRunning/kFinished) it is recorded by axis_deviation_ and reported (contact is intended).
++    axis_deviation_fatal_after_trigger_ = this->declare_parameter<bool>("axis_deviation_fatal_after_trigger", true);
+     in.tau = prodmp_.tau();
+     in.dt = dt_;
+     in.grasp_command_mode = grasp_command_mode_;
+@@ -1344,6 +1347,13 @@ void ProDmpGazeboExecutorNode::logOrientationVsCommanded(const char* when, const
+     }
+ }
+ 
++ProDmpGazeboExecutorNode::~ProDmpGazeboExecutorNode() {
++    if (axis_deviation_.samples() > 0) {
++        RCLCPP_INFO(this->get_logger(), "shutdown: %s (axis_deviation_fatal_after_trigger=%s)",
++                    axis_deviation_.summary().c_str(), axis_deviation_fatal_after_trigger_ ? "true" : "false");
++    }
++}
++
+ void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+     namespace si = core::satellite_intercept;
+     const auto& c = *cc_;
+@@ -1367,7 +1377,16 @@ void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::Sh
+                     stamp_s, msg->header.frame_id.c_str(), off * 1000.0);
+     }
+     const auto& q = msg->pose.pose.orientation;
+-    const si::PhaseSample s = phase_tracker_->update(Eigen::Quaterniond(q.w, q.x, q.y, q.z));
++    const bool after_trigger = cstate_ == ContinuousState::kRunning || cstate_ == ContinuousState::kFinished;
++    const bool throw_on_off_axis = axis_deviation_fatal_after_trigger_ || !after_trigger;
++    const si::PhaseSample s = phase_tracker_->update(Eigen::Quaterniond(q.w, q.x, q.y, q.z), throw_on_off_axis);
++    axis_deviation_.add(stamp_s, s.off_axis_deg);
++    if (after_trigger && axis_deviation_.countAboveTol() == 1 && s.off_axis_deg > axis_deviation_.tolDeg()) {
++        RCLCPP_WARN(this->get_logger(),
++                    "satellite rotation left the configured axis by %.4f deg (> %.2f deg) after the trigger at stamp "
++                    "%.4f s: not fatal (axis_deviation_fatal_after_trigger=false), recorded in ~/continuous_status.",
++                    s.off_axis_deg, axis_deviation_.tolDeg(), stamp_s);
++    }
+     if (cstate_ != ContinuousState::kRunning && cstate_ != ContinuousState::kFinished) {
+         phase_checker_->update(stamp_s, s.theta_rad);  // throws if omega / time axis inconsistent
+     }
+@@ -1573,6 +1592,9 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
+                 core::radToDeg(dtheta_at_end_rad_), (p_handle - p_goal_).norm() * 1000.0, handle_ee.c_str(),
+                 static_cast<unsigned long long>(rollout_clock_->tickCount()), mean_p, rollout_clock_->maxPeriod(), dt_,
+                 static_cast<unsigned long long>(rollout_clock_->skippedTicks()), cmd_jump_mm);
++    if (axis_deviation_.samples() > 0) {
++        RCLCPP_INFO(this->get_logger(), "continuous AT_END: %s", axis_deviation_.summary().c_str());
++    }
+     if (!timing_ok_) {
+         RCLCPP_ERROR(this->get_logger(),
+                      "continuous: rollout duration in sim time %.5f s differs from tau %.5f s by %.5f s (> rollout_time_tol_s %.3f s); "
+@@ -1684,6 +1706,13 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
+     kvd("tau_s", prodmp_.tau());
+     kv3("p0", p0_);
+     kv3("p_goal", p_goal_);
++    kv("axis_deviation_fatal_after_trigger", axis_deviation_fatal_after_trigger_ ? "true" : "false");
++    kvd("axis_dev_samples", static_cast<double>(axis_deviation_.samples()));
++    kvd("axis_dev_max_deg", axis_deviation_.samples() > 0 ? axis_deviation_.maxDeg() : nan);
++    kvd("axis_dev_first_above_0p25_deg_t_sim", axis_deviation_.firstAboveWarnT());  // -1 = never
++    kvd("axis_dev_first_above_0p5_deg_t_sim", axis_deviation_.firstAboveTolT());    // -1 = never
++    kvd("axis_dev_count_above_0p25_deg", static_cast<double>(axis_deviation_.countAboveWarn()));
++    kvd("axis_dev_count_above_0p5_deg", static_cast<double>(axis_deviation_.countAboveTol()));
+ 
+     Eigen::Vector3d p_handle = Eigen::Vector3d::Constant(nan);
+     if (have_phase_) p_handle = c.center + latest_R_rel_ * (p0_ - c.center);
