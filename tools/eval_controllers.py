@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""
+tools/eval_controllers.py — Esecutore e valutatore canonico dei controllori Franka in Gazebo Sim.
+Supporta ProDMP, DMP e Velocity Cartesian Controller con validazione stringente su sim_time e gap.
+"""
+
+import os
+import sys
+import time
+import argparse
+import subprocess
+import signal
+import json
+import csv
+import glob
+import sqlite3
+import numpy as np
+
+import eval_common as ec
+
+WS_ROOT = "/root/thesis_ws"
+FRANKA_WS = "/root/ros_workspaces/ros2/franka_ws"
+
+# Riferimenti storici (dal diario del 07/10)
+HISTORICAL_REFERENCES = {
+    "prodmp_kt2000": {
+        "pos_media_mm": 0.52,
+        "pos_max_mm": 5.92,
+        "pos_max_1s_mm": 1.37,
+        "pos_finale_mm": 0.37,
+        "rtf": 0.60
+    },
+    "prodmp_kt200": {
+        "pos_media_mm": 5.24,
+        "pos_max_mm": 12.80,
+        "pos_max_1s_mm": 8.15,
+        "pos_finale_mm": 4.12,
+        "rtf": 0.60
+    }
+}
+
+
+def run_canonical_evaluation(
+    output_dir,
+    controller_type="prodmp",
+    kt=2000.0,
+    dt=10.0,
+    kr=150.0,
+    dr=1.0,
+    start_pose="ready",
+    fingers="fixed",
+    suffix="_canon1008",
+    force=False
+):
+    # 1. Controllo directory di output e run esistente
+    os.makedirs(output_dir, exist_ok=True)
+    bags_dir = os.path.join(output_dir, "bags")
+    os.makedirs(bags_dir, exist_ok=True)
+
+    run_name = f"eval_{controller_type}_kt{int(kt)}_{start_pose}_{fingers}{suffix}"
+    bag_path = os.path.join(bags_dir, run_name)
+    if os.path.exists(bag_path):
+        if not force:
+            print(f"[ERRORE FATALE] La run '{run_name}' esiste già in '{bag_path}'. Rifiuto di sovrascrivere (usa --force).")
+            sys.exit(1)
+        else:
+            import shutil
+            shutil.rmtree(bag_path)
+
+    launch_log = os.path.join(output_dir, f"launch_{run_name}.log")
+    exec_log = os.path.join(output_dir, f"exec_{run_name}.log")
+
+    # Durata nominale tau e margine esplicito di sim_time
+    if controller_type == "prodmp":
+        tau_nom_expected = 73.8
+        sim_margin = 10.0
+    elif controller_type == "dmp":
+        tau_nom_expected = 60.97
+        sim_margin = 10.0
+    else:
+        tau_nom_expected = 40.0
+        sim_margin = 10.0
+    target_sim_time = tau_nom_expected + sim_margin
+
+    print("=================================================================")
+    print(f"AVVIO VALUTAZIONE CANONICA: {run_name}")
+    print(f"  Controllore:   {controller_type} (Kt={kt:.1f}, Dt={dt:.1f})")
+    print(f"  Posa & Dita:   start_pose={start_pose}, fingers={fingers}")
+    print(f"  Target Sim:    tau={tau_nom_expected:.2f}s + margine={sim_margin:.2f}s -> {target_sim_time:.2f}s (NO wall-clock)")
+    print(f"  Output Dir:    {output_dir}")
+    print("=================================================================")
+
+    # 2. Setup e avvio ambiente con ripristino garantito dello YAML
+    ec.clean_processes()
+    ec.setup_bringup_share()
+
+    with ec.YamlGainManager(kt=kt, dt=dt, kr=kr, dr=dr):
+        # Selezione launch file
+        if controller_type == "velocity":
+            launch_file = "gazebo_velocity_cartesian_control.launch.py"
+            controller_name = "velocity_cartesian_controller"
+        else:
+            launch_file = "gazebo_cartesian_impedance_control.launch.py"
+            controller_name = "cartesian_impedance_controller"
+
+        launch_cmd = (
+            f"export PYTHONUNBUFFERED=1 && "
+            f"export FRANKA_START_POSE={start_pose} && "
+            f"export FRANKA_FINGERS={fingers} && "
+            f"source /opt/ros/humble/setup.bash && "
+            f"source {FRANKA_WS}/install/setup.bash && "
+            f"source {WS_ROOT}/install/setup.bash && "
+            f"export QT_QPA_PLATFORM=offscreen && "
+            f"stdbuf -oL -eL ros2 launch franka_gazebo_bringup {launch_file} "
+            f"headless:=true load_gripper:=true"
+        )
+
+        with open(launch_log, "w") as f_log:
+            launch_proc = subprocess.Popen(
+                launch_cmd, shell=True, executable="/bin/bash",
+                stdout=f_log, stderr=subprocess.STDOUT
+            )
+
+        print("Attesa attivazione controller...")
+        if not ec.wait_for_controller(launch_log, controller_name=controller_name, timeout_sec=60):
+            print(f"[ERRORE FATALE] Controller {controller_name} non attivato entro il timeout.")
+            ec.clean_processes()
+            return None
+
+        print("Controller ATTIVO! Avvio registrazione bag...")
+        bag_cmd = (
+            f"source /opt/ros/humble/setup.bash && "
+            f"ros2 bag record -o {bag_path} "
+            f"/{controller_name}/target_pose_aligned "
+            f"/{controller_name}/actual_pose "
+            f"/joint_states "
+            f"/target_pose "
+            f"/clock"
+        )
+        bag_proc = subprocess.Popen(
+            bag_cmd, shell=True, executable="/bin/bash",
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        time.sleep(2.0)
+
+        # Avvio executor ProDMP / DMP
+        print(f"Avvio executor {controller_type}...", flush=True)
+        if controller_type == "prodmp":
+            exec_cmd = (
+                f"source /opt/ros/humble/setup.bash && "
+                f"source {FRANKA_WS}/install/setup.bash && "
+                f"source {WS_ROOT}/install/setup.bash && "
+                f"ros2 run haptic_dmp_learning prodmp_gazebo_executor_node "
+                f"--ros-args "
+                f"-p target_pose_topic:=/target_pose "
+                f"-p target_twist_topic:=/target_twist "
+                f"-p weights_yaml_path:={ec.WEIGHTS_PRODMP} "
+                f"-p orientation_weights_yaml_path:={ec.ORIENTATION_PATH} "
+                f"-p target_odom_required:=false"
+            )
+        elif controller_type == "dmp":
+            exec_cmd = (
+                f"source /opt/ros/humble/setup.bash && "
+                f"source {FRANKA_WS}/install/setup.bash && "
+                f"source {WS_ROOT}/install/setup.bash && "
+                f"ros2 run haptic_dmp_learning dmp_gazebo_executor_node "
+                f"--ros-args "
+                f"-p target_pose_topic:=/target_pose"
+            )
+        else:
+            exec_cmd = None
+
+        if exec_cmd:
+            with open(exec_log, "w") as f_exec:
+                exec_proc = subprocess.Popen(
+                    exec_cmd, shell=True, executable="/bin/bash",
+                    stdout=f_exec, stderr=subprocess.STDOUT
+                )
+        else:
+            exec_proc = None
+
+        # 3. Monitoraggio tempo simulato (da /clock via ROS 2)
+        print("Monitoraggio tempo simulato (/clock)...")
+        clock_monitor = ec.SimTimeClockMonitor()
+        sim_start_time = None
+        wall_start = time.time()
+        while sim_start_time is None:
+            sim_start_time = clock_monitor.get_time()
+            time.sleep(0.2)
+            if (time.time() - wall_start) > 30.0:
+                print("\n[ERRORE] Nessun messaggio /clock ricevuto entro 30s.")
+                break
+
+        if sim_start_time is not None:
+            print(f"Misura avviata a sim_time = {sim_start_time:.3f} s. Target = {target_sim_time:.1f} s sim.")
+            while True:
+                now_sim = clock_monitor.get_time()
+                if now_sim is not None:
+                    current_sim_time = now_sim - sim_start_time
+                    wall_elapsed = time.time() - wall_start
+                    rtf_curr = current_sim_time / wall_elapsed if wall_elapsed > 0 else 0.0
+                    print(f"\r  Sim time: {current_sim_time:5.2f} / {target_sim_time:.1f} s | Wall: {wall_elapsed:5.1f} s | RTF: {rtf_curr:.2f}", end="", flush=True)
+
+                    if current_sim_time >= target_sim_time:
+                        print(f"\n[OK] Raggiunto target sim_time ({current_sim_time:.2f} s >= {target_sim_time:.2f} s)!")
+                        break
+
+                # Watchdog di sicurezza wall-clock a 3x target per evitare blocco infinito
+                if (time.time() - wall_start) > 3.0 * target_sim_time:
+                    print(f"\n[ATTENZIONE] Watchdog wall-clock superato. Termine run...")
+                    break
+                time.sleep(0.5)
+
+        clock_monitor.stop()
+
+        # 4. Arresto pulito
+        if exec_proc and exec_proc.poll() is None:
+            exec_proc.send_signal(signal.SIGINT)
+            try:
+                exec_proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                exec_proc.kill()
+
+        if bag_proc.poll() is None:
+            bag_proc.send_signal(signal.SIGINT)
+            try:
+                bag_proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                bag_proc.kill()
+
+        ec.clean_processes()
+
+    # 5. Estrazione e calcolo metriche
+    print("\nEstrazione dati da rosbag...")
+    bag_data = ec.extract_bag_data(bag_path)
+    metrics = ec.compute_metrics(
+        bag_data["target_records"],
+        bag_data["actual_records"],
+        bag_data["clock_records"]
+    )
+
+    if not metrics:
+        print("[ERRORE FATALE] Impossibile calcolare le metriche (dati mancanti nel bag).")
+        return None
+
+    # 6. Validazione canonica
+    is_valid, validation_reason = ec.validate_run(
+        bag_data["target_records"],
+        bag_data["clock_records"],
+        tau_nom=metrics["tau_nom"],
+        exclude_window_sec=5.0
+    )
+    metrics["is_valid"] = is_valid
+    metrics["validation_reason"] = validation_reason
+    metrics["run_name"] = run_name
+    metrics["controller_type"] = controller_type
+    metrics["kt"] = kt
+    metrics["dt"] = dt
+    metrics["start_pose"] = start_pose
+    metrics["fingers"] = fingers
+
+    # Salva CSV dei record estratti
+    csv_out_path = os.path.join(output_dir, f"{run_name}_records.csv")
+    with open(csv_out_path, "w", newline="") as f_csv:
+        w = csv.writer(f_csv)
+        w.writerow(["t_sim", "t_wall", "target_x", "target_y", "target_z", "actual_x", "actual_y", "actual_z"])
+        n_pts = min(len(bag_data["target_records"]), len(bag_data["actual_records"]))
+        for i in range(n_pts):
+            tr = bag_data["target_records"][i]
+            ar = bag_data["actual_records"][i]
+            w.writerow([
+                f"{tr['t_sim']:.6f}", f"{tr['t_wall']:.6f}",
+                f"{tr['pos'][0]:.6f}", f"{tr['pos'][1]:.6f}", f"{tr['pos'][2]:.6f}",
+                f"{ar['pos'][0]:.6f}", f"{ar['pos'][1]:.6f}", f"{ar['pos'][2]:.6f}"
+            ])
+
+    # Salva JSON metriche
+    json_path = os.path.join(output_dir, f"{run_name}_metrics.json")
+    with open(json_path, "w") as f_json:
+        json.dump(metrics, f_json, indent=2)
+
+    # 7. Stampa report e confronto storico
+    print("\n=================================================================")
+    print(f"RISULTATI RUN: {run_name}")
+    print("=================================================================")
+    print(f"Stato Validità:          {'VALIDA' if is_valid else 'INVALIDA'} ({validation_reason})")
+    print(f"Tempo sim effettivo:     {metrics['t_sim_ultimo']:.3f} s (tau: {metrics['tau_nom']:.3f} s, frazione: {metrics['completed_frac']*100:.1f}%)")
+    print(f"RTF medio:               {metrics['rtf']:.3f}")
+    print(f"Max gap target_pose:     {metrics['max_gap_tgt_ms']:.2f} ms")
+    print(f"Errore pos medio:        {metrics['pos_media_mm']:.3f} mm")
+    print(f"Errore pos p95:          {metrics['pos_p95_mm']:.3f} mm")
+    print(f"Errore pos max:          {metrics['pos_max_mm']:.3f} mm (a t=0s)")
+    print(f"Errore pos max (>1s):    {metrics['pos_max_1s_mm']:.3f} mm")
+    print(f"Errore pos finale (tau): {metrics['pos_finale_tau_mm']:.3f} mm")
+    print(f"Errore pos finale (end): {metrics['pos_finale_ultimo_mm']:.3f} mm")
+    print(f"Errore rot medio:        {metrics['ori_media_deg']:.3f} deg (max: {metrics['ori_max_deg']:.3f} deg, end: {metrics['ori_finale_deg']:.3f} deg)")
+
+    ref_key = f"{controller_type}_kt{int(kt)}"
+    if ref_key in HISTORICAL_REFERENCES:
+        ref = HISTORICAL_REFERENCES[ref_key]
+        print("\n-----------------------------------------------------------------")
+        print(f"CONFRONTO CON TABELLA STORICA DIARIO ({ref_key}):")
+        print("-----------------------------------------------------------------")
+        print(f"  Metrica               | Atteso (07/10) | Misurato Oggi | Differenza")
+        print(f"  Posizione media [mm]  | {ref['pos_media_mm']:14.2f} | {metrics['pos_media_mm']:13.3f} | {metrics['pos_media_mm'] - ref['pos_media_mm']:+10.3f}")
+        print(f"  Posizione max [mm]    | {ref['pos_max_mm']:14.2f} | {metrics['pos_max_mm']:13.3f} | {metrics['pos_max_mm'] - ref['pos_max_mm']:+10.3f}")
+        print(f"  Pos max dopo 1s [mm]  | {ref['pos_max_1s_mm']:14.2f} | {metrics['pos_max_1s_mm']:13.3f} | {metrics['pos_max_1s_mm'] - ref['pos_max_1s_mm']:+10.3f}")
+        print(f"  Pos finale [mm]       | {ref['pos_finale_mm']:14.2f} | {metrics['pos_finale_tau_mm']:13.3f} | {metrics['pos_finale_tau_mm'] - ref['pos_finale_mm']:+10.3f}")
+        print(f"  RTF medio             | {ref['rtf']:14.2f} | {metrics['rtf']:13.3f} | {metrics['rtf'] - ref['rtf']:+10.3f}")
+
+    print("=================================================================\n")
+    return metrics
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Valutatore canonico controllori Franka Gazebo")
+    parser.add_argument("output_dir", help="Cartella unica di output (non deve esistere)")
+    parser.add_argument("--controller", default="prodmp", choices=["prodmp", "dmp", "velocity"], help="Tipo di controllore")
+    parser.add_argument("--kt", type=float, default=2000.0, help="Rigidezza traslazionale Kt [N/m]")
+    parser.add_argument("--dt", type=float, default=10.0, help="Smorzamento traslazionale Dt [Ns/m]")
+    parser.add_argument("--kr", type=float, default=150.0, help="Rigidezza rotazionale Kr [Nm/rad]")
+    parser.add_argument("--dr", type=float, default=1.0, help="Smorzamento rotazionale Dr [Nms/rad]")
+    parser.add_argument("--start-pose", default="ready", help="Posa di spawn (es. ready, ready_q6pi)")
+    parser.add_argument("--fingers", default="fixed", choices=["fixed", "prismatic"], help="Tipo giunto dita")
+    parser.add_argument("--suffix", default="_canon1008", help="Suffisso per il nome della run")
+    parser.add_argument("--force", action="store_true", help="Forza sovrascrittura della run se già presente")
+
+    args = parser.parse_args()
+    run_canonical_evaluation(
+        output_dir=args.output_dir,
+        controller_type=args.controller,
+        kt=args.kt,
+        dt=args.dt,
+        kr=args.kr,
+        dr=args.dr,
+        start_pose=args.start_pose,
+        fingers=args.fingers,
+        suffix=args.suffix,
+        force=args.force
+    )
+
+
+if __name__ == "__main__":
+    main()
