@@ -721,6 +721,7 @@ def run_single_experiment(run_idx=1):
     launch_cmd = (
         f"export PYTHONUNBUFFERED=1 && "
         f"export FRANKA_START_POSE=ready_q6pi && "
+        f"export FRANKA_FINGERS=fixed && "
         f"source /opt/ros/humble/setup.bash && "
         f"source {FRANKA_WS}/install/setup.bash && "
         f"source {WS_ROOT}/install/setup.bash && "
@@ -809,16 +810,6 @@ def main():
     if not runs_results:
         print("[ERRORE FATALE] Nessuna run completata con successo.")
         return
-
-    # Ripristino xacro originale
-    print("\nRipristino franka_hand.xacro dall'override...")
-    restore_cmd = "cp /root/thesis_ws/src/franka_description_overrides/franka_hand.xacro /root/ros_workspaces/ros2/franka_ws/src/franka_ros2/franka_description/end_effectors/common/franka_hand.xacro"
-    subprocess.run(restore_cmd, shell=True)
-    diff_res = subprocess.run("diff -u /root/thesis_ws/src/franka_description_overrides/franka_hand.xacro /root/ros_workspaces/ros2/franka_ws/src/franka_ros2/franka_description/end_effectors/common/franka_hand.xacro", shell=True, capture_output=True, text=True)
-    if diff_res.stdout == "":
-        print("[OK] Ripristino verificato con successo: diff vuoto!")
-    else:
-        print(f"[ATTENZIONE] Diff non vuoto dopo ripristino:\n{diff_res.stdout}")
 
     summary_path = os.path.join(OUT_DIR, "summary_traj_q6pi_1007.txt")
     with open(summary_path, "w") as sf:

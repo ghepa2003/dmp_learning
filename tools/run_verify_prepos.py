@@ -761,6 +761,7 @@ def run_single_experiment(run_idx=1):
     launch_cmd = (
         f"export PYTHONUNBUFFERED=1 && "
         f"export FRANKA_START_POSE=ready && "
+        f"export FRANKA_FINGERS=prismatic && "
         f"source /opt/ros/humble/setup.bash && "
         f"source {FRANKA_WS}/install/setup.bash && "
         f"source {WS_ROOT}/install/setup.bash && "
