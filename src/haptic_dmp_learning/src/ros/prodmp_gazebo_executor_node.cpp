@@ -947,6 +947,9 @@ void ProDmpGazeboExecutorNode::setupContinuous() {
     in.phase_consistency_tol_deg = this->declare_parameter<double>("phase_consistency_tol_deg", 1.0);
     in.trigger_timeout_margin_s = this->declare_parameter<double>("trigger_timeout_margin_s", 30.0);
     in.rollout_time_tol_s = this->declare_parameter<double>("rollout_time_tol_s", 0.05);
+    // true (default): off-axis rotation > 0.5 deg throws in every state. false: it throws only BEFORE the trigger;
+    // from the trigger on (kRunning/kFinished) it is recorded by axis_deviation_ and reported (contact is intended).
+    axis_deviation_fatal_after_trigger_ = this->declare_parameter<bool>("axis_deviation_fatal_after_trigger", true);
     in.tau = prodmp_.tau();
     in.dt = dt_;
     in.grasp_command_mode = grasp_command_mode_;
@@ -1344,6 +1347,13 @@ void ProDmpGazeboExecutorNode::logOrientationVsCommanded(const char* when, const
     }
 }
 
+ProDmpGazeboExecutorNode::~ProDmpGazeboExecutorNode() {
+    if (axis_deviation_.samples() > 0) {
+        RCLCPP_INFO(this->get_logger(), "shutdown: %s (axis_deviation_fatal_after_trigger=%s)",
+                    axis_deviation_.summary().c_str(), axis_deviation_fatal_after_trigger_ ? "true" : "false");
+    }
+}
+
 void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg) {
     namespace si = core::satellite_intercept;
     const auto& c = *cc_;
@@ -1367,7 +1377,16 @@ void ProDmpGazeboExecutorNode::onSatelliteOdom(const nav_msgs::msg::Odometry::Sh
                     stamp_s, msg->header.frame_id.c_str(), off * 1000.0);
     }
     const auto& q = msg->pose.pose.orientation;
-    const si::PhaseSample s = phase_tracker_->update(Eigen::Quaterniond(q.w, q.x, q.y, q.z));
+    const bool after_trigger = cstate_ == ContinuousState::kRunning || cstate_ == ContinuousState::kFinished;
+    const bool throw_on_off_axis = axis_deviation_fatal_after_trigger_ || !after_trigger;
+    const si::PhaseSample s = phase_tracker_->update(Eigen::Quaterniond(q.w, q.x, q.y, q.z), throw_on_off_axis);
+    axis_deviation_.add(stamp_s, s.off_axis_deg);
+    if (after_trigger && axis_deviation_.countAboveTol() == 1 && s.off_axis_deg > axis_deviation_.tolDeg()) {
+        RCLCPP_WARN(this->get_logger(),
+                    "satellite rotation left the configured axis by %.4f deg (> %.2f deg) after the trigger at stamp "
+                    "%.4f s: not fatal (axis_deviation_fatal_after_trigger=false), recorded in ~/continuous_status.",
+                    s.off_axis_deg, axis_deviation_.tolDeg(), stamp_s);
+    }
     if (cstate_ != ContinuousState::kRunning && cstate_ != ContinuousState::kFinished) {
         phase_checker_->update(stamp_s, s.theta_rad);  // throws if omega / time axis inconsistent
     }
@@ -1573,6 +1592,9 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
                 core::radToDeg(dtheta_at_end_rad_), (p_handle - p_goal_).norm() * 1000.0, handle_ee.c_str(),
                 static_cast<unsigned long long>(rollout_clock_->tickCount()), mean_p, rollout_clock_->maxPeriod(), dt_,
                 static_cast<unsigned long long>(rollout_clock_->skippedTicks()), cmd_jump_mm);
+    if (axis_deviation_.samples() > 0) {
+        RCLCPP_INFO(this->get_logger(), "continuous AT_END: %s", axis_deviation_.summary().c_str());
+    }
     if (!timing_ok_) {
         RCLCPP_ERROR(this->get_logger(),
                      "continuous: rollout duration in sim time %.5f s differs from tau %.5f s by %.5f s (> rollout_time_tol_s %.3f s); "
@@ -1684,6 +1706,13 @@ void ProDmpGazeboExecutorNode::publishContinuousStatus() {
     kvd("tau_s", prodmp_.tau());
     kv3("p0", p0_);
     kv3("p_goal", p_goal_);
+    kv("axis_deviation_fatal_after_trigger", axis_deviation_fatal_after_trigger_ ? "true" : "false");
+    kvd("axis_dev_samples", static_cast<double>(axis_deviation_.samples()));
+    kvd("axis_dev_max_deg", axis_deviation_.samples() > 0 ? axis_deviation_.maxDeg() : nan);
+    kvd("axis_dev_first_above_0p25_deg_t_sim", axis_deviation_.firstAboveWarnT());  // -1 = never
+    kvd("axis_dev_first_above_0p5_deg_t_sim", axis_deviation_.firstAboveTolT());    // -1 = never
+    kvd("axis_dev_count_above_0p25_deg", static_cast<double>(axis_deviation_.countAboveWarn()));
+    kvd("axis_dev_count_above_0p5_deg", static_cast<double>(axis_deviation_.countAboveTol()));
 
     Eigen::Vector3d p_handle = Eigen::Vector3d::Constant(nan);
     if (have_phase_) p_handle = c.center + latest_R_rel_ * (p0_ - c.center);

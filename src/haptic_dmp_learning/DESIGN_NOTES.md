@@ -291,6 +291,28 @@ routes its (unchanged) anchoring + rotation arithmetic through `anchorAndRotate(
 - The detectable omega error of the consistency check is `tol / (omega * window)`: with 1 deg, 2 deg/s and 5 s
   it is 10 %. Tighten `phase_consistency_tol_deg` / widen `phase_consistency_window_s` for a stricter check.
 
+### `axis_deviation_fatal_after_trigger` (off-axis rotation after the grasp trigger)
+
+`PhaseTracker::update` used to throw in every state when the rotation vector's component orthogonal to the
+configured axis exceeded 0.5 deg; the exception reaches `prodmp_executor_main.cpp`, which prints it as "Fatal
+initialization error" and the process dies. In the grasp the contact with the cube is intended, so after the
+trigger this must not be fatal.
+
+- **Parameter** `axis_deviation_fatal_after_trigger` (bool, default `true` = unchanged behaviour, continuous mode
+  only). `false`: in `kRunning` / `kFinished` `onSatelliteOdom` calls `update(q, throw_on_off_axis=false)`;
+  **before the trigger** (any other state) the check stays fatal in every case.
+- `PhaseTracker::update(q, throw_on_off_axis = true)`: the default is the old behaviour; `false` returns the sample
+  (`off_axis_deg` carries the deviation, `theta_rad` is computed as usual).
+- `AxisDeviationMonitor` (`satellite_intercept.hpp`) records every measured sample's `off_axis_deg` (header.stamp
+  as time): maximum, first instant above 0.25 deg and above 0.5 deg (-1 = never crossed), counts above each,
+  non-finite values ignored. Strictly "above".
+- **Where it shows up**: one line in the `continuous AT_END` log, `axis_dev_*` and
+  `axis_deviation_fatal_after_trigger` keys in `~/continuous_status` (erased 20 s after at_end), a one-off WARN at
+  the first sample above 0.5 deg after the trigger, and the node destructor logs the same summary at shutdown.
+- Tests: `test/test_axis_deviation.cpp`; the existing `RejectsRotationOutOfAxis` still covers the default.
+- A deviation above 0.5 deg after the trigger also leaves `theta_rad` as measured about the axis only: the phase
+  used by the report is the projection, not the full rotation.
+
 ### 2026-09-22 fix: `anchorAndRotate()` goal was off by the demo's own init position (~192 mm)
 
 `demo_grasp_goal_` was captured as `prodmp_.goal()` - the raw absolute grasp coordinate stored in

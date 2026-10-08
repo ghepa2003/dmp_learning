@@ -174,6 +174,9 @@ add_executable(demo_replay_sync_orchestrator_node
   src/ros/demo_replay_sync_orchestrator_node.cpp
   src/ros/demo_replay_sync_orchestrator_main.cpp
 )
+target_link_libraries(demo_replay_sync_orchestrator_node
+  ${PROJECT_NAME}_core
+)
 ament_target_dependencies(demo_replay_sync_orchestrator_node
   rclcpp
   std_msgs
@@ -267,6 +270,10 @@ if(BUILD_TESTING)
   # Pure logic of satellite_rotation_mode="continuous" (header-only, no ROS).
   ament_add_gtest(test_satellite_intercept test/test_satellite_intercept.cpp)
   target_link_libraries(test_satellite_intercept ${PROJECT_NAME}_core)
+
+  # PhaseTracker::update(throw_on_off_axis) and AxisDeviationMonitor (header-only, no ROS).
+  ament_add_gtest(test_axis_deviation test/test_axis_deviation.cpp)
+  target_link_libraries(test_axis_deviation ${PROJECT_NAME}_core)
 
   # GraspCommand -> GraspCommandInputs conversion (message types only, no node graph).
   ament_add_gtest(test_grasp_command_input test/test_grasp_command_input.cpp)

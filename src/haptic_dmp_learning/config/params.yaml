@@ -106,6 +106,11 @@ prodmp_gazebo_executor_node:
     # target_odom_required=false, use_sim_time=true, and satellite_intercept_phase_deg / satellite_contact_time_s
     # NOT set. satellite_rotation_axis/center/angular_velocity_deg_s, satellite_odom_topic and satellite_q_ref
     # must be the same values the planner uses.
+    # Continuous mode only. true (default): a satellite rotation more than 0.5 deg off satellite_rotation_axis is fatal
+    # in every state. false: still fatal BEFORE the trigger; from the trigger on (contact with the cube is intended)
+    # the deviation is only recorded (max, first instant above 0.25 / 0.5 deg, counts) in the AT_END log, in
+    # ~/continuous_status (axis_dev_*) and in the node's shutdown log.
+    # axis_deviation_fatal_after_trigger: true
     # grasp_goal_source: "grasp_command"
     # grasp_command_topic: "/grasp_command"
     # grasp_command_timeout_s: 300.0          # sim time, finite > 0

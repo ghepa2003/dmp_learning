@@ -73,6 +73,8 @@ namespace ros_wrapper {
 class ProDmpGazeboExecutorNode : public rclcpp::Node {
 public:
     ProDmpGazeboExecutorNode();
+    /// Prints the axis-deviation summary (the status is erased 20 s after at_end).
+    ~ProDmpGazeboExecutorNode() override;
 
     /// True while the hold target (see startHold()) is the last target the controller received, i.e. it
     /// was published at least once and the rollout has not started: any failure in this window leaves the
@@ -323,6 +325,10 @@ private:
     rclcpp::TimerBase::SharedPtr continuous_status_timer_;
     rclcpp::TimerBase::SharedPtr model_phase_timer_;
     std::unique_ptr<core::satellite_intercept::PhaseTracker> phase_tracker_;
+    /// Deviation from the configured axis, recorded on every measured sample (see onSatelliteOdom).
+    core::satellite_intercept::AxisDeviationMonitor axis_deviation_{0.25, 0.5};
+    /// Parameter axis_deviation_fatal_after_trigger (default true = off-axis > 0.5 deg is fatal in every state).
+    bool axis_deviation_fatal_after_trigger_ = true;
     std::unique_ptr<core::satellite_intercept::PhaseConsistencyChecker> phase_checker_;
     std::unique_ptr<core::satellite_intercept::InterceptTrigger> trigger_;
     std::unique_ptr<core::satellite_intercept::MeasuredTimeBase> rollout_clock_;

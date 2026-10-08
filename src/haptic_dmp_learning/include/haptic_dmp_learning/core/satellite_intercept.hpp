@@ -90,15 +90,18 @@ public:
           R_ref_(q_ref.normalized().toRotationMatrix()),
           tol_deg_(off_axis_tol_deg) {}
 
-    /// @throws std::runtime_error if the rotation is not about the configured axis.
-    PhaseSample update(const Eigen::Quaterniond& q_body) {
+    /// @param throw_on_off_axis true (default): throws when the orthogonal component exceeds the tolerance.
+    ///        false: the sample is returned anyway (off_axis_deg tells the deviation); used after the
+    ///        grasp trigger, where contact with the cube is intended.
+    /// @throws std::runtime_error if throw_on_off_axis and the rotation is not about the configured axis.
+    PhaseSample update(const Eigen::Quaterniond& q_body, bool throw_on_off_axis = true) {
         PhaseSample s;
         s.R_rel = q_body.normalized().toRotationMatrix() * R_ref_.transpose();
         const Eigen::AngleAxisd aa(s.R_rel);
         const Eigen::Vector3d v = aa.angle() * aa.axis();  // rotation vector, |v| in [0, pi]
         const double raw = v.dot(axis_);
         s.off_axis_deg = radToDeg((v - raw * axis_).norm());
-        if (s.off_axis_deg > tol_deg_) {
+        if (throw_on_off_axis && s.off_axis_deg > tol_deg_) {
             std::ostringstream m;
             m << "satellite phase: rotation is off the configured axis (orthogonal component "
               << s.off_axis_deg << " deg > " << tol_deg_ << " deg)";
@@ -124,6 +127,68 @@ private:
     double tol_deg_;
     bool has_prev_ = false;
     double prev_ = 0.0;
+};
+
+/// Records how far the satellite rotation strays from the configured axis (PhaseSample::off_axis_deg):
+/// maximum, first instant above a warning and above a tolerance threshold, and the number of samples
+/// above each. Non-finite samples are ignored (counted separately). "Above" means strictly greater.
+class AxisDeviationMonitor {
+public:
+    explicit AxisDeviationMonitor(double warn_deg = 0.25, double tol_deg = 0.5)
+        : warn_deg_(warn_deg), tol_deg_(tol_deg) {}
+
+    /// @param t_s instant of the sample (header.stamp seconds); @param off_axis_deg deviation [deg]
+    void add(double t_s, double off_axis_deg) {
+        if (!std::isfinite(off_axis_deg) || !std::isfinite(t_s)) {
+            ++ignored_;
+            return;
+        }
+        ++samples_;
+        max_deg_ = std::max(max_deg_, off_axis_deg);
+        if (off_axis_deg > warn_deg_) {
+            if (count_above_warn_ == 0) first_above_warn_t_ = t_s;
+            ++count_above_warn_;
+        }
+        if (off_axis_deg > tol_deg_) {
+            if (count_above_tol_ == 0) first_above_tol_t_ = t_s;
+            ++count_above_tol_;
+        }
+    }
+
+    double warnDeg() const { return warn_deg_; }
+    double tolDeg() const { return tol_deg_; }
+    std::uint64_t samples() const { return samples_; }
+    std::uint64_t ignored() const { return ignored_; }
+    /// Maximum deviation [deg]; 0 while no sample has been recorded (check samples()).
+    double maxDeg() const { return max_deg_; }
+    /// First instant above warnDeg(), -1 if never crossed.
+    double firstAboveWarnT() const { return first_above_warn_t_; }
+    /// First instant above tolDeg(), -1 if never crossed.
+    double firstAboveTolT() const { return first_above_tol_t_; }
+    std::uint64_t countAboveWarn() const { return count_above_warn_; }
+    std::uint64_t countAboveTol() const { return count_above_tol_; }
+
+    /// One-line human-readable summary (instants are -1 when not crossed).
+    std::string summary() const {
+        std::ostringstream m;
+        if (samples_ == 0) {
+            m << "axis deviation: no samples";
+        } else {
+            m << "axis deviation: max " << max_deg_ << " deg over " << samples_ << " samples; first above "
+              << warn_deg_ << " deg at t=" << first_above_warn_t_ << " s (" << count_above_warn_
+              << " samples), first above " << tol_deg_ << " deg at t=" << first_above_tol_t_ << " s ("
+              << count_above_tol_ << " samples) [-1 = never]";
+        }
+        if (ignored_ > 0) m << "; " << ignored_ << " non-finite samples ignored";
+        return m.str();
+    }
+
+private:
+    double warn_deg_, tol_deg_;
+    std::uint64_t samples_ = 0, ignored_ = 0;
+    std::uint64_t count_above_warn_ = 0, count_above_tol_ = 0;
+    double max_deg_ = 0.0;
+    double first_above_warn_t_ = -1.0, first_above_tol_t_ = -1.0;
 };
 
 // ---------------------------------------------------------------------------------------
