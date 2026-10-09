@@ -101,11 +101,11 @@ ros2 launch free_target_object free_target_object.launch.py \
   x:=0.6 y:=0.0 z:=0.5
 ```
 
-With a custom mass / size (inertia auto-derived as a solid homogeneous box):
+With a custom mass / size (`ixx iyy izz = 0` ⇒ inertia from the solid homogeneous-box formula; otherwise the CAD inertia stays):
 
 ```bash
 ros2 launch free_target_object free_target_object.launch.py \
-  mass:=5.0 size_x:=0.2 size_y:=0.2 size_z:=0.2 x:=0.6 z:=0.5
+  mass:=5.0 size_x:=0.2 size_y:=0.2 size_z:=0.2 ixx:=0 iyy:=0 izz:=0 x:=0.6 z:=0.5
 ```
 
 Rotating target (see limitation below):

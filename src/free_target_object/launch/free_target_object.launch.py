@@ -110,8 +110,8 @@ _ARG_DEFAULTS = {
     "collar_segments": ("24", "Number of boxes approximating the hollow collar cylinder"),
     # Same names/defaults as satellite_grasp_planner's CubeSatelliteModel::Params;
     # tools/check_collar_defaults.py fails if they diverge.
-    "collar_radius_m": ("0.05", "Collar OUTER radius [m]"),
-    "wall_thickness_m": ("0.015", "Collar radial wall thickness [m]"),
+    "collar_radius_m": ("0.0725", "Collar OUTER radius [m]"),
+    "wall_thickness_m": ("0.009", "Collar radial wall thickness [m]"),
     "standoff_m": ("0.08", "Collar length along +x from the cube face [m]"),
 }
 
