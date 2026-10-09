@@ -144,6 +144,119 @@ def wait_for_controller(launch_log_path, controller_name="cartesian_impedance_co
     return False
 
 
+# Posa di partenza: q6 atteso [rad] per ogni valore di FRANKA_START_POSE
+# (src/franka_description_overrides/franka_arm.ros2_control.xacro).
+EXPECTED_Q6_RAD = {
+    "ready": math.pi / 2.0,
+    "ready_q6pi": math.pi,
+    "capture": 1.2155,
+}
+BUILD_PACKAGES = ["haptic_dmp_learning", "satellite_grasp_planner", "franka_cartesian_control"]
+
+
+def check_start_pose(q6_rad, requested_pose, tol_rad=0.01):
+    """Confronta q6 letto con quello atteso dalla posa richiesta. Ritorna (ok, messaggio)."""
+    expected = EXPECTED_Q6_RAD.get(requested_pose)
+    if expected is None:
+        return False, (f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = {q6_rad} "
+                       f"(posa richiesta sconosciuta; valori noti: {sorted(EXPECTED_Q6_RAD)})")
+    if q6_rad is None or not math.isfinite(q6_rad):
+        return False, f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = NON LETTO"
+    if abs(q6_rad - expected) > tol_rad:
+        return False, f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = {q6_rad:.4f}"
+    return True, (f"Posa di partenza OK: richiesta {requested_pose}, q6 = {q6_rad:.4f} rad "
+                  f"(atteso {expected:.4f}, tol {tol_rad})")
+
+
+def read_joint6_from_joint_states(timeout_sec=15.0):
+    """Legge un campione di /joint_states e ritorna q6 (fer_joint6) in rad, o None al timeout."""
+    try:
+        import rclpy
+        from rclpy.node import Node
+        from sensor_msgs.msg import JointState
+        if not rclpy.ok():
+            rclpy.init()
+    except Exception:
+        return None
+    holder = {}
+
+    class _JsNode(Node):
+        def __init__(self):
+            super().__init__('start_pose_guard')
+            self.sub = self.create_subscription(JointState, '/joint_states', self.cb, 10)
+        def cb(self, msg):
+            pos = dict(zip(msg.name, msg.position))
+            if 'fer_joint6' in pos:
+                holder['q6'] = float(pos['fer_joint6'])
+
+    node = _JsNode()
+    try:
+        t_end = time.time() + timeout_sec
+        while 'q6' not in holder and time.time() < t_end:
+            rclpy.spin_once(node, timeout_sec=0.1)
+    finally:
+        node.destroy_node()
+    return holder.get('q6')
+
+
+def extract_joint6_initial_value_lines(launch_log_path):
+    """Dal log di launch estrae le righe del giunto 6 (sesta occorrenza di 'found initial value'
+    e la riga 'Loading joint' che la precede). Ritorna (righe, valore) oppure (["NON TROVATO"], None)."""
+    try:
+        with open(launch_log_path, "r", errors="ignore") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return ["NON TROVATO"], None
+    count = 0
+    for i, line in enumerate(lines):
+        if "found initial value" in line:
+            count += 1
+            if count == 6:
+                block = []
+                for j in range(i, -1, -1):
+                    if "Loading joint" in lines[j]:
+                        block.append(lines[j].strip())
+                        break
+                block.append(line.strip())
+                try:
+                    value = float(line.split("found initial value:")[-1].strip())
+                except ValueError:
+                    value = None
+                return block, value
+    return ["NON TROVATO"], None
+
+
+def run_metadata():
+    """git HEAD, flag dirty (file tracciati modificati) e CMAKE_BUILD_TYPE dei pacchetti C++."""
+    def _git(*args):
+        try:
+            res = subprocess.run(["git", "-C", WS_ROOT] + list(args), capture_output=True, text=True, timeout=20)
+            return res.stdout.strip() if res.returncode == 0 else None
+        except Exception:
+            return None
+
+    head = _git("rev-parse", "HEAD")
+    porcelain = _git("status", "--porcelain", "--untracked-files=no")
+    build_types = {}
+    for pkg in BUILD_PACKAGES:
+        cache = os.path.join(WS_ROOT, "build", pkg, "CMakeCache.txt")
+        value = "NON TROVATO"
+        try:
+            with open(cache, "r", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("CMAKE_BUILD_TYPE:"):
+                        value = line.split("=", 1)[1].strip() or "(vuoto)"
+                        break
+        except OSError:
+            pass
+        build_types[pkg] = value
+    return {
+        "git_head": head if head else "NON TROVATO",
+        "git_dirty": (len(porcelain) > 0) if porcelain is not None else None,
+        "cmake_build_type": build_types,
+    }
+
+
 class SimTimeClockMonitor:
     """Monitora il tempo simulato da /clock usando un nodo rclpy in un background thread."""
     def __init__(self):

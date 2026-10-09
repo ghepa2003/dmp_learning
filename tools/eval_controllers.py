@@ -50,7 +50,8 @@ def run_canonical_evaluation(
     start_pose="ready",
     fingers="fixed",
     suffix="_canon1008",
-    force=False
+    force=False,
+    spawn_check_only=False
 ):
     # 1. Controllo directory di output e run esistente
     os.makedirs(output_dir, exist_ok=True)
@@ -90,6 +91,16 @@ def run_canonical_evaluation(
     print(f"  Output Dir:    {output_dir}")
     print("=================================================================")
 
+    # Metadati di tracciabilita' della run (git, tipo di build) e ambiente richiesto al launch
+    meta = ec.run_metadata()
+    run_info = {
+        "run_metadata": meta,
+        "FRANKA_START_POSE": start_pose,
+        "FRANKA_FINGERS": fingers,
+        "spawn_check_only": bool(spawn_check_only),
+    }
+    print(f"  Metadati:      git={meta['git_head']} dirty={meta['git_dirty']} build_type={meta['cmake_build_type']}")
+
     # 2. Setup e avvio ambiente con ripristino garantito dello YAML
     ec.clean_processes()
     ec.setup_bringup_share()
@@ -127,7 +138,48 @@ def run_canonical_evaluation(
             ec.clean_processes()
             return None
 
-        print("Controller ATTIVO! Avvio registrazione bag...")
+        # Guardia sulla posa di partenza: prima di bag, executor e qualsiasi target
+        print("Controller ATTIVO! Verifica posa di partenza (q6 da /joint_states)...", flush=True)
+        q6_read = ec.read_joint6_from_joint_states()
+        j6_lines, j6_init = ec.extract_joint6_initial_value_lines(launch_log)
+        guard_ok, guard_msg = ec.check_start_pose(q6_read, start_pose)
+        run_info.update({
+            "q6_rad": q6_read,
+            "found_initial_value_j6_lines": j6_lines,
+            "start_pose_guard": {"ok": guard_ok, "message": guard_msg},
+        })
+        print(f"  FRANKA_START_POSE={start_pose} FRANKA_FINGERS={fingers}")
+        print(f"  q6 letto = {q6_read}")
+        for l in j6_lines:
+            print(f"  [launch log, giunto 6] {l}")
+        print(f"  Guardia: {guard_msg}", flush=True)
+
+        if (not guard_ok) or spawn_check_only:
+            ec.clean_processes()
+            if guard_ok:
+                reason = "controllo di sola posa di spawn (--spawn-check-only): nessun executor, nessuna traiettoria"
+            else:
+                reason = guard_msg
+            summary = dict(run_info)
+            summary.update({
+                "run_name": run_name, "controller_type": controller_type,
+                "kt": kt, "dt": dt, "start_pose": start_pose, "fingers": fingers,
+                "is_valid": bool(guard_ok), "validation_reason": reason,
+            })
+            json_path = os.path.join(output_dir, f"{run_name}_metrics.json")
+            with open(json_path, "w") as f_json:
+                json.dump(summary, f_json, indent=2)
+            print("\n=================================================================")
+            print(f"RISULTATI RUN: {run_name}")
+            print("=================================================================")
+            print(f"Stato Validità:          {'VALIDA' if guard_ok else 'INVALIDA'} ({reason})")
+            print(f"Guardia posa di partenza: {guard_msg}")
+            print(f"Metadati:                {meta}")
+            print(f"Metriche salvate in:     {json_path}")
+            print("=================================================================\n")
+            return summary
+
+        print("Avvio registrazione bag...")
         bag_cmd = (
             f"source /opt/ros/humble/setup.bash && "
             f"ros2 bag record -o {bag_path} "
@@ -258,6 +310,7 @@ def run_canonical_evaluation(
     metrics["dt"] = dt
     metrics["start_pose"] = start_pose
     metrics["fingers"] = fingers
+    metrics.update(run_info)
 
     # Salva CSV dei record estratti
     csv_out_path = os.path.join(output_dir, f"{run_name}_records.csv")
@@ -284,6 +337,10 @@ def run_canonical_evaluation(
     print(f"RISULTATI RUN: {run_name}")
     print("=================================================================")
     print(f"Stato Validità:          {'VALIDA' if is_valid else 'INVALIDA'} ({validation_reason})")
+    print(f"Guardia posa di partenza: {run_info['start_pose_guard']['message']}")
+    print(f"Posa/dita/q6:            FRANKA_START_POSE={start_pose} FRANKA_FINGERS={fingers} q6={run_info['q6_rad']}")
+    print(f"Giunto 6 (launch log):   {run_info['found_initial_value_j6_lines']}")
+    print(f"Metadati:                {meta}")
     print(f"Tempo sim effettivo:     {metrics['t_sim_ultimo']:.3f} s (tau: {metrics['tau_nom']:.3f} s, frazione: {metrics['completed_frac']*100:.1f}%)")
     print(f"RTF medio:               {metrics['rtf']:.3f}")
     print(f"Max gap target_pose:     {metrics['max_gap_tgt_ms']:.2f} ms")
@@ -320,10 +377,13 @@ def main():
     parser.add_argument("--dt", type=float, default=10.0, help="Smorzamento traslazionale Dt [Ns/m]")
     parser.add_argument("--kr", type=float, default=150.0, help="Rigidezza rotazionale Kr [Nm/rad]")
     parser.add_argument("--dr", type=float, default=1.0, help="Smorzamento rotazionale Dr [Nms/rad]")
-    parser.add_argument("--start-pose", default="ready", help="Posa di spawn (es. ready, ready_q6pi)")
+    parser.add_argument("--start-pose", default="ready", help="Posa di spawn (ready, ready_q6pi, capture)")
     parser.add_argument("--fingers", default="fixed", choices=["fixed", "prismatic"], help="Tipo giunto dita")
     parser.add_argument("--suffix", default="_canon1008", help="Suffisso per il nome della run")
     parser.add_argument("--force", action="store_true", help="Forza sovrascrittura della run se già presente")
+    parser.add_argument("--spawn-check-only", action="store_true",
+                        help="Dopo la guardia sulla posa di partenza scrive riepilogo e metrics.json, chiude Gazebo e termina "
+                             "senza avviare executor né traiettorie")
 
     args = parser.parse_args()
     run_canonical_evaluation(
@@ -336,7 +396,8 @@ def main():
         start_pose=args.start_pose,
         fingers=args.fingers,
         suffix=args.suffix,
-        force=args.force
+        force=args.force,
+        spawn_check_only=args.spawn_check_only
     )
 
 
