@@ -6,6 +6,7 @@ Include gestione processi, sincronizzazione clock/sim_time, estrazione bag, cine
 
 import os
 import sys
+import hashlib
 import time
 import subprocess
 import signal
@@ -24,6 +25,19 @@ CONFIG_YAML_INSTALL = os.path.join(BRINGUP_SHARE, "config/franka_gazebo_controll
 
 WEIGHTS_PRODMP = os.path.join(WS_ROOT, "runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml")
 ORIENTATION_PATH = os.path.join(WS_ROOT, "reach_task_baseline_nbasis200.yaml")
+
+# Override xacro: file nel repo -> file installato (percorsi di scripts/setup_franka_description_overrides.sh)
+FRANKA_DESCRIPTION_SRC = os.path.join(FRANKA_WS, "src/franka_ros2/franka_description")
+XACRO_OVERRIDES = {
+    "franka_hand.xacro": (
+        os.path.join(WS_ROOT, "src/franka_description_overrides/franka_hand.xacro"),
+        os.path.join(FRANKA_DESCRIPTION_SRC, "end_effectors/common/franka_hand.xacro"),
+    ),
+    "franka_arm.ros2_control.xacro": (
+        os.path.join(WS_ROOT, "src/franka_description_overrides/franka_arm.ros2_control.xacro"),
+        os.path.join(FRANKA_DESCRIPTION_SRC, "robots/common/franka_arm.ros2_control.xacro"),
+    ),
+}
 
 
 # ==============================================================================
@@ -52,6 +66,60 @@ def clean_processes():
     for c in cmds:
         subprocess.run(c, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
+
+
+def _sha256_file(path):
+    """(sha256 hex, percorso risolto, None) oppure (None, percorso risolto, motivo) se illeggibile."""
+    real = os.path.realpath(path)
+    try:
+        h = hashlib.sha256()
+        with open(real, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest(), real, None
+    except OSError as e:
+        return None, real, f"{type(e).__name__}: {e.strerror or e}"
+
+
+def check_overrides_in_sync():
+    """Confronta lo sha256 degli override xacro nel repo con quelli installati in franka_description.
+
+    Ritorna (ok, dettagli): ok = True (allineati), False (almeno uno diverso), None (NON VERIFICABILE:
+    nessuna differenza trovata ma almeno un file illeggibile). dettagli = {"status", "messages", "files"}.
+    """
+    files = {}
+    messages = []
+    any_diff = False
+    any_unverifiable = False
+    for name, (repo_path, inst_path) in XACRO_OVERRIDES.items():
+        repo_sha, repo_real, repo_err = _sha256_file(repo_path)
+        inst_sha, inst_real, inst_err = _sha256_file(inst_path)
+        entry = {"repo_path": repo_real, "installed_path": inst_real,
+                 "sha256_repo": repo_sha, "sha256_installed": inst_sha}
+        if repo_sha is None or inst_sha is None:
+            entry["status"] = "NON VERIFICABILE"
+            reason = "; ".join(r for r in (
+                f"repo: {repo_err}" if repo_err else None,
+                f"installato ({inst_real}): {inst_err}" if inst_err else None) if r)
+            entry["reason"] = reason
+            any_unverifiable = True
+            messages.append(f"NON VERIFICABILE: {name} ({reason})")
+        elif repo_sha != inst_sha:
+            entry["status"] = "DIVERSO"
+            any_diff = True
+            messages.append(
+                f"OVERRIDE NON ALLINEATO: {name} (sha repo {repo_sha} sha installato {inst_sha}). "
+                f"Esegui scripts/setup_franka_description_overrides.sh")
+        else:
+            entry["status"] = "ALLINEATO"
+        files[name] = entry
+    if any_diff:
+        ok, status = False, "NON ALLINEATO"
+    elif any_unverifiable:
+        ok, status = None, "NON VERIFICABILE"
+    else:
+        ok, status = True, "ALLINEATO"
+    return ok, {"status": status, "messages": messages, "files": files}
 
 
 def setup_bringup_share():

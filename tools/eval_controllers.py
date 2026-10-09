@@ -101,6 +101,31 @@ def run_canonical_evaluation(
     }
     print(f"  Metadati:      git={meta['git_head']} dirty={meta['git_dirty']} build_type={meta['cmake_build_type']}")
 
+    # Override xacro: l'installato deve coincidere col repo, prima di avviare qualsiasi cosa
+    ov_ok, ov_details = ec.check_overrides_in_sync()
+    meta["xacro_overrides"] = ov_details
+    print(f"  Override xacro: {ov_details['status']}")
+    for m in ov_details["messages"]:
+        print(f"  {m}")
+    if ov_ok is False:
+        reason = "; ".join(ov_details["messages"])
+        summary = dict(run_info)
+        summary.update({
+            "run_name": run_name, "controller_type": controller_type,
+            "kt": kt, "dt": dt, "start_pose": start_pose, "fingers": fingers,
+            "is_valid": False, "validation_reason": reason,
+        })
+        json_path = os.path.join(output_dir, f"{run_name}_metrics.json")
+        with open(json_path, "w") as f_json:
+            json.dump(summary, f_json, indent=2)
+        print("\n=================================================================")
+        print(f"RISULTATI RUN: {run_name}")
+        print("=================================================================")
+        print(f"Stato Validità:          INVALIDA ({reason})")
+        print(f"Metriche salvate in:     {json_path}")
+        print("=================================================================\n")
+        return summary
+
     # 2. Setup e avvio ambiente con ripristino garantito dello YAML
     ec.clean_processes()
     ec.setup_bringup_share()
