@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="hand">
+  <!-- Finger joint mode, selected with the FRANKA_FINGERS env var (default: fixed):
+         fixed       rigid fingers at joint position 0 (pads touching).
+         fixed_open  rigid fingers shifted to an open position; both joints are fixed, no gripper motion.
+                     Each joint origin is translated by d = finger_gap_m / 2 along its own axis
+                     (+y leftfinger, -y rightfinger). finger_gap_m = xacro arg, default 0.050 [m].
+         prismatic   mimic prismatic fingers, driven by the gripper_position_cmd JointPositionController.
+       Gap between the inner faces of the pads (rubber tips), computed from the collision boxes below:
+         joint position 0      : -0.04 mm (pads touching, negligible overlap)
+         0.04 (original model) :  80 mm
+         0.08 (this override)  : 160 mm
+       (gap = gap0 + 2q; the 10 mm / 70 mm figures of the old notes were wrong.)
+       fixed_open uses gap0 = 0, so the resulting gap is finger_gap_m (to within 0.04 mm).
+       The TCP (hand_tcp_joint) is attached to the hand link and does not depend on the fingers mode. -->
+  <xacro:arg name="finger_gap_m" default="0.050" />
   <!-- safety_distance: Minimum safety distance in [m] by which the collision volumes are expanded and which is enforced during robot motions -->
   <xacro:macro name="franka_hand" params="connected_to:='' arm_id ee_id ee_inertials rpy:='0 0 0' xyz:='0 0 0' tcp_xyz:='0 0 0.1034' tcp_rpy:='0 0 0' safety_distance:=0 gazebo:=false description_pkg:=franka_description with_sc:=false">
     <xacro:unless value="${connected_to == ''}">
@@ -101,12 +115,13 @@
         <xacro:ee-inertials name="rightfinger" />
       </xacro:if>
     </link>
-    <!-- fingers joint mode, selected with the FRANKA_FINGERS env var (default: fixed) -->
+    <!-- fingers joint mode, selected with the FRANKA_FINGERS env var (default: fixed), see the header -->
     <xacro:property name="fingers_mode" value="$(optenv FRANKA_FINGERS fixed)"/>
     <xacro:property name="fingers_modes" value="${dict(
         fixed='fixed',
+        fixed_open='fixed_open',
         prismatic='prismatic')}"/>
-    <xacro:property name="finger_joint_type" value="${fingers_modes.get(fingers_mode) or fingers_modes['ERROR: FRANKA_FINGERS must be one of fixed, prismatic (got ' + fingers_mode + ')']}"/>
+    <xacro:property name="finger_joint_type" value="${fingers_modes.get(fingers_mode) or fingers_modes['ERROR: FRANKA_FINGERS must be one of fixed, fixed_open, prismatic (got ' + fingers_mode + ')']}"/>
 
     <xacro:if value="${finger_joint_type == 'fixed'}">
       <joint name="${arm_id}_finger_joint1" type="fixed">
@@ -118,6 +133,18 @@
         <parent link="${arm_id}_hand" />
         <child link="${arm_id}_rightfinger" />
         <origin xyz="0 0 0.0584" rpy="0 0 0" />
+      </joint>
+    </xacro:if>
+    <xacro:if value="${finger_joint_type == 'fixed_open'}">
+      <joint name="${arm_id}_finger_joint1" type="fixed">
+        <parent link="${arm_id}_hand" />
+        <child link="${arm_id}_leftfinger" />
+        <origin xyz="0 ${$(arg finger_gap_m) / 2} 0.0584" rpy="0 0 0" />
+      </joint>
+      <joint name="${arm_id}_finger_joint2" type="fixed">
+        <parent link="${arm_id}_hand" />
+        <child link="${arm_id}_rightfinger" />
+        <origin xyz="0 ${-$(arg finger_gap_m) / 2} 0.0584" rpy="0 0 0" />
       </joint>
     </xacro:if>
     <xacro:if value="${finger_joint_type == 'prismatic'}">

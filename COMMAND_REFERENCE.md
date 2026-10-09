@@ -93,6 +93,34 @@ bash /root/thesis_ws/scripts/setup_franka_description_overrides.sh
 - **Promemoria dello script**: senza `load_gripper:=true` al bringup la mano non
   viene caricata affatto, indipendentemente da questo override.
 
+#### Modalità dita: `FRANKA_FINGERS` (`fixed` | `fixed_open` | `prismatic`)
+
+Variabile d'ambiente letta da `franka_hand.xacro` al momento della generazione dell'URDF
+(default `fixed`; qualsiasi altro valore → errore xacro `FRANKA_FINGERS must be one of fixed, fixed_open, prismatic`).
+
+| Valore | Giunti `fer_finger_joint1/2` | Luce tra le facce interne dei pad |
+|---|---|---|
+| `fixed` | fixed, posizione 0 | −0.04 mm (pad a contatto) |
+| `fixed_open` | fixed, origin spostata di ±`finger_gap_m`/2 lungo y (+y leftfinger, −y rightfinger) | `finger_gap_m` (default 0.050 → 50 mm; 0.040 → 40 mm) |
+| `prismatic` | prismatic con mimic, limiti 0–0.08 | 2·q: 160 mm a q = 0.08 (80 mm a q = 0.04, modello originale) |
+
+- **`fixed_open`**: dita rigide già aperte. Serve a tenere le dita a distanza fissa senza deriva
+  prismatica e senza gripper (nessun moto, nessun comando su `/gripper_position_cmd`). TCP
+  (`fer_hand_tcp`) e resto della mano invariati; il centro dei pad resta a 0.25 mm dal TCP in z.
+- **Correzione**: i valori ~10 mm (a 0) e ~70 mm (a 0.08) riportati nei diari erano sbagliati.
+  Dalle collisioni di `franka_hand.xacro` (rubber tip: centro y 7.58 mm, spessore 15.2 mm) la luce
+  è −0.04 mm a 0, 80 mm a 0.04 e 160 mm a 0.08.
+- **Argomento xacro** `finger_gap_m` (default 0.050 m, solo per `fixed_open`), es.
+  `xacro ... finger_gap_m:=0.040`. Il launch Python non lo passa: per cambiarlo serve
+  aggiungerlo agli `mappings` o editare il default nell'xacro.
+- **Log con `fixed` e `fixed_open`** (due messaggi innocui, già visti con `fixed`):
+  - `[gz_ros2_control] Skipping joint in the URDF named 'fer_finger_joint1' which is not in the gazebo model.`
+    (e idem `joint2`): i giunti fixed non esistono nel modello Gazebo;
+  - `[JointPositionController.cc:251] Could not find joint with name [fer_finger_joint1]`
+    (e `joint2`): i due plugin `JointPositionController` in `franka_arm.ros2_control.xacro` sono
+    inclusi con la sola condizione `gazebo`, non dipendono dal tipo di giunto. Il bridge
+    `/gripper_position_cmd` parte ma non ha giunti a cui arrivare.
+
 ### 1.4 Sequenza "da zero"
 
 ```bash
@@ -643,7 +671,7 @@ ros2 param get /robot_state_publisher robot_description
 ros2 param get /robot_state_publisher robot_description \
   | grep -oE '<joint name="fer_finger_joint[12]"[^>]*type="[a-z]+"'
 ```
-- **OK (gripper attivo)**: `type="prismatic"`. `type="fixed"` → l'override §1.3 non
+- **OK (gripper attivo)**: `type="prismatic"`. `type="fixed"` → con `FRANKA_FINGERS=fixed`/`fixed_open` è atteso; altrimenti l'override §1.3 non
   è stato applicato o il bringup è partito senza ricaricare la descrizione.
 
 ### 6.5 Catturare e filtrare i log del bringup
@@ -729,5 +757,5 @@ find /root/thesis_ws/src/haptic_dmp_learning/src -newer \
 | `src/haptic_dmp_learning/config/params.yaml` | Parametri per `haptic_dmp_wrapper_node`, `csv_master_pose_player_node`, `live_demo_recorder_node`. `n_basis: 200`, `alpha_x: 4.6`, `alpha_z: 25.0`, `beta_z: 6.25`. Path CSV del player: `/root/thesis_ws/real_demo/reach_task_baseline.csv`. |
 | `src/haptic_dmp_learning/config/dmp_features.yaml` | `regression.method: ridge`, `ridge_lambda: 1.0e-6`, `second_order_canonical_system: false`, `velocity_filter.enabled: true`, `window_sec_1/2: 0.20`. |
 | `src/franka_gazebo_overrides/franka_gazebo_controllers.yaml` | Sorgente di verità dei gain controller. Impedance in uso: `translational_stiffness: 200`, `translational_damping: 10`, `rotational_stiffness: 150`, `rotational_damping: 1`, `nullspace_stiffness: 0.2`, `joint1_nullspace_stiffness: 100`, `enable_nullspace_leak_diagnostics: true`, `enable_contact_force_estimation: true`. `update_rate: 1000`. |
-| `src/franka_description_overrides/franka_hand.xacro` | `fer_finger_joint1/2` come `prismatic` (lower 0.0 / upper 0.04), `<mimic>` sul joint1. |
+| `src/franka_description_overrides/franka_hand.xacro` | `fer_finger_joint1/2` come `prismatic` (lower 0.0 / upper 0.08), `<mimic>` sul joint1. |
 | `src/franka_description_overrides/franka_arm.ros2_control.xacro` | Blocco `<ros2_control>` gripper + plugin `JointPositionController` su topic `gripper_position_cmd`. |
