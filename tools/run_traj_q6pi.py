@@ -12,6 +12,7 @@ Esegue 3 run indipendenti, salva tutti i dati in traj_q6pi_1007 e a fine prova r
 franka_hand.xacro dall'override.
 """
 
+import argparse
 import os
 import sys
 import time
@@ -29,8 +30,8 @@ FRANKA_WS = "/root/ros_workspaces/ros2/franka_ws"
 BRINGUP_SHARE = os.path.join(FRANKA_WS, "install/franka_gazebo_bringup/share/franka_gazebo_bringup")
 CONFIG_YAML = os.path.join(FRANKA_WS, "src/franka_ros2/franka_gazebo/franka_gazebo_bringup/config/franka_gazebo_controllers.yaml")
 
-OUT_DIR = "/root/thesis_ws/traj_q6pi_1007"
-BAGS_DIR = os.path.join(OUT_DIR, "bags")
+OUT_DIR = None   # set in main() from the command line
+BAGS_DIR = None
 
 # Limiti giunto Franka Emika Research 3 (rad)
 Q_MIN = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
@@ -793,8 +794,17 @@ def run_single_experiment(run_idx=1):
 
 
 def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
-    os.makedirs(BAGS_DIR, exist_ok=True)
+    global OUT_DIR, BAGS_DIR
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0] if __doc__ else None)
+    parser.add_argument("out_dir", help="Cartella di output (non deve esistere)")
+    args = parser.parse_args()
+    OUT_DIR = os.path.abspath(args.out_dir)
+    BAGS_DIR = os.path.join(OUT_DIR, "bags")
+    if os.path.exists(OUT_DIR):
+        print(f"[ERRORE] La cartella di output esiste gia': {OUT_DIR}. Scegli un percorso nuovo.", file=sys.stderr)
+        sys.exit(2)
+    os.makedirs(OUT_DIR)
+    os.makedirs(BAGS_DIR)
 
     print("=================================================================")
     print("CONFRONTO READY_Q6PI + TRAIETTORIA 100mm + TENUTA (3 RUNS)")
