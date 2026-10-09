@@ -31,6 +31,8 @@
     ixx/iyy/izz       inertia about the origin = CoM [kg m^2], MODEL frame (CAD tensor permuted,
     ixy/ixz/iyz       see below). Defaults are the real satellite's. ixx/iyy/izz = 0 => use the
                       solid-homogeneous-box formula (and the products are then still ixy/ixz/iyz).
+    satellite_color   "r g b a" of the mesh visual (ambient = diffuse) (default 0.85 0.45 0.10 1)
+    show_rotation_marker  red 0.10 x 0.02 x 0.01 m bar on the +z face, visual only (default false)
     mesh_uri          visual mesh (satellite_m.stl, CAD frame); empty => box visual + collar boxes
                       as visual proxy. The launch always passes the absolute file:// URI.
     use_velocity_control  emit the VelocityControl plugin   (default false)
@@ -68,6 +70,8 @@
   <xacro:arg name="ixz" default="2.296e-8"/>
   <xacro:arg name="iyz" default="2.345e-9"/>
   <xacro:arg name="mesh_uri" default=""/>
+  <xacro:arg name="satellite_color" default="0.85 0.45 0.10 1"/>
+  <xacro:arg name="show_rotation_marker" default="false"/>
   <xacro:arg name="use_velocity_control" default="false"/>
   <xacro:arg name="initial_linear" default="0 0 0"/>
   <xacro:arg name="initial_angular" default="0 0 0"/>
@@ -223,6 +227,11 @@
               <uri>$(arg mesh_uri)</uri>
             </mesh>
           </geometry>
+          <material>
+            <ambient>$(arg satellite_color)</ambient>
+            <diffuse>$(arg satellite_color)</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
         </visual>
       </xacro:if>
       <xacro:unless value="${use_mesh}">
@@ -239,6 +248,24 @@
           </material>
         </visual>
       </xacro:unless>
+
+      <!-- Optional rotation marker: thin red bar flat on the +z face (spin axis), near the +y edge.
+           Visual only: no collision, no inertial contribution. -->
+      <xacro:if value="${'$(arg show_rotation_marker)'.lower() == 'true'}">
+        <visual name="rotation_marker">
+          <pose>0 ${0.5 * sy - 0.02} ${0.5 * sz + 0.005} 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.10 0.02 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.90 0.05 0.05 1</ambient>
+            <diffuse>0.90 0.05 0.05 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </xacro:if>
 
       <xacro:if value="${with_collar and collar_check}">
         <xacro:collar_segment i="0"/>

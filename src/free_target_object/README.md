@@ -126,6 +126,8 @@ ros2 launch free_target_object free_target_object.launch.py \
 | `mass` | `` (xacro: `4.412`) | link mass [kg]; empty ⇒ xacro default (single point) |
 | `size_x size_y size_z` | `0.150` | cube edge lengths [m] |
 | `ixx iyy izz ixy ixz iyz` | `` (xacro: CAD values) | inertia about the origin = CoM [kg m²], model frame; empty ⇒ xacro default; `ixx/iyy/izz = 0` ⇒ homogeneous-box formula from `mass` + `size_*` |
+| `satellite_color` | `0.85 0.45 0.10 1` | `r g b a` of the mesh visual (ambient = diffuse, specular fixed `0.3 0.3 0.3 1`); quote it: `satellite_color:="0.2 0.5 0.9 1"` |
+| `show_rotation_marker` | `false` | add a red 0.10 × 0.02 × 0.01 m bar on the +z face (spin axis), near the +y edge, to see the rotation by eye; visual only, no collision, no inertial |
 | `use_mesh` | `true` | visual = CAD mesh `models/satellite_m.stl`; collision stays primitive |
 | `wx wy wz` | `0.0` | initial angular velocity [rad/s] (world frame) |
 | `vx vy vz` | `0.0` | initial linear velocity [m/s] (world frame) |
