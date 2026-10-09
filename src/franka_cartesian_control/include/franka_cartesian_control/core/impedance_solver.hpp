@@ -58,7 +58,8 @@ public:
         // Nullspace posture compliance gains
         double nullspace_stiffness = 0.2;          ///< Uniform nullspace stiffness (Nm/rad)
         double joint1_nullspace_stiffness = 100.0; ///< Pre-multiplier for joint 1 nullspace stiffness
-        double nullspace_pinv_damping = 0.05;      ///< Regularization lambda for (J^T)^# pseudo-inverse
+        // Default matches the deployed value in src/franka_gazebo_overrides/franka_gazebo_controllers.yaml.
+        double nullspace_pinv_damping = 0.02;      ///< Regularization lambda for (J^T)^# pseudo-inverse
 
         // Actuator safety
         double delta_tau_max = 1.0;                ///< Maximum torque rate limit per cycle (Nm/cycle)
