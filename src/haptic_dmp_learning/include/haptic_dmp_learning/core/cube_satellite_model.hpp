@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <optional>
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -18,7 +19,7 @@ struct GraspTargetPose {
  * @brief Pure geometry of the cube-shaped target satellite (replaces the ring model).
  *
  * The cube spins about axis_world through center_world by theta. A circular collar
- * (radius collar_radius_m) sits at standoff_m in front of a lateral face; the four grasp
+ * (outer radius collar_radius_m; grasp points at grasp_radius_m) sits at standoff_m in front of a lateral face; the four grasp
  * points lie on it at phi_k = k*90 deg. Collar frame: u_body = n x axis (horizontal),
  * v_body = axis (vertical), r_k = cos(phi_k) u + sin(phi_k) v.
  *
@@ -30,11 +31,15 @@ public:
     struct Params {
         Eigen::Vector3d center_world = Eigen::Vector3d::Zero();
         Eigen::Vector3d axis_world = Eigen::Vector3d::UnitZ();       // normalized at construction
-        double cube_side_m = 0.20;
+        double cube_side_m = 0.150;       // real satellite (CAD)
         double standoff_m = 0.08;         // along the normal, beyond the face
-        double collar_radius_m = 0.05;    // Phi10cm / 2
+        double collar_radius_m = 0.0725;  // OUTER radius of the hollow cylinder (collision, SDF)
         Eigen::Vector3d face_normal_body = Eigen::Vector3d::UnitX();  // must be lateral
-        double wall_thickness_m = 0.015;  // hollow-cylinder wall, typical 1-2 cm, to be calibrated
+        double wall_thickness_m = 0.009;  // hollow-cylinder wall (inner radius 0.0635)
+        /// Radius of the grasp points on the rim (mid-wall, 0.068 in the real satellite). Used ONLY by
+        /// graspPoseAt(). Unset (default) = collar_radius_m, which replicates the previous behaviour
+        /// where one radius served both purposes; collar_radius_m stays the outer radius of the cylinder.
+        std::optional<double> grasp_radius_m;
     };
 
     /// Normalizes axis_world / face_normal_body. Throws std::invalid_argument if either has

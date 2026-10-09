@@ -114,6 +114,8 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) return std::nullopt;
         return v.get<double>();
     };
+    // Optional: unset => grasp points at collar_radius_m (CubeSatelliteModel::Params default).
+    cube_geometry_.grasp_radius_m = opt_double("cube_geometry.grasp_radius_m");
     selection_overrides_.scan_step_deg = opt_double("scan_step_deg");
     selection_overrides_.w_hat_upper_bound = opt_double("w_hat_upper_bound");
     selection_overrides_.psi_tol_deg = opt_double("psi_tol_deg");

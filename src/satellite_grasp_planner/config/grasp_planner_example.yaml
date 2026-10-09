@@ -35,11 +35,14 @@ grasp_planner_node:
     # checkCubeCenterMatchesRotationCenter/checkCubeAxisMatchesRotationAxis can catch a typo'd mismatch.
     cube_geometry.center_world: [0.75, 0.0, 0.35]      # MUST equal satellite_rotation_center
     cube_geometry.axis_world: [0.0, 0.0, 1.0]           # MUST equal satellite_rotation_axis
-    cube_geometry.cube_side_m: 0.20
+    cube_geometry.cube_side_m: 0.150
     cube_geometry.standoff_m: 0.08
-    cube_geometry.collar_radius_m: 0.05
+    cube_geometry.collar_radius_m: 0.0725   # OUTER radius of the collar cylinder (collision, SDF)
+    # Radius of the grasp points on the rim (mid-wall). Optional: if omitted it defaults to collar_radius_m,
+    # which replicates the behaviour from before this parameter existed.
+    cube_geometry.grasp_radius_m: 0.068
     cube_geometry.face_normal_body: [1.0, 0.0, 0.0]
-    cube_geometry.wall_thickness_m: 0.015
+    cube_geometry.wall_thickness_m: 0.009
     omega_consistency_tol_deg_per_s: 0.1
     q_ref_consistency_tol_deg: 0.5
     robot_base_world_tol_m: 1.0e-6

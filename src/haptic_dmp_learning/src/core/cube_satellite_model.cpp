@@ -57,7 +57,7 @@ GraspTargetPose CubeSatelliteModel::graspPoseAt(GraspPointId k, double theta_rad
     const Eigen::Vector3d r_k = radialDirectionBody(k);
     const Eigen::Vector3d p_body =
         (params_.cube_side_m / 2.0 + params_.standoff_m) * params_.face_normal_body +
-        params_.collar_radius_m * r_k;
+        params_.grasp_radius_m.value_or(params_.collar_radius_m) * r_k;
 
     const Eigen::Vector3d z_tcp = -(R * params_.face_normal_body);
     const Eigen::Vector3d y_tcp = -(R * r_k);
