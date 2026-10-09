@@ -378,7 +378,7 @@ def main():
     parser.add_argument("--kr", type=float, default=150.0, help="Rigidezza rotazionale Kr [Nm/rad]")
     parser.add_argument("--dr", type=float, default=1.0, help="Smorzamento rotazionale Dr [Nms/rad]")
     parser.add_argument("--start-pose", default="ready", help="Posa di spawn (ready, ready_q6pi, capture)")
-    parser.add_argument("--fingers", default="fixed", choices=["fixed", "prismatic"], help="Tipo giunto dita")
+    parser.add_argument("--fingers", default="fixed", choices=["fixed", "fixed_open", "prismatic"], help="Tipo giunto dita")
     parser.add_argument("--suffix", default="_canon1008", help="Suffisso per il nome della run")
     parser.add_argument("--force", action="store_true", help="Forza sovrascrittura della run se già presente")
     parser.add_argument("--spawn-check-only", action="store_true",
