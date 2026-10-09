@@ -8,7 +8,7 @@ cartesian_push_test.py's quasi-static step).
 Publishes a straight-line, constant-velocity Cartesian ramp on the exact
 topic CartesianImpedanceController listens on for its reference target
 (/target_pose by default, geometry_msgs/msg/PoseStamped -- see
-target_pose_topic in franka_cartesian_control/config), starting from the
+target_pose_topic in src/franka_gazebo_overrides/franka_gazebo_controllers.yaml), starting from the
 robot's current end-effector pose and moving at a fixed velocity along one
 axis, orientation unchanged.
 

@@ -6,7 +6,7 @@ Standalone, use-once validation tool for the sensorless contact-wrench estimate
 Publishes a single, constant, quasi-static Cartesian step on the exact topic
 CartesianImpedanceController listens on for its reference target
 (/target_pose by default, geometry_msgs/msg/PoseStamped -- see
-target_pose_topic in franka_cartesian_control/config), computed as the
+target_pose_topic in src/franka_gazebo_overrides/franka_gazebo_controllers.yaml), computed as the
 robot's current end-effector pose plus a fixed offset along one axis,
 orientation unchanged. It holds that constant target for a fixed duration so
 the impedance controller settles into the quasi-static regime the contact
