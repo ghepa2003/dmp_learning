@@ -5,6 +5,8 @@ Gazebo (Ignition Fortress) simulation.
 What it does:
   1. Expands models/free_target_object.sdf.xacro with the requested
      mass / size / inertia / initial-twist arguments into a temporary .sdf.
+     Default model = real satellite (CAD): visual = models/satellite_m.stl, collision = cube box
+     + ring of boxes for the collar, mass/inertia = CAD values (defined in the xacro only).
   2. Spawns it via `ros_gz_sim create` at the given pose
      (x, y, z, roll, pitch, yaw).
   3. Starts a `ros_gz_bridge parameter_bridge` (same launch, no separate
@@ -84,20 +86,26 @@ _ARG_DEFAULTS = {
     "roll": ("0.0", "Spawn roll [rad]"),
     "pitch": ("0.0", "Spawn pitch [rad]"),
     "yaw": ("0.0", "Spawn yaw [rad]"),
-    "mass": ("5.0", "Link mass [kg]"),
-    "size_x": ("0.2", "Box edge length along X [m]"),
-    "size_y": ("0.2", "Box edge length along Y [m]"),
-    "size_z": ("0.2", "Box edge length along Z [m]"),
-    "ixx": ("0.0", "Principal inertia Ixx [kg m^2]; 0 => homogeneous-box formula"),
-    "iyy": ("0.0", "Principal inertia Iyy [kg m^2]; 0 => homogeneous-box formula"),
-    "izz": ("0.0", "Principal inertia Izz [kg m^2]; 0 => homogeneous-box formula"),
+    # Mass and inertia live ONLY in the xacro (real satellite, CAD). Empty => use the xacro default;
+    # a non-empty value overrides it.
+    "mass": ("", "Link mass [kg]; empty => xacro default (4.412, real satellite)"),
+    "size_x": ("0.150", "Cube edge length along X [m]"),
+    "size_y": ("0.150", "Cube edge length along Y [m]"),
+    "size_z": ("0.150", "Cube edge length along Z [m]"),
+    "ixx": ("", "Inertia Ixx [kg m^2], model frame; empty => xacro default; 0 => homogeneous-box formula"),
+    "iyy": ("", "Inertia Iyy [kg m^2], model frame; empty => xacro default; 0 => homogeneous-box formula"),
+    "izz": ("", "Inertia Izz [kg m^2], model frame; empty => xacro default; 0 => homogeneous-box formula"),
+    "ixy": ("", "Inertia product Ixy [kg m^2], model frame; empty => xacro default"),
+    "ixz": ("", "Inertia product Ixz [kg m^2], model frame; empty => xacro default"),
+    "iyz": ("", "Inertia product Iyz [kg m^2], model frame; empty => xacro default"),
+    "use_mesh": ("true", "Visual = CAD mesh satellite_m.stl (collision stays primitive); false => box visual"),
     "wx": ("0.0", "Initial angular velocity about world X [rad/s]"),
     "wy": ("0.0", "Initial angular velocity about world Y [rad/s]"),
     "wz": ("0.0", "Initial angular velocity about world Z [rad/s]"),
     "vx": ("0.0", "Initial linear velocity along world X [m/s]"),
     "vy": ("0.0", "Initial linear velocity along world Y [m/s]"),
     "vz": ("0.0", "Initial linear velocity along world Z [m/s]"),
-    "with_collar": ("false", "Add the hollow-collar PROXY (+x face of the cube) to the model"),
+    "with_collar": ("true", "Add the hollow-collar collision ring (+x face of the cube) to the model"),
     "collar_collision": ("true", "Collar has collision geometry (read only if with_collar:=true)"),
     "collar_segments": ("24", "Number of boxes approximating the hollow collar cylinder"),
     # Same names/defaults as satellite_grasp_planner's CubeSatelliteModel::Params;
@@ -135,13 +143,9 @@ def _spawn(context, *_args, **_kwargs):
 
     mappings = {
         "name": name,
-        "mass": cfg("mass"),
         "size_x": cfg("size_x"),
         "size_y": cfg("size_y"),
         "size_z": cfg("size_z"),
-        "ixx": cfg("ixx"),
-        "iyy": cfg("iyy"),
-        "izz": cfg("izz"),
         "with_collar": cfg("with_collar"),
         "collar_collision": cfg("collar_collision"),
         "collar_segments": cfg("collar_segments"),
@@ -152,6 +156,19 @@ def _spawn(context, *_args, **_kwargs):
         "initial_linear": f"{vx} {vy} {vz}",
         "initial_angular": f"{wx} {wy} {wz}",
     }
+
+    # Mass / inertia: forwarded only when given, otherwise the xacro defaults (single point) apply.
+    for key in ("mass", "ixx", "iyy", "izz", "ixy", "ixz", "iyz"):
+        if cfg(key) != "":
+            mappings[key] = cfg(key)
+
+    # Visual mesh: absolute file:// URI (the SDF is spawned from a temp file, relative URIs would not
+    # resolve). The STL sits next to the xacro (models/), also in the install space.
+    if cfg("use_mesh").lower() == "true":
+        mesh_path = os.path.join(os.path.dirname(xacro_path), "satellite_m.stl")
+        if not os.path.exists(mesh_path):
+            raise RuntimeError(f"free_target_object: mesh not found: {mesh_path}")
+        mappings["mesh_uri"] = "file://" + os.path.realpath(mesh_path)
 
     sdf_xml = xacro.process_file(xacro_path, mappings=mappings).toxml()
 
@@ -212,7 +229,7 @@ def _spawn(context, *_args, **_kwargs):
         if cfg("with_collar").lower() != "true"
         else f"collar: {cfg('collar_segments')} segments, R={cfg('collar_radius_m')} m, "
              f"wall={cfg('wall_thickness_m')} m, standoff={cfg('standoff_m')} m, "
-             f"collision={cfg('collar_collision')} (proxy, no added mass)"
+             f"collision={cfg('collar_collision')} (inertial already includes the collar)"
     )
 
     return [

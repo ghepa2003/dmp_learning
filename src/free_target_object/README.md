@@ -18,7 +18,7 @@ F = m a            I omega_dot = tau
 
 | Path | Purpose |
 |------|---------|
-| `models/free_target_object.sdf.xacro` | one `<link>`, `<gravity>0</gravity>`, mass/size/inertia as xacro args, **no `<ros2_control>`**; one observation-only `OdometryPublisher` plugin |
+| `models/free_target_object.sdf.xacro` | one `<link>`, `<gravity>0</gravity>`, mass/size/inertia as xacro args (defaults: real satellite, CAD), **no `<ros2_control>`**; one observation-only `OdometryPublisher` plugin |
 | `launch/free_target_object.launch.py` | expand xacro → spawn with `ros_gz_sim create` at a pose, start the odometry bridge, optionally seed an initial twist |
 
 ## Pose + twist on ROS 2
@@ -123,31 +123,47 @@ ros2 launch free_target_object free_target_object.launch.py \
 | `world` | `` (empty) | target world name; empty ⇒ resolved from the `/gazebo/worlds` service |
 | `x y z` | `0.0` | spawn position [m] |
 | `roll pitch yaw` | `0.0` | spawn orientation [rad] |
-| `mass` | `5.0` | link mass [kg] |
-| `size_x size_y size_z` | `0.2` | box edge lengths [m] |
-| `ixx iyy izz` | `0.0` | principal inertia [kg m²]; `0` ⇒ use the homogeneous-box formula from `mass` + `size_*` |
+| `mass` | `` (xacro: `4.412`) | link mass [kg]; empty ⇒ xacro default (single point) |
+| `size_x size_y size_z` | `0.150` | cube edge lengths [m] |
+| `ixx iyy izz ixy ixz iyz` | `` (xacro: CAD values) | inertia about the origin = CoM [kg m²], model frame; empty ⇒ xacro default; `ixx/iyy/izz = 0` ⇒ homogeneous-box formula from `mass` + `size_*` |
+| `use_mesh` | `true` | visual = CAD mesh `models/satellite_m.stl`; collision stays primitive |
 | `wx wy wz` | `0.0` | initial angular velocity [rad/s] (world frame) |
 | `vx vy vz` | `0.0` | initial linear velocity [m/s] (world frame) |
-| `with_collar` | `false` | add the hollow-collar PROXY to link `body` (see below) |
+| `with_collar` | `true` (xacro: `false`) | add the hollow-collar collision ring to link `body` (see below) |
 | `collar_collision` | `true` | collar has collision geometry; read only if `with_collar:=true` |
 | `collar_segments` | `24` | boxes approximating the hollow cylinder |
-| `collar_radius_m` | `0.05` | collar OUTER radius [m] |
-| `wall_thickness_m` | `0.015` | collar radial wall [m]; inner radius = outer − wall |
+| `collar_radius_m` | `0.0725` | collar OUTER radius [m] |
+| `wall_thickness_m` | `0.009` | collar radial wall [m]; inner radius = outer − wall |
 | `standoff_m` | `0.08` | collar length along +x from the cube face [m] |
 
-### Optional collar proxy
+### Real satellite model (CAD)
 
-With `with_collar:=true` the link `body` gains a hollow cylinder (ring of `collar_segments` boxes) on
-its +x face: axis = link +x, from `x = size_x/2` to `size_x/2 + standoff_m`. The axis matches
-`face_normal_body = [1,0,0]` of the grasp planner (`CubeSatelliteModel::Params` default and its example
-YAML); `collar_radius_m`, `wall_thickness_m`, `standoff_m` have the planner's names and defaults
-(`tools/check_collar_defaults.py` in the repository root fails if they diverge). The dimensions are a
-**proxy**, not measurements of a real object (no CAD mesh). No new link or joint: odometry, twist and the
-`<inertial>` block are unchanged, the collar adds no mass. The bore stays free for the gripper fingers.
-With the default `with_collar:=false` the expanded SDF is byte-identical to the model without the feature.
-`tools/check_collar_sdf.py <expanded.sdf>` checks the segment count, radial extent, x interval and axis.
+Frames: the CAD frame has its origin at the cube centre (= centre of mass), z = collar axis,
+y = cube rotation axis, x = y × z. The model frame keeps the previous convention (collar on the +x
+face, axis +x, spin axis +z, `wz = -0.034906585` rad/s = -2 deg/s via `VelocityControl`); CAD → model
+is the cyclic permutation `x_model = z_CAD, y_model = x_CAD, z_model = y_CAD`, i.e. `R = [[0,0,1],[1,0,0],[0,1,0]]`.
 
-Default inertia for the 5 kg / 0.2 m cube: `Ixx = Iyy = Izz = 5·(0.2²+0.2²)/12 ≈ 0.03333 kg m²`.
+| Part | What |
+|------|------|
+| visual | `models/satellite_m.stl` (metres, CAD frame) under the fixed pose `0 0 0 π/2 0 π/2` (axis permutation, no translation) |
+| collision | primitives only: one box for the cube (0.150 m) + ring of `collar_segments` boxes for the collar (outer R 0.0725, inner 0.0635, wall 0.009, 0.080 m from the face to the rim, on the +x face). No collision on the mesh. |
+| inertial | 4.412 kg, pose = origin (no offset); tensor = CAD tensor rotated, `I_model = R I_CAD Rᵀ` |
+
+CAD inertia about the origin [kg m²]: Ixx 0.0189576, Iyy 0.0190063, Izz 0.0167266, Ixy 2.345e-9,
+Ixz 3.0e-7, Iyz 2.296e-8 ⇒ model: ixx 0.0167266, iyy 0.0189576, izz 0.0190063, ixy 3.0e-7,
+ixz 2.296e-8, iyz 2.345e-9 (nominal values: dynamics is not the objective). The mass and inertia
+live only in the xacro args.
+
+Distances: the rim sits at `0.075 + 0.080 = 0.155 m` from the rotation axis; the planner's
+`grasp_radius_m` (0.068 m, mid-wall) places the grasp points on it. The ring of boxes follows the
+planner's names and defaults (`collar_radius_m`, `wall_thickness_m`, `standoff_m`;
+`tools/check_collar_defaults.py` fails if they diverge). The ring is built inside link `body` (no
+new link/joint); the `<inertial>` already accounts for the collar. The bore stays free for the
+gripper fingers. `tools/check_collar_sdf.py <expanded.sdf>` checks the segment count, radial extent,
+x interval and axis (its docstring still quotes the old 0.2 m cube; pass the new values).
+With the xacro default `with_collar:=false` there is no collar collision (the launch default is `true`).
+
+Default inertia: see above (the homogeneous-box formula is used only for `ixx/iyy/izz = 0`).
 
 ## How the initial twist is applied — and its limitation
 

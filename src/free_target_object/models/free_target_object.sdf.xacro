@@ -25,10 +25,14 @@
 
   Parametrisable via xacro args (all overridable at expand time):
     name              model name in Gazebo                 (default free_target_object)
-    mass              link mass [kg]                        (default 5.0)
-    size_x/y/z        box edge lengths [m]                  (default 0.2 each)
-    ixx/iyy/izz       principal inertia [kg m^2]; 0 => use  (default 0 -> homogeneous
-                      the solid-homogeneous-box formula      solid box from mass+size)
+    mass              link mass [kg]                        (default 4.412, real satellite; the
+                      SINGLE place where the mass lives: the launch forwards it only if given)
+    size_x/y/z        cube edge lengths [m]                 (default 0.150 each)
+    ixx/iyy/izz       inertia about the origin = CoM [kg m^2], MODEL frame (CAD tensor permuted,
+    ixy/ixz/iyz       see below). Defaults are the real satellite's. ixx/iyy/izz = 0 => use the
+                      solid-homogeneous-box formula (and the products are then still ixy/ixz/iyz).
+    mesh_uri          visual mesh (satellite_m.stl, CAD frame); empty => box visual + collar boxes
+                      as visual proxy. The launch always passes the absolute file:// URI.
     use_velocity_control  emit the VelocityControl plugin   (default false)
     initial_linear    "vx vy vz" [m/s]   (only if use_velocity_control=true)
     initial_angular   "wx wy wz" [rad/s] (only if use_velocity_control=true)
@@ -36,22 +40,34 @@
   NOTE on the rotating case: VelocityControl (shipped with Fortress, no extra
   setup) is the only velocity mechanism that loads on an already-running
   server. It CONTINUOUSLY re-asserts the commanded twist on the canonical
-  link, so it holds omega constant. For a homogeneous cube (isotropic inertia,
-  the default) torque-free rotation is already constant-omega, so this is
-  exact. For a deliberately anisotropic inertia it suppresses nutation
-  (I*omega_dot = tau is not integrated). Leave use_velocity_control=false for
-  a genuinely free body.
+  link, so it holds omega constant. The real inertia is anisotropic (and
+  slightly off-diagonal), so this suppresses nutation (I*omega_dot = tau is
+  not integrated); the spin about the model z axis (a near-principal axis)
+  is held exactly. Leave use_velocity_control=false for a genuinely free body.
 -->
 <sdf xmlns:xacro="http://www.ros.org/wiki/xacro" version="1.9">
 
   <xacro:arg name="name" default="free_target_object"/>
-  <xacro:arg name="mass" default="5.0"/>
-  <xacro:arg name="size_x" default="0.2"/>
-  <xacro:arg name="size_y" default="0.2"/>
-  <xacro:arg name="size_z" default="0.2"/>
-  <xacro:arg name="ixx" default="0"/>
-  <xacro:arg name="iyy" default="0"/>
-  <xacro:arg name="izz" default="0"/>
+  <!-- REAL SATELLITE (CAD). Mass: single point, edit here (or pass mass:= to the launch).
+       Inertia about the origin (= CoM), CAD frame [kg m^2]: Ixx 0.0189576, Iyy 0.0190063,
+       Izz 0.0167266, Ixy 2.345e-9, Ixz 3.0e-7, Iyz 2.296e-8. CAD -> model axes (proper
+       rotation, cyclic permutation): x_model = z_CAD (collar axis), y_model = x_CAD,
+       z_model = y_CAD (spin axis). I_model = R I_CAD R^T, R = [[0 0 1],[1 0 0],[0 1 0]], i.e.
+         ixx = Izz_CAD, iyy = Ixx_CAD, izz = Iyy_CAD,
+         ixy = Ixz_CAD, ixz = Iyz_CAD, iyz = Ixy_CAD.
+       Products are entered as the matrix entries (SDF convention). Nominal values: dynamics is
+       not the objective here. -->
+  <xacro:arg name="mass" default="4.412"/>
+  <xacro:arg name="size_x" default="0.150"/>
+  <xacro:arg name="size_y" default="0.150"/>
+  <xacro:arg name="size_z" default="0.150"/>
+  <xacro:arg name="ixx" default="0.0167266"/>
+  <xacro:arg name="iyy" default="0.0189576"/>
+  <xacro:arg name="izz" default="0.0190063"/>
+  <xacro:arg name="ixy" default="3.0e-7"/>
+  <xacro:arg name="ixz" default="2.296e-8"/>
+  <xacro:arg name="iyz" default="2.345e-9"/>
+  <xacro:arg name="mesh_uri" default=""/>
   <xacro:arg name="use_velocity_control" default="false"/>
   <xacro:arg name="initial_linear" default="0 0 0"/>
   <xacro:arg name="initial_angular" default="0 0 0"/>
@@ -64,8 +80,8 @@
     collar_collision  give the collar <collision> elements; read     (default true)
                       only if with_collar=true (false = visual only)
     collar_segments   N boxes approximating the hollow cylinder      (default 24)
-    collar_radius_m   OUTER radius [m]                               (default 0.05)
-    wall_thickness_m  radial wall [m]; inner radius = R - wall       (default 0.015)
+    collar_radius_m   OUTER radius [m]                               (default 0.0725)
+    wall_thickness_m  radial wall [m]; inner radius = R - wall       (default 0.009)
     standoff_m        collar length along +x from the cube face [m]  (default 0.08)
     The last three names and defaults are those of the grasp planner's
     CubeSatelliteModel::Params (collar_radius_m, wall_thickness_m, standoff_m); the cube side is
@@ -74,10 +90,12 @@
   Collar (with_collar=true): a hollow cylinder on the +x face of the cube, axis = link +x, from
   x = size_x/2 to size_x/2 + standoff_m. The axis must coincide with face_normal_body = [1,0,0]
   of the planner's example YAML and with the CubeSatelliteModel::Params default. The dimensions
-  are a PROXY (Phi10cm collar, 15 mm wall, 8 cm standoff), not measurements of a real object; no
-  CAD mesh. It is built inside link `body` (no new link/joint): odometry, twist and <inertial>
-  are unchanged, i.e. the collar ADDS NO MASS and does not move the centre of mass or the
-  inertia. Geometry: N rectangular boxes (x-length standoff, radial thickness wall, tangential
+  are those of the real satellite CAD (outer R 72.5 mm, inner 63.5 mm, wall 9 mm, 80 mm from the
+  face to the rim). The ring of boxes is the COLLISION model only; when mesh_uri is set the
+  visual is the CAD mesh (cube + collar), taken from the CAD frame through the fixed pose
+  `0 0 0 pi/2 0 pi/2` (pure axis permutation, no translation; origin = cube centre = CoM). It is
+  built inside link `body` (no new link/joint): odometry, twist and <inertial> are those of the
+  whole satellite (the <inertial> already includes the collar). Geometry: N rectangular boxes (x-length standoff, radial thickness wall, tangential
   width 2 R tan(pi/N) * (1 + overlap)), radial flats at R and R - wall, centred on the
   mid-radius; adjacent boxes overlap by `overlap` (5 %) so there are no gaps. The bore stays
   free: its flats sit at radius r = R - wall (polygon circumscribing the inner circle, so the
@@ -87,8 +105,8 @@
   <xacro:arg name="with_collar" default="false"/>
   <xacro:arg name="collar_collision" default="true"/>
   <xacro:arg name="collar_segments" default="24"/>
-  <xacro:arg name="collar_radius_m" default="0.05"/>
-  <xacro:arg name="wall_thickness_m" default="0.015"/>
+  <xacro:arg name="collar_radius_m" default="0.0725"/>
+  <xacro:arg name="wall_thickness_m" default="0.009"/>
   <xacro:arg name="standoff_m" default="0.08"/>
 
   <!-- Bind args as numbers -->
@@ -99,6 +117,10 @@
   <xacro:property name="ixx_arg" value="${float('$(arg ixx)')}"/>
   <xacro:property name="iyy_arg" value="${float('$(arg iyy)')}"/>
   <xacro:property name="izz_arg" value="${float('$(arg izz)')}"/>
+  <xacro:property name="ixy_arg" value="${float('$(arg ixy)')}"/>
+  <xacro:property name="ixz_arg" value="${float('$(arg ixz)')}"/>
+  <xacro:property name="iyz_arg" value="${float('$(arg iyz)')}"/>
+  <xacro:property name="use_mesh" value="${'$(arg mesh_uri)' != ''}"/>
 
   <!-- Solid homogeneous box inertia about the centre of mass -->
   <xacro:property name="box_ixx" value="${m * (sy*sy + sz*sz) / 12.0}"/>
@@ -142,19 +164,21 @@
           </geometry>
         </collision>
       </xacro:if>
-      <visual name="collar_seg_${i}_visual">
-        <pose>${seg_pose}</pose>
-        <geometry>
-          <box>
-            <size>${collar_len} ${collar_wall} ${collar_w}</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>0.90 0.55 0.10 0.5</ambient>
-          <diffuse>0.90 0.55 0.10 0.5</diffuse>
-          <specular>0.10 0.10 0.10 1</specular>
-        </material>
-      </visual>
+      <xacro:unless value="${use_mesh}">
+        <visual name="collar_seg_${i}_visual">
+          <pose>${seg_pose}</pose>
+          <geometry>
+            <box>
+              <size>${collar_len} ${collar_wall} ${collar_w}</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.90 0.55 0.10 0.5</ambient>
+            <diffuse>0.90 0.55 0.10 0.5</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </xacro:unless>
       <xacro:collar_segment i="${i + 1}"/>
     </xacro:if>
   </xacro:macro>
@@ -174,10 +198,10 @@
         <mass>${m}</mass>
         <inertia>
           <ixx>${final_ixx}</ixx>
-          <ixy>0.0</ixy>
-          <ixz>0.0</ixz>
+          <ixy>${ixy_arg}</ixy>
+          <ixz>${ixz_arg}</ixz>
           <iyy>${final_iyy}</iyy>
-          <iyz>0.0</iyz>
+          <iyz>${iyz_arg}</iyz>
           <izz>${final_izz}</izz>
         </inertia>
       </inertial>
@@ -190,18 +214,31 @@
         </geometry>
       </collision>
 
-      <visual name="visual">
-        <geometry>
-          <box>
-            <size>${sx} ${sy} ${sz}</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>0.10 0.45 0.90 1</ambient>
-          <diffuse>0.10 0.45 0.90 1</diffuse>
-          <specular>0.10 0.10 0.10 1</specular>
-        </material>
-      </visual>
+      <xacro:if value="${use_mesh}">
+        <!-- CAD mesh (metres, CAD frame) -> model frame: fixed axis permutation, no translation. -->
+        <visual name="visual">
+          <pose>0 0 0 ${pi / 2.0} 0 ${pi / 2.0}</pose>
+          <geometry>
+            <mesh>
+              <uri>$(arg mesh_uri)</uri>
+            </mesh>
+          </geometry>
+        </visual>
+      </xacro:if>
+      <xacro:unless value="${use_mesh}">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>${sx} ${sy} ${sz}</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.10 0.45 0.90 1</ambient>
+            <diffuse>0.10 0.45 0.90 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </xacro:unless>
 
       <xacro:if value="${with_collar and collar_check}">
         <xacro:collar_segment i="0"/>
