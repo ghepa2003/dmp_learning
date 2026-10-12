@@ -45,6 +45,9 @@ struct S3Params {
     bool posthoc_path_check = true;
     bool posthoc_velocity_check = true;
     int max_posthoc_candidates = 10;
+    /// The post-hoc stage skips a candidate of the same k within this many degrees of theta of one already
+    /// checked (near-duplicates). 0 disables the clustering.
+    double posthoc_cluster_deg = 10.0;
 };
 
 /// Everything besides the robot/pose evaluation that selectGraspS3 needs (the data selectGrasp takes from
@@ -69,6 +72,21 @@ struct S3Candidate {
     std::string reject_reason;        ///< "ik", "w_hat", "margine", "r_trust" or a post-hoc reason
 };
 
+/// One post-hoc check (clustering skips are not logged). Vectors are zero when the velocity check is off.
+struct S3PosthocEntry {
+    haptic_dmp_learning::core::GraspPointId k = haptic_dmp_learning::core::GraspPointId::kP0;
+    double theta_rad = 0.0;
+    double wait_s = 0.0;
+    double dv_m_s = 0.0;                 ///< |v_target - v_ee|
+    Eigen::Vector3d v_ee = Eigen::Vector3d::Zero();      ///< ProDMP velocity at contact for this goal
+    Eigen::Vector3d v_target = Eigen::Vector3d::Zero();  ///< surface velocity of the grasp point
+    bool path_checked = false;           ///< false if the path check is off or the velocity check failed first
+    bool path_ok = false;                ///< meaningful only if path_checked
+    double min_margin_rad = 0.0;         ///< min joint margin along the path (0 if not path_checked or violated)
+    bool accepted = false;               ///< passed every enabled post-hoc check
+    std::string reject_reason;           ///< empty if accepted
+};
+
 struct S3Result {
     enum Status { kSelected, kNoCandidate, kPosthocFailed };
     Status status = kNoCandidate;
@@ -80,6 +98,7 @@ struct S3Result {
     int posthoc_checks = 0;    ///< candidates examined by the post-hoc stage
     double posthoc_dv_m_s = 0.0;          ///< |v_target - v_ee| of the chosen candidate (0 if not checked)
     double posthoc_min_margin_rad = 0.0;  ///< min joint margin along the path of the chosen one (0 if not checked)
+    std::vector<S3PosthocEntry> posthoc_log;  ///< one entry per post-hoc check, in order
     std::string note;
 };
 
@@ -96,7 +115,8 @@ double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double 
  * Scans k in {0,90,180,270} x theta in [-180, 180) deg (theta_step_deg), refines the best accepted of each k
  * with theta_refine_step_deg in +-theta_step_deg, ranks by cost and runs the post-hoc checks (relative
  * velocity |omega x r - v_ProDMP| <= delta_v_max_m_s; kinematic path via checkKinematicFeasibility with the
- * orientation of the chosen branch) on the best candidates, in order, up to max_posthoc_candidates.
+ * orientation of the chosen branch) on the best candidates, in order, up to max_posthoc_candidates checks. A candidate of the same k within
+ * posthoc_cluster_deg of theta of an already checked one is skipped (not counted as a check).
  * @p robot is used as-is (not thread-safe) and left in an unspecified configuration.
  * @throws std::invalid_argument for invalid parameters or a null template.
  */

@@ -161,6 +161,7 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.theta_refine_step_deg = dbl("s1.theta_refine_step_deg", p.theta_refine_step_deg);
         p.posthoc_path_check = bol("s1.posthoc_path_check", p.posthoc_path_check);
         p.posthoc_velocity_check = bol("s1.posthoc_velocity_check", p.posthoc_velocity_check);
+        p.posthoc_cluster_deg = dbl("s1.posthoc_cluster_deg", p.posthoc_cluster_deg);
         p.ik.pos_tol_m = dbl("s1.ik.pos_tol_m", p.ik.pos_tol_m);
         p.ik.ori_tol_rad = dbl("s1.ik.ori_tol_rad", p.ik.ori_tol_rad);
         p.ik.damping = dbl("s1.ik.damping", p.ik.damping);

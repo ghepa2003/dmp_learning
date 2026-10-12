@@ -74,8 +74,9 @@ grasp_planner_node:
     # s1.theta_step_deg: 2.0           # coarse theta scan over [-180, 180)
     # s1.theta_refine_step_deg: 0.1    # refinement of the best candidate of each k, +- theta_step_deg
     # s1.posthoc_path_check: true      # post-hoc: checkKinematicFeasibility along the ProDMP path
-    # s1.posthoc_velocity_check: true
-    # s1.max_posthoc_candidates: 10
+    # s1.posthoc_velocity_check: true  # false: skip the velocity check (e.g. demo that ends at rest)
+    # s1.max_posthoc_candidates: 10    # max number of post-hoc checks actually performed
+    # s1.posthoc_cluster_deg: 10.0     # post-hoc: skip a candidate of the same k within this theta distance of one already checked (0 = off)
     # s1.ik.pos_tol_m: 1.0e-4
     # s1.ik.ori_tol_rad: 1.0e-3
     # s1.ik.max_iter: 300

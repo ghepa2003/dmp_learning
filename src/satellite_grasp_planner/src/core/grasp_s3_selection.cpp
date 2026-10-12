@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 #include "haptic_dmp_learning/core/surface_velocity.hpp"
 #include "haptic_dmp_learning/core/tcp_roll.hpp"
@@ -56,6 +57,9 @@ void validateS3Params(const S3Params& p) {
         throw std::invalid_argument("selectGraspS3: w_hat_min and margin_min_rad must be finite.");
     }
     if (p.max_posthoc_candidates < 0) throw std::invalid_argument("selectGraspS3: max_posthoc_candidates < 0.");
+    if (!std::isfinite(p.posthoc_cluster_deg) || p.posthoc_cluster_deg < 0.0) {
+        throw std::invalid_argument("selectGraspS3: posthoc_cluster_deg must be finite and >= 0.");
+    }
     if (!(p.ik.max_iter > 0) || !pos(p.ik.pos_tol_m) || !pos(p.ik.ori_tol_rad) || !pos(p.ik.max_step_rad) ||
         !pos(p.ik.damping) || !(std::isfinite(p.ik.nullspace_gain) && p.ik.nullspace_gain >= 0.0)) {
         throw std::invalid_argument("selectGraspS3: invalid IkParams.");
@@ -163,10 +167,27 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     const std::shared_ptr<RobotModel> robot_ptr(&robot, [](RobotModel*) {});  // non-owning
 
     int chosen_idx = -1;
-    const int n_check = std::min(static_cast<int>(accepted.size()), params.max_posthoc_candidates);
-    for (int i = 0; i < n_check && chosen_idx < 0; ++i) {
-        S3Candidate& c = accepted[static_cast<std::size_t>(i)];
+    const double cluster_rad = params.posthoc_cluster_deg * kPi / 180.0;
+    std::vector<std::pair<int, double>> checked;  // (k, theta) of the candidates already examined
+    auto inCluster = [&](const S3Candidate& c) {
+        for (const auto& kt : checked) {
+            if (kt.first != static_cast<int>(c.eval.k)) continue;
+            double dth = std::fmod(std::abs(c.eval.theta_rad - kt.second), 2.0 * kPi);
+            if (dth > kPi) dth = 2.0 * kPi - dth;
+            if (dth < cluster_rad) return true;
+        }
+        return false;
+    };
+    for (std::size_t i = 0; i < accepted.size() && chosen_idx < 0 && res.posthoc_checks < params.max_posthoc_candidates;
+         ++i) {
+        S3Candidate& c = accepted[i];
+        if (inCluster(c)) continue;
+        checked.emplace_back(static_cast<int>(c.eval.k), c.eval.theta_rad);
         ++res.posthoc_checks;
+        S3PosthocEntry entry;
+        entry.k = c.eval.k;
+        entry.theta_rad = c.eval.theta_rad;
+        entry.wait_s = c.wait_s;
         double dv = 0.0;
         if (params.posthoc_velocity_check) {
             const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
@@ -174,10 +195,15 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
                 model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
             dv = (v_t - v_ee).norm();
+            entry.v_ee = v_ee;
+            entry.v_target = v_t;
+            entry.dv_m_s = dv;
             if (!(dv <= params.delta_v_max_m_s)) {
                 std::ostringstream m;
                 m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
                 c.reject_reason = m.str();
+                entry.reject_reason = c.reject_reason;
+                res.posthoc_log.push_back(entry);
                 continue;
             }
         }
@@ -188,21 +214,28 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
                 c.eval.wrist_flip ? haptic_dmp_learning::core::applyRoll(qn, kPi) : qn;
             const FeasibilityResult fr = checkKinematicFeasibility(
                 *ctx.prodmp_template, c.eval.pose.position_world, orient, robot_ptr, q_start);
+            entry.path_checked = true;
+            entry.path_ok = fr.feasible;
             if (!fr.feasible) {
                 std::ostringstream m;
                 m << "percorso: violazione limiti " << fr.max_joint_violation_rad << " rad (giunto " << fr.worst_joint
                   << ")";
                 c.reject_reason = m.str();
+                entry.reject_reason = c.reject_reason;
+                res.posthoc_log.push_back(entry);
                 continue;
             }
             margin = fr.min_joint_margin_rad;
+            entry.min_margin_rad = margin;
         }
-        chosen_idx = i;
+        entry.accepted = true;
+        res.posthoc_log.push_back(entry);
+        chosen_idx = static_cast<int>(i);
         res.posthoc_dv_m_s = dv;
         res.posthoc_min_margin_rad = margin;
     }
 
-    if (n_check == 0 && !accepted.empty()) chosen_idx = 0;  // max_posthoc_candidates == 0: no post-hoc stage
+    if (params.max_posthoc_candidates == 0 && !accepted.empty()) chosen_idx = 0;  // max_posthoc_candidates == 0: no post-hoc stage
 
     // ---- outputs ----
     const std::size_t n_ranked = std::min(kRankedSize, accepted.size());

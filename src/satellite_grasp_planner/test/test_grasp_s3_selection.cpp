@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <memory>
@@ -190,6 +191,81 @@ TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
         EXPECT_EQ(r.status, S3Result::kPosthocFailed);
         EXPECT_FALSE(r.note.empty());
     }
+}
+
+TEST(GraspS3Test, PosthocClusterSkipsNearbyThetaOfSameK) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = looseParams();
+    p.posthoc_velocity_check = true;  // an impossible dv makes every checked candidate fail, so all get examined
+    p.delta_v_max_m_s = 1e-6;
+    p.max_posthoc_candidates = 100000;
+    p.theta_refine_step_deg = 1.0;  // refined candidates sit 1-2 deg from the coarse best of the same k
+
+    p.posthoc_cluster_deg = 0.0;
+    const S3Result off = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (off.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << off.note;
+    p.posthoc_cluster_deg = 10.0;
+    const S3Result on = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+
+    ASSERT_EQ(on.posthoc_log.size(), static_cast<std::size_t>(on.posthoc_checks));
+    ASSERT_EQ(off.posthoc_log.size(), static_cast<std::size_t>(off.posthoc_checks));
+    EXPECT_LT(on.posthoc_checks, off.posthoc_checks);  // near-duplicates (refined thetas) were skipped
+    for (std::size_t i = 0; i < on.posthoc_log.size(); ++i) {
+        for (std::size_t j = i + 1; j < on.posthoc_log.size(); ++j) {
+            if (on.posthoc_log[i].k != on.posthoc_log[j].k) continue;
+            double d = std::fmod(std::abs(on.posthoc_log[i].theta_rad - on.posthoc_log[j].theta_rad), 2.0 * M_PI);
+            if (d > M_PI) d = 2.0 * M_PI - d;
+            EXPECT_GE(d * 180.0 / M_PI, p.posthoc_cluster_deg - 1e-9) << "entries " << i << ", " << j;
+        }
+    }
+}
+
+TEST(GraspS3Test, PosthocChecksLimitedToMaxAndLogged) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = looseParams();
+    p.posthoc_velocity_check = true;
+    p.delta_v_max_m_s = 1e-6;
+    p.posthoc_cluster_deg = 0.0;
+    p.max_posthoc_candidates = 3;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
+    EXPECT_EQ(r.status, S3Result::kPosthocFailed);
+    const std::size_t expected = std::min<std::size_t>(3, r.ranked.size());  // ranked holds up to 20
+    EXPECT_EQ(static_cast<std::size_t>(r.posthoc_checks), expected);
+    ASSERT_EQ(r.posthoc_log.size(), expected);
+    for (const auto& e : r.posthoc_log) {
+        EXPECT_FALSE(e.accepted);
+        EXPECT_FALSE(e.path_checked);
+        EXPECT_GT(e.dv_m_s, p.delta_v_max_m_s);
+        EXPECT_NEAR(e.dv_m_s, (e.v_target - e.v_ee).norm(), 1e-12);
+        EXPECT_FALSE(e.reject_reason.empty());
+    }
+}
+
+TEST(GraspS3Test, PosthocVelocityCheckDisabledSelectsCheapest) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = looseParams();
+    p.posthoc_velocity_check = false;
+    p.posthoc_path_check = false;
+    p.delta_v_max_m_s = 1e-6;  // would reject everything if the velocity check were on
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
+    ASSERT_EQ(r.status, S3Result::kSelected);
+    ASSERT_FALSE(r.ranked.empty());
+    EXPECT_EQ(r.chosen.eval.k, r.ranked.front().eval.k);
+    EXPECT_DOUBLE_EQ(r.chosen.eval.theta_rad, r.ranked.front().eval.theta_rad);
+    EXPECT_EQ(r.posthoc_checks, 1);
+    ASSERT_EQ(r.posthoc_log.size(), 1u);
+    EXPECT_TRUE(r.posthoc_log.front().accepted);
 }
 
 TEST(GraspS3Test, Deterministic) {
