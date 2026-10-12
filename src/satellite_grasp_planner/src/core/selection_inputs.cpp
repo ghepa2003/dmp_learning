@@ -11,6 +11,7 @@
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
+#include "haptic_dmp_learning/core/surface_velocity.hpp"
 #include "satellite_grasp_planner/core/candidate_scan.hpp"
 #include "satellite_grasp_planner/core/manipulability.hpp"
 

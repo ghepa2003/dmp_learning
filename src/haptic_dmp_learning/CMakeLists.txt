@@ -304,6 +304,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_grasp_cost test/test_grasp_cost.cpp)
   target_link_libraries(test_grasp_cost ${PROJECT_NAME}_core)
 
+  ament_add_gtest(test_surface_velocity test/test_surface_velocity.cpp)
+  target_link_libraries(test_surface_velocity ${PROJECT_NAME}_core)
+
   # Pure logic of syncControllerAlignmentOverride()'s parameter payload (header-only, no ROS
   # node graph needed - the actual parameter-client call is not unit-testable in isolation).
   ament_add_gtest(test_controller_param_sync test/test_controller_param_sync.cpp)
