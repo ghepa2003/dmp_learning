@@ -50,3 +50,5 @@ slides_material/
 /runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/*
 !/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml
 !/runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights_demo_params.yaml
+/build_cc/
+/install_cc/
