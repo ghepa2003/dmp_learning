@@ -23,16 +23,5 @@ inline Eigen::Vector3d surfaceVelocity(const CubeSatelliteModel& satellite, Gras
     return (omega_rad_s * satellite.axisWorld()).cross(r);
 }
 
-/// Mean over the 4 grasp points of |v|^2. Independent of theta (rigid rotation about the axis
-/// preserves distances from it), so it is evaluated at theta = 0.
-inline double meanSurfaceSpeedSquared(const CubeSatelliteModel& satellite, double omega_rad_s) {
-    double sum = 0.0;
-    for (GraspPointId k : {GraspPointId::kP0, GraspPointId::kP90, GraspPointId::kP180,
-                           GraspPointId::kP270}) {
-        sum += surfaceVelocity(satellite, k, 0.0, omega_rad_s).squaredNorm();
-    }
-    return sum / 4.0;
-}
-
 }  // namespace core
 }  // namespace haptic_dmp_learning

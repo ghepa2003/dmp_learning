@@ -18,7 +18,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
-find_package(coal REQUIRED)
 find_package(haptic_dmp_learning REQUIRED)
 find_package(franka_cartesian_control REQUIRED)
 
@@ -32,15 +31,8 @@ include_directories(include)
 add_library(${PROJECT_NAME}_core
   src/core/manipulability.cpp
   src/core/joint_path_simulator.cpp
-  src/core/phase_selector.cpp
   src/core/kinematic_feasibility.cpp
-  src/core/satellite_collision.cpp
-  src/core/candidate_scan.cpp
-  src/core/candidate_eval.cpp
-  src/core/grasp_selection.cpp
-  src/core/demo_reference.cpp
   src/core/launch_delay.cpp
-  src/core/window_center.cpp
   src/core/launch_plan.cpp
   src/core/selection_inputs.cpp
   src/core/start_state.cpp
@@ -55,7 +47,6 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
 target_link_libraries(${PROJECT_NAME}_core
   Eigen3::Eigen
   pinocchio::pinocchio
-  coal::coal
 )
 # haptic_dmp_learning and franka_cartesian_control export their _core
 # libraries the classic ament_cmake way (ament_export_libraries +
@@ -94,7 +85,6 @@ add_library(grasp_planner_ros_lib
 target_link_libraries(grasp_planner_ros_lib
   Eigen3::Eigen
   pinocchio::pinocchio
-  coal::coal
 )
 # grasp_command_conversion.cpp includes grasp_launch_result.hpp, which transitively pulls in
 # haptic_dmp_learning/franka_cartesian_control headers (CubeSatelliteModel, RobotModel, ...) - needed
@@ -115,7 +105,6 @@ target_link_libraries(grasp_planner_node
   grasp_planner_ros_lib
   ${PROJECT_NAME}_core
   pinocchio::pinocchio
-  coal::coal
 )
 ament_target_dependencies(grasp_planner_node
   rclcpp
@@ -139,7 +128,6 @@ if(BUILD_ANALYSIS_TOOLS)
   target_link_libraries(orientation_law_compare
     ${PROJECT_NAME}_core
     pinocchio::pinocchio
-    coal::coal
   )
   ament_target_dependencies(orientation_law_compare
     haptic_dmp_learning
@@ -277,6 +265,6 @@ endif()
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_targets(export_${PROJECT_NAME})
-ament_export_dependencies(Eigen3 pinocchio coal haptic_dmp_learning franka_cartesian_control)
+ament_export_dependencies(Eigen3 pinocchio haptic_dmp_learning franka_cartesian_control)
 
 ament_package()

@@ -38,9 +38,8 @@ namespace core {
  * Templated on the Jacobian block's Eigen expression type (rather than a
  * fixed Eigen::MatrixXd parameter) so it can be called directly on a
  * zero-copy `.topRows<3>()` block expression of an already-computed 6x7
- * Jacobian - this runs inside PhaseSelector's per-sample scoring loop, so
- * avoiding an extra dynamic-matrix allocation per call matters (see the
- * coarse-to-fine step-count budget documented in PhaseSelector).
+ * Jacobian - this runs in per-sample loops, so avoiding an extra
+ * dynamic-matrix allocation per call matters.
  *
  * @param Jt Translational block of a geometric Jacobian (3 rows x N columns,
  *           N = number of joints; for the Panda, 3x7).
@@ -67,12 +66,11 @@ double wTransFromJacobian(const Eigen::MatrixBase<Derived>& Jt) {
  * Coriolis and the mass matrix via RNEA/CRBA - unused here, but RobotModel
  * offers no cheaper "kinematics only" path today) and reads back the cached
  * Jacobian. When scoring MANY configurations along an already-simulated
- * joint path (as PhaseSelector does), prefer calling wTransFromJacobian()
+ * joint path, prefer calling wTransFromJacobian()
  * directly on the Jacobian already computed by JointPathSimulator's own
  * RobotModel::update() call for the DLS step, instead of this method - it
  * avoids a second full Pinocchio pass (FK + Jacobian + RNEA + CRBA) per
- * sample, which matters given the coarse-to-fine step-count budget documented
- * in PhaseSelector.
+ * sample.
  */
 class Manipulability {
 public:

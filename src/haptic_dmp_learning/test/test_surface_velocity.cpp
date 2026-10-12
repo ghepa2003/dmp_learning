@@ -82,15 +82,3 @@ TEST(SurfaceVelocity, MagnitudeIndependentOfTheta) {
         }
     }
 }
-
-TEST(SurfaceVelocity, MeanSquaredMatchesHandComputation) {
-    const CubeSatelliteModel m{realSatelliteParams()};
-    // Two points at |v|^2 = w^2 * 0.155^2, two at w^2 * (0.155^2 + 0.068^2) (= 0.1693^2 w^2):
-    // w^2 * (2 * 0.155^2 + 2 * 0.1693^2) / 4 = 3.209e-5 m^2/s^2.
-    const double expected =
-        (2.0 * kOmega * kOmega * 0.155 * 0.155 +
-         2.0 * kOmega * kOmega * (0.155 * 0.155 + 0.068 * 0.068)) / 4.0;
-    EXPECT_NEAR(expected, 3.209e-5, 1e-8);  // guards the hand arithmetic quoted above
-    EXPECT_NEAR(meanSurfaceSpeedSquared(m, kOmega), expected, 1e-15);
-    EXPECT_NEAR(meanSurfaceSpeedSquared(m, -kOmega), expected, 1e-15);
-}

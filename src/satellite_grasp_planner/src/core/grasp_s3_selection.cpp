@@ -20,7 +20,7 @@ namespace {
 using haptic_dmp_learning::core::GraspPointId;
 
 constexpr std::size_t kRankedSize = 20;
-constexpr double kDt = 0.005;  // same step as scanCandidates (candidate_scan.cpp)
+constexpr double kDt = 0.005;  // same step as kinematic_feasibility.hpp (dt default)
 constexpr GraspPointId kAllK[4] = {GraspPointId::kP0, GraspPointId::kP90, GraspPointId::kP180,
                                    GraspPointId::kP270};
 
@@ -155,7 +155,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     // ---- post-hoc checks, best first ----
     std::unique_ptr<haptic_dmp_learning::core::ProDMP> prodmp_at_contact;
     if (params.posthoc_velocity_check) {
-        // Same preparation as scanCandidates(): support goal p0 + delta_g_demo, stepped to the contact instant.
+        // Support goal p0 + delta_g_demo, stepped to the contact instant.
         prodmp_at_contact = std::make_unique<haptic_dmp_learning::core::ProDMP>(*ctx.prodmp_template);
         prodmp_at_contact->setRelativeGoal(false);
         prodmp_at_contact->setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());

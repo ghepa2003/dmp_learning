@@ -15,7 +15,7 @@ namespace satellite_grasp_planner {
 namespace ros_wrapper {
 
 /// @throws std::invalid_argument if @p robot_base_world is farther than @p tol_m from the origin.
-/// The core selection pipeline (candidate_scan.cpp) combines the robot-base-frame FK position with
+/// The core selection pipeline (grasp_s3_selection.cpp) combines the robot-base-frame FK position with
 /// world-frame satellite geometry with no transform - it implicitly assumes robot base == world
 /// (the same assumption prodmp_gazebo_executor_node.cpp states explicitly). v1 enforces this rather
 /// than silently relying on it.

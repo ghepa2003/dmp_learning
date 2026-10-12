@@ -1,5 +1,5 @@
 // Tests for buildSelectionInputs(): synthetic weights + demo_params written to a temp directory (no
-// production files, no long rollouts, no probes). Needs Pinocchio and $HOME/thesis_ws/fer_flat_effort.urdf.
+// production files, no rollouts). Needs Pinocchio and $HOME/thesis_ws/fer_flat_effort.urdf.
 
 #include <gtest/gtest.h>
 
@@ -20,8 +20,6 @@
 #include "test_fixtures.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/demo_params.hpp"
-#include "haptic_dmp_learning/core/grasp_cost.hpp"
-#include "haptic_dmp_learning/core/surface_velocity.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
@@ -112,7 +110,7 @@ protected:
         return g;
     }
     SelectionInputs build() const {
-        return buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), Eigen::Vector3d::Zero());
+        return buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry());
     }
 
     static std::array<double, 7> toArray(const RobotModel::JointVector& q) {
@@ -179,11 +177,11 @@ TEST_F(SelectionInputsTest, ChangedWeightsThrowNamingTheParamsFile) {
 TEST_F(SelectionInputsTest, ContactTime) {
     dp::DemoParams p = makeFixture(60.0);  // no trigger -> t_contact null
     ASSERT_FALSE(p.t_contact_s.has_value());
-    p.end_joints_rad = toArray(RobotModel::readyPose());  // avoid the (long) proxy rollout
+    p.end_joints_rad = toArray(RobotModel::readyPose());
     rewrite(p);
     SelectionInputs a = build();
     EXPECT_TRUE(a.contact_assumed_at_end);
-    EXPECT_EQ(a.params.scan.tau_contact_s, 0.0);
+    EXPECT_EQ(a.tau_contact_s, 0.0);
 
     p = makeFixture(60.0, 30.0);  // trigger at t = 30 s
     ASSERT_TRUE(p.t_contact_s.has_value());
@@ -191,7 +189,7 @@ TEST_F(SelectionInputsTest, ContactTime) {
     rewrite(p);
     SelectionInputs b = build();
     EXPECT_FALSE(b.contact_assumed_at_end);
-    EXPECT_NEAR(b.params.scan.tau_contact_s, 30.0, 1e-9);
+    EXPECT_NEAR(b.tau_contact_s, 30.0, 1e-9);
     EXPECT_GT(b.prodmp_template.tau(), 30.0);
 
     // t_contact valid for the demo_params (<= its tau_s) but beyond the template tau: throws.
@@ -214,7 +212,6 @@ TEST_F(SelectionInputsTest, P0FromKinematics) {
     ref.update(q, RobotModel::JointVector::Zero());
     EXPECT_NEAR((a.p0 - ref.eePosition()).norm(), 0.0, 1e-12);
     EXPECT_NEAR((a.q0 - q).norm(), 0.0, 1e-15);
-    EXPECT_NEAR((a.params.scan.p0 - a.p0).norm(), 0.0, 1e-15);
     // Robot left at q0.
     EXPECT_NEAR((a.robot->eePosition() - a.p0).norm(), 0.0, 1e-12);
 
@@ -242,12 +239,10 @@ TEST_F(SelectionInputsTest, StartOverrideWinsOverDemoStartJoints) {
     StartState st;
     st.q = q_ovr;
     st.source = "start_joints_override_rad parameter";
-    const SelectionInputs a = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                   Eigen::Vector3d::Zero(), st);
+    const SelectionInputs a = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), st);
     ref.update(q_ovr, RobotModel::JointVector::Zero());
     EXPECT_NEAR((a.q0 - q_ovr).norm(), 0.0, 1e-15);
     EXPECT_NEAR((a.p0 - ref.eePosition()).norm(), 0.0, 1e-12);
-    EXPECT_NEAR((a.params.scan.p0 - a.p0).norm(), 0.0, 1e-15);
     EXPECT_NEAR((a.robot->eePosition() - a.p0).norm(), 0.0, 1e-12);  // robot left at q0
     EXPECT_EQ(a.q0_source, "start_joints_override_rad parameter");
     std::string q0_line;
@@ -260,8 +255,7 @@ TEST_F(SelectionInputsTest, StartOverrideWinsOverDemoStartJoints) {
     // Without start joints in the demo file, nothing is reported as ignored.
     p.start_joints_rad.reset();
     rewrite(p);
-    const SelectionInputs b = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                   Eigen::Vector3d::Zero(), st);
+    const SelectionInputs b = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), st);
     for (const auto& l : b.provenance) {
         if (l.rfind("q0 =", 0) == 0) {
             EXPECT_EQ(l.find("IGNORATO"), std::string::npos) << l;
@@ -277,7 +271,7 @@ TEST_F(SelectionInputsTest, StartOutsideJointLimitsThrows) {
     st.q = RobotModel::readyPose();
     st.q(3) = 0.5;  // fer_joint4 upper limit is -0.0698 rad
     st.source = "test";
-    EXPECT_THROW(buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), Eigen::Vector3d::Zero(), st),
+    EXPECT_THROW(buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), st),
                  std::invalid_argument);
 }
 
@@ -287,16 +281,11 @@ namespace {
 void expectSameInputs(const SelectionInputs& a, const SelectionInputs& b) {
     EXPECT_EQ(a.q0, b.q0);
     EXPECT_EQ(a.p0, b.p0);
-    EXPECT_EQ(a.params.scan.p0, b.params.scan.p0);
-    EXPECT_EQ(a.params.scan.theta_center_rad, b.params.scan.theta_center_rad);
-    EXPECT_EQ(a.params.scan.omega_rad_s, b.params.scan.omega_rad_s);
-    EXPECT_EQ(a.params.scan.tau_contact_s, b.params.scan.tau_contact_s);
-    EXPECT_EQ(a.params.scan.delta_g_demo, b.params.scan.delta_g_demo);
-    EXPECT_EQ(a.params.scan.contact_to_end_offset, b.params.scan.contact_to_end_offset);
-    EXPECT_EQ(a.params.scan.e_v_ref, b.params.scan.e_v_ref);
-    EXPECT_EQ(a.params.scan.e_g_ref, b.params.scan.e_g_ref);
-    EXPECT_EQ(a.params.w_trans_demo, b.params.w_trans_demo);
-    EXPECT_EQ(a.w_trans_demo_is_proxy, b.w_trans_demo_is_proxy);
+    EXPECT_EQ(a.omega_rad_s, b.omega_rad_s);
+    EXPECT_EQ(a.tau_contact_s, b.tau_contact_s);
+    EXPECT_EQ(a.delta_g_demo, b.delta_g_demo);
+    EXPECT_EQ(a.contact_to_end_offset, b.contact_to_end_offset);
+    EXPECT_EQ(a.w_trans_demo, b.w_trans_demo);
     EXPECT_EQ(a.contact_assumed_at_end, b.contact_assumed_at_end);
     EXPECT_EQ(a.weights_sha256, b.weights_sha256);
     ASSERT_EQ(a.provenance.size(), b.provenance.size());
@@ -317,40 +306,9 @@ TEST_F(SelectionInputsTest, StartEqualToReadyPoseIsIdenticalToTheDefault) {
     StartState st;
     st.q = RobotModel::readyPose();
     st.source = "start_joints_override_rad parameter";
-    const SelectionInputs ovr = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                     Eigen::Vector3d::Zero(), st);
+    const SelectionInputs ovr = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), st);
     expectSameInputs(def, ovr);
     EXPECT_EQ(def.q0_source, "RobotModel::readyPose()");
-}
-
-// Same, on the production configuration: end_joints_rad null, so w_trans_demo comes from the proxy rollout that
-// starts from q0.
-TEST_F(SelectionInputsTest, StartEqualToReadyPoseIsIdenticalToTheDefaultWithProxyWTrans) {
-    dp::DemoParams p = makeFixture(2.0);  // short template: the proxy rollout stays cheap
-    ASSERT_FALSE(p.end_joints_rad.has_value());
-    const SelectionInputs def = build();
-    ASSERT_TRUE(def.w_trans_demo_is_proxy);
-    StartState st;
-    st.q = RobotModel::readyPose();
-    st.source = "start_joints_override_rad parameter";
-    const SelectionInputs ovr = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                     Eigen::Vector3d::Zero(), st);
-    expectSameInputs(def, ovr);
-}
-
-// The proxy depends on q0: a different start changes it (this is why the start must be visible in the log).
-TEST_F(SelectionInputsTest, ProxyWTransFollowsTheStartConfiguration) {
-    dp::DemoParams p = makeFixture(2.0);
-    const SelectionInputs def = build();
-    StartState st;
-    st.q = RobotModel::readyPose();
-    st.q(0) += 0.6;
-    st.q(3) += 0.3;
-    st.source = "test";
-    const SelectionInputs ovr = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                     Eigen::Vector3d::Zero(), st);
-    EXPECT_NE(def.params.w_trans_demo, ovr.params.w_trans_demo);
-    EXPECT_NE(def.p0, ovr.p0);
 }
 
 TEST_F(SelectionInputsTest, DescribeStartStateReportsSourceQ0P0AndDistance) {
@@ -361,8 +319,7 @@ TEST_F(SelectionInputsTest, DescribeStartStateReportsSourceQ0P0AndDistance) {
     st.q = RobotModel::readyPose();
     st.q(0) += 0.05;
     st.source = "start_joints_override_rad parameter";
-    const SelectionInputs a = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(),
-                                                   Eigen::Vector3d::Zero(), st);
+    const SelectionInputs a = buildSelectionInputs(paramsPath(), urdfPath(), snapshot(), geometry(), st);
     const std::string text = describeStartState(a);
     EXPECT_NE(text.find("q0 source = start_joints_override_rad parameter"), std::string::npos) << text;
     EXPECT_NE(text.find("distance from readyPose"), std::string::npos) << text;
@@ -382,8 +339,7 @@ TEST_F(SelectionInputsTest, WTransDemoFromEndJoints) {
     rewrite(p);
     SelectionInputs a = build();
     resetRobotToReady(ref);
-    EXPECT_NEAR(a.params.w_trans_demo, wTransFromJacobian(ref.jacobian().topRows<3>()), 1e-12);
-    EXPECT_FALSE(a.w_trans_demo_is_proxy);
+    EXPECT_NEAR(a.w_trans_demo, wTransFromJacobian(ref.jacobian().topRows<3>()), 1e-12);
 
     // Value measured with tools/compute_w_trans_demo.py for q = (0.2,-0.6,0.1,-2.0,0.1,1.7,0.7).
     RobotModel::JointVector q;
@@ -397,22 +353,22 @@ TEST_F(SelectionInputsTest, WTransDemoFromEndJoints) {
 
     p.end_joints_rad = toArray(q);
     rewrite(p);
-    EXPECT_NEAR(build().params.w_trans_demo, w_python, 1e-5);
+    EXPECT_NEAR(build().w_trans_demo, w_python, 1e-5);
 }
 
-TEST_F(SelectionInputsTest, ProxyWhenNoEndJoints) {
-    dp::DemoParams p = makeFixture(2.0);  // short template: the proxy rollout stays cheap
+// A demo_params without end_joints_rad is rejected, with a message that tells to redo the fit.
+TEST_F(SelectionInputsTest, NoEndJointsIsRejectedAskingToRedoTheFit) {
+    dp::DemoParams p = makeFixture(2.0);
     ASSERT_FALSE(p.end_joints_rad.has_value());
-    SelectionInputs a = build();
-    EXPECT_TRUE(a.w_trans_demo_is_proxy);
-    EXPECT_GT(a.params.w_trans_demo, 0.0);
-    bool has_proxy_line = false;
-    for (const auto& l : a.provenance) {
-        if (l.find("PROXY") != std::string::npos) has_proxy_line = true;
+    try {
+        build();
+        ADD_FAILURE() << "expected an exception";
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("end_joints_rad"), std::string::npos) << what;
+        EXPECT_NE(what.find("redo the fit"), std::string::npos) << what;
+        EXPECT_NE(what.find(paramsPath()), std::string::npos) << what;
     }
-    EXPECT_TRUE(has_proxy_line);
-    // Robot back at q0 after the proxy rollout.
-    EXPECT_NEAR((a.robot->eePosition() - a.p0).norm(), 0.0, 1e-12);
 }
 
 // (e) references and (f) provenance.
@@ -422,20 +378,14 @@ TEST_F(SelectionInputsTest, ReferencesAndProvenance) {
     rewrite(p);
     const SelectionInputs a = build();
 
-    CubeSatelliteModel::Params cp = geometry();
-    cp.center_world = snapshot().center;
-    cp.axis_world = snapshot().axis;
-    const CubeSatelliteModel model(cp);
-    EXPECT_NEAR(a.params.scan.e_g_ref, p.delta_g_demo_m.squaredNorm(), 1e-12);
-    EXPECT_NEAR(a.params.scan.e_v_ref,
-                haptic_dmp_learning::core::meanSurfaceSpeedSquared(model, snapshot().omega_rad_s), 1e-12);
-    EXPECT_NEAR(a.params.scan.omega_rad_s, snapshot().omega_rad_s, 1e-15);
+    EXPECT_NEAR(a.omega_rad_s, snapshot().omega_rad_s, 1e-15);
+    EXPECT_NEAR(a.snapshot.omega_rad_s, snapshot().omega_rad_s, 1e-15);
     EXPECT_NEAR((a.cube_params.center_world - snapshot().center).norm(), 0.0, 1e-15);
-    EXPECT_NEAR((a.params.scan.delta_g_demo - p.delta_g_demo_m).norm(), 0.0, 1e-15);
+    EXPECT_NEAR((a.delta_g_demo - p.delta_g_demo_m).norm(), 0.0, 1e-15);
+    EXPECT_NEAR((a.contact_to_end_offset - p.contact_to_end_offset_m).norm(), 0.0, 1e-15);
 
     for (const char* key : {"tau_contact_s", "delta_g_demo_m", "contact_to_end_offset_m", "q0 =", "p0 =",
-                            "w_trans_demo", "omega_rad_s", "satellite center", "satellite axis", "e_v_ref",
-                            "e_g_ref"}) {
+                            "w_trans_demo", "omega_rad_s", "satellite center", "satellite axis"}) {
         bool found = false;
         for (const auto& l : a.provenance) {
             if (l.rfind(key, 0) == 0) found = true;

@@ -20,13 +20,13 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     if (snapshot.omega_rad_s == 0.0) {
         throw std::invalid_argument("planGraspAndLaunchS1: snapshot_at_acquisition.omega_rad_s is zero.");
     }
-    if (snapshot.omega_rad_s != in.params.scan.omega_rad_s || snapshot.center != in.cube_params.center_world ||
+    if (snapshot.omega_rad_s != in.omega_rad_s || snapshot.center != in.cube_params.center_world ||
         snapshot.axis != in.cube_params.axis_world) {
         throw std::invalid_argument(
             "planGraspAndLaunchS1: snapshot_at_acquisition does not match the snapshot 'in' was built from "
             "(omega_rad_s/center/axis differ) - pass the ACQUISITION snapshot.");
     }
-    const double tau_launch_s = in.contact_assumed_at_end ? in.prodmp_template.tau() : in.params.scan.tau_contact_s;
+    const double tau_launch_s = in.contact_assumed_at_end ? in.prodmp_template.tau() : in.tau_contact_s;
     if (!(tau_launch_s > 0.0)) {
         throw std::invalid_argument("planGraspAndLaunchS1: tau_launch_s <= 0 - refusing to plan the launch.");
     }
@@ -37,20 +37,20 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
 
     robot.update(in.q0, RobotModel::JointVector::Zero());
     DemoReference demo;
-    demo.position = in.params.scan.p0 + in.params.scan.delta_g_demo;
+    demo.position = in.p0 + in.delta_g_demo;
     demo.orientation = robot.eeOrientation();
-    demo.w_trans_demo = in.params.w_trans_demo;
+    demo.w_trans_demo = in.w_trans_demo;
 
     S3Context ctx;
     ctx.prodmp_template = &in.prodmp_template;
-    ctx.contact_to_end_offset = in.params.scan.contact_to_end_offset;
-    ctx.tau_contact_s = in.params.scan.tau_contact_s;
+    ctx.contact_to_end_offset = in.contact_to_end_offset;
+    ctx.tau_contact_s = in.tau_contact_s;
     ctx.tau_launch_s = tau_launch_s;
     ctx.snapshot = snapshot;
     ctx.t_now_s = t_now_override_s.value_or(snapshot.t_s);
     ctx.min_delay_s = min_delay_s;
 
-    const S3Result r = selectGraspS3(model, robot, in.q0, demo, in.params.scan.delta_g_demo, ctx, s3);
+    const S3Result r = selectGraspS3(model, robot, in.q0, demo, in.delta_g_demo, ctx, s3);
     const double elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     if (s3_result_out) *s3_result_out = r;
 

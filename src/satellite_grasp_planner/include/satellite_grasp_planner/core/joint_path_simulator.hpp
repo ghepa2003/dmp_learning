@@ -18,7 +18,7 @@ using franka_cartesian_control::core::VelocityIkSolver;
 /// feedforward twist), expressed in the SAME frame as RobotModel's base
 /// frame (fer_link0) - the frame the real CartesianVelocityController
 /// resolves IK in, after FrameAligner. No frame alignment is performed here;
-/// callers (PhaseSelector) are responsible for expressing candidates in that
+/// callers are responsible for expressing candidates in that
 /// frame already.
 struct CartesianSample {
     Eigen::Vector3d position = Eigen::Vector3d::Zero();

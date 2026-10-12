@@ -12,7 +12,7 @@
  * parameter has NO default and fails loud (throws out of the constructor) if unset.
  *
  * ASSUMPTION (enforced at startup via checkRobotBaseWorldIsZero): the core selection pipeline
- * (candidate_scan.cpp) combines robot-base-frame FK with world-frame satellite geometry with no
+ * (grasp_s3_selection.cpp) combines robot-base-frame FK with world-frame satellite geometry with no
  * transform - it implicitly assumes robot base == world. prodmp_gazebo_executor_node.cpp makes the
  * same assumption explicitly, for the same reason. robot_base_world must be (near-)zero in v1.
  *
@@ -55,7 +55,7 @@ public:
     GraspPlannerNode();
 
     /// Joins the worker thread: if a selection is in flight (no cancellation mechanism exists in
-    /// selectGrasp()), destruction blocks until it finishes - up to ~5.2 s (Release) or ~500 s
+    /// selectGraspS3()), destruction blocks until it finishes - up to ~5.2 s (Release) or ~500 s
     /// (unoptimized build).
     ~GraspPlannerNode() override;
 

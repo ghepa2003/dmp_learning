@@ -19,7 +19,7 @@ namespace core {
  * @throws std::invalid_argument if min_delay_s is not finite or < 0, if the snapshot's omega is zero, if the
  * snapshot does not match the one @p in was built from (omega_rad_s / center / axis), or if tau_launch_s <= 0.
  * The inputs come from SelectionInputs: q_start = in.q0, delta_g_demo / contact_to_end_offset /
- * tau_contact_s from in.params.scan, w_trans_demo from in.params.w_trans_demo, and the demo reference pose =
+ * tau_contact_s / w_trans_demo as in the struct, and the demo reference pose =
  * (p0 + delta_g_demo, orientation of FK(q0)) - the orientation only matters if s3.orientation_weight > 0.
  *
  * t_now: the wait of each candidate is evaluated at t_now_override_s if given, else at snapshot.t_s; the

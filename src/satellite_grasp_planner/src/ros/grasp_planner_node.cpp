@@ -214,8 +214,7 @@ void GraspPlannerNode::onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg) {
 void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
     try {
         core::SelectionInputs in =
-            core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, robot_base_world_,
-                                       start_state_);
+            core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, start_state_);
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
 
         core::S3Result s3_result;

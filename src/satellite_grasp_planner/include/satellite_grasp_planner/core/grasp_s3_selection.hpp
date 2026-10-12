@@ -9,7 +9,7 @@
  *        Eigen + Pinocchio only, NO ROS.
  *
  *   d_pos = || (goal_cand - p0) - delta_g_demo ||,   goal_cand = grasp position + contact_to_end_offset
- *           (the same goal the legacy scan hands to the ProDMP: ScanParams::contact_to_end_offset)
+ *           (contact_to_end_offset comes from the demo, see SelectionInputs)
  *   d     = sqrt(d_pos^2 / l^2 + orientation_weight * ori^2 / angle_scale^2)
  *   cost  = d + epsilon_wait_per_s * wait_s
  * wait_s is the delay of planLaunch() (same launchDelay logic and min_delay_s as the legacy planner).
@@ -50,12 +50,11 @@ struct S3Params {
     double posthoc_cluster_deg = 10.0;
 };
 
-/// Everything besides the robot/pose evaluation that selectGraspS3 needs (the data selectGrasp takes from
-/// SelectionParams/SelectionInputs).
+/// Everything besides the robot/pose evaluation that selectGraspS3 needs (see SelectionInputs).
 struct S3Context {
     const haptic_dmp_learning::core::ProDMP* prodmp_template = nullptr;  ///< required, not modified
-    Eigen::Vector3d contact_to_end_offset = Eigen::Vector3d::Zero();     ///< ScanParams::contact_to_end_offset
-    double tau_contact_s = 0.0;  ///< <= 0: the template's tau (as ScanParams); used for the velocity check
+    Eigen::Vector3d contact_to_end_offset = Eigen::Vector3d::Zero();     ///< SelectionInputs::contact_to_end_offset
+    double tau_contact_s = 0.0;  ///< <= 0: the template's tau; used for the velocity check
     double tau_launch_s = 0.0;   ///< > 0, forwarded to planLaunch() (see planGraspAndLaunchS1)
     SatelliteSnapshot snapshot;  ///< omega, center, axis, theta/t of the acquisition
     double t_now_s = 0.0;        ///< instant the selection ends (as planGraspAndLaunchS1's t_now_s)
