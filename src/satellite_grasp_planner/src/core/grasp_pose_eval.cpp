@@ -5,7 +5,8 @@
 #include <stdexcept>
 
 #include "franka_cartesian_control/core/cartesian_error.hpp"
-#include "haptic_dmp_learning/core/grasp_roll.hpp"
+#include "haptic_dmp_learning/core/math_utils.hpp"
+#include "haptic_dmp_learning/core/tcp_roll.hpp"
 #include "satellite_grasp_planner/core/joint_path_simulator.hpp"
 #include "satellite_grasp_planner/core/manipulability.hpp"
 

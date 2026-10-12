@@ -13,6 +13,7 @@
 #include <Eigen/Geometry>
 
 #include "haptic_dmp_learning/core/math_utils.hpp"
+#include "haptic_dmp_learning/core/tcp_roll.hpp"  // applyRoll: moved out, re-included for existing users
 
 namespace haptic_dmp_learning {
 namespace core {
@@ -45,13 +46,6 @@ inline double rollPenalty(double psi, double psi_tol) {
     }
     const double r = wrapRollHalfPi(psi) / psi_tol;
     return r * r;
-}
-
-/// q_nominal * AngleAxis(psi, UnitZ), normalized: rotation about the LOCAL z of the TCP, i.e. the
-/// approach axis (which therefore does not change).
-inline Eigen::Quaterniond applyRoll(const Eigen::Quaterniond& q_nominal, double psi) {
-    return (q_nominal * Eigen::Quaterniond(Eigen::AngleAxisd(psi, Eigen::Vector3d::UnitZ())))
-        .normalized();
 }
 
 /// The two equivalent roll basins {wrap(psi), wrap(psi + pi)} (wrapPi, in (-pi, pi]), both to be

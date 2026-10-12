@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 #include "haptic_dmp_learning/core/surface_velocity.hpp"
-#include "haptic_dmp_learning/core/grasp_roll.hpp"
+#include "haptic_dmp_learning/core/tcp_roll.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "satellite_grasp_planner/core/kinematic_feasibility.hpp"
 
