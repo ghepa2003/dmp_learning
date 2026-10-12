@@ -354,14 +354,31 @@ EXPECTED_Q6_RAD = {
 BUILD_PACKAGES = ["haptic_dmp_learning", "satellite_grasp_planner", "franka_cartesian_control"]
 
 
-def check_start_pose(q6_rad, requested_pose, tol_rad=0.01):
-    """Confronta q6 letto con quello atteso dalla posa richiesta. Ritorna (ok, messaggio)."""
+ROS_ENV_HINT = ("source /opt/ros/humble/setup.bash && source /root/ros_workspaces/ros2/franka_ws/install/setup.bash && "
+                "source /root/thesis_ws/install/setup.bash")
+
+
+def check_ros_python_env():
+    """None se rclpy e sensor_msgs.msg.JointState sono importabili, altrimenti la descrizione dell'eccezione."""
+    try:
+        import rclpy  # noqa: F401
+        from sensor_msgs.msg import JointState  # noqa: F401
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def check_start_pose(q6_rad, requested_pose, tol_rad=0.01, unread_reason=None):
+    """Confronta q6 letto con quello atteso dalla posa richiesta. Ritorna (ok, messaggio).
+
+    q6 non letto -> "POSA DI PARTENZA NON VERIFICABILE: <motivo>"; q6 letto ma diverso -> "POSA DI PARTENZA ERRATA".
+    """
     expected = EXPECTED_Q6_RAD.get(requested_pose)
     if expected is None:
         return False, (f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = {q6_rad} "
                        f"(posa richiesta sconosciuta; valori noti: {sorted(EXPECTED_Q6_RAD)})")
     if q6_rad is None or not math.isfinite(q6_rad):
-        return False, f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = NON LETTO"
+        return False, f"POSA DI PARTENZA NON VERIFICABILE: {unread_reason or 'q6 non letto (motivo non indicato)'}"
     if abs(q6_rad - expected) > tol_rad:
         return False, f"POSA DI PARTENZA ERRATA: richiesta {requested_pose}, q6 = {q6_rad:.4f}"
     return True, (f"Posa di partenza OK: richiesta {requested_pose}, q6 = {q6_rad:.4f} rad "
@@ -369,34 +386,44 @@ def check_start_pose(q6_rad, requested_pose, tol_rad=0.01):
 
 
 def read_joint6_from_joint_states(timeout_sec=15.0):
-    """Legge un campione di /joint_states e ritorna q6 (fer_joint6) in rad, o None al timeout."""
+    """Legge un campione di /joint_states. Ritorna (q6 [rad], motivo): (valore, None) se letto,
+    (None, motivo) altrimenti."""
     try:
         import rclpy
         from rclpy.node import Node
         from sensor_msgs.msg import JointState
+    except Exception as e:
+        return None, f"rclpy/sensor_msgs non importabili ({type(e).__name__}: {e})"
+    try:
         if not rclpy.ok():
             rclpy.init()
-    except Exception:
-        return None
-    holder = {}
+    except Exception as e:
+        return None, f"rclpy.init fallito ({type(e).__name__}: {e})"
+    holder = {"msgs": 0}
 
     class _JsNode(Node):
         def __init__(self):
             super().__init__('start_pose_guard')
             self.sub = self.create_subscription(JointState, '/joint_states', self.cb, 10)
         def cb(self, msg):
+            holder["msgs"] += 1
+            holder["names"] = list(msg.name)
             pos = dict(zip(msg.name, msg.position))
             if 'fer_joint6' in pos:
                 holder['q6'] = float(pos['fer_joint6'])
 
     node = _JsNode()
     try:
-        t_end = time.time() + timeout_sec
-        while 'q6' not in holder and time.time() < t_end:
+        t_end = time.monotonic() + timeout_sec
+        while 'q6' not in holder and time.monotonic() < t_end:
             rclpy.spin_once(node, timeout_sec=0.1)
     finally:
         node.destroy_node()
-    return holder.get('q6')
+    if 'q6' in holder:
+        return holder['q6'], None
+    if holder["msgs"] == 0:
+        return None, f"nessun messaggio su /joint_states entro {timeout_sec:g} s"
+    return None, f"giunto fer_joint6 assente nel messaggio (nomi: {holder['names']})"
 
 
 def extract_joint6_initial_value_lines(launch_log_path):

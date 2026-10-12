@@ -146,6 +146,14 @@ def run_canonical_evaluation(
         print("=================================================================\n")
         return summary
 
+    # Ambiente ROS nella shell che lancia lo script: prima di toccare processi o avviare Gazebo
+    ros_err = ec.check_ros_python_env()
+    if ros_err:
+        reason = (f"AMBIENTE ROS NON CARICATO NELLA SHELL CHE LANCIA LO SCRIPT ({ros_err}). "
+                  f"Esegui: {ec.ROS_ENV_HINT}")
+        print(f"[ERRORE FATALE] {reason}")
+        return _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers, reason)
+
     # Stato pulito: yaml dei guadagni tracciato = HEAD, nessun'altra run in corso (prima di toccare processi)
     others = ec.find_other_eval_runs()
     if others:
@@ -216,11 +224,12 @@ def run_canonical_evaluation(
 
         # Guardia sulla posa di partenza: prima di bag, executor e qualsiasi target
         print("Controller ATTIVO! Verifica posa di partenza (q6 da /joint_states)...", flush=True)
-        q6_read = ec.read_joint6_from_joint_states()
+        q6_read, q6_reason = ec.read_joint6_from_joint_states()
         j6_lines, j6_init = ec.extract_joint6_initial_value_lines(launch_log)
-        guard_ok, guard_msg = ec.check_start_pose(q6_read, start_pose)
+        guard_ok, guard_msg = ec.check_start_pose(q6_read, start_pose, unread_reason=q6_reason)
         run_info.update({
             "q6_rad": q6_read,
+            "q6_unread_reason": q6_reason,
             "found_initial_value_j6_lines": j6_lines,
             "start_pose_guard": {"ok": guard_ok, "message": guard_msg},
         })
