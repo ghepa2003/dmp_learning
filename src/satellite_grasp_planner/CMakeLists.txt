@@ -44,7 +44,6 @@ add_library(${PROJECT_NAME}_core
   src/core/launch_plan.cpp
   src/core/selection_inputs.cpp
   src/core/start_state.cpp
-  src/core/grasp_launch.cpp
   src/core/grasp_pose_eval.cpp
   src/core/grasp_s3_selection.cpp
   src/core/grasp_s3_launch.cpp
@@ -97,7 +96,7 @@ target_link_libraries(grasp_planner_ros_lib
   pinocchio::pinocchio
   coal::coal
 )
-# grasp_command_conversion.cpp includes grasp_launch.hpp, which transitively pulls in
+# grasp_command_conversion.cpp includes grasp_launch_result.hpp, which transitively pulls in
 # haptic_dmp_learning/franka_cartesian_control headers (CubeSatelliteModel, RobotModel, ...) - needed
 # even though this .cpp never calls into them, matching every other target in this file that includes
 # those headers.
@@ -292,16 +291,6 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_satellite_collision
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_grasp_launch test/test_grasp_launch.cpp)
-  target_link_libraries(test_grasp_launch
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_grasp_launch
     haptic_dmp_learning
     franka_cartesian_control
   )

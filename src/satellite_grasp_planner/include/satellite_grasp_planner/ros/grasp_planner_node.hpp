@@ -23,7 +23,7 @@
  * cannot silently disagree with itself.
  *
  * CLOCK: runs with use_sim_time=true (asserted at startup: use_sim_time param + ros_time_is_active()).
- * planGraspAndLaunch() is called with clock=nullptr and t_now_override_s=std::nullopt, i.e. its
+ * planGraspAndLaunchS1() is called with t_now_override_s=std::nullopt, i.e. its
  * library default t_now_s = snapshot.t_s + WALL-CLOCK elapsed_s is used as-is; this only feeds
  * provisional_delay_s, which GraspCommand.msg documents as diagnostic-only (the consuming executor
  * triggers on phase, not on this delay). If the node clock reads earlier than snapshot.t_s at the end

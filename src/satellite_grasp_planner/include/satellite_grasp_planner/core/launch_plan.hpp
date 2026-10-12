@@ -2,8 +2,7 @@
 
 /**
  * @file launch_plan.hpp
- * @brief Pure functions to plan the launch time from a satellite measurement and to decide whether
- *        the grasp selection must be redone. No ProDMP, no RobotModel.
+ * @brief Pure functions to plan the launch time from a satellite measurement. No ProDMP, no RobotModel.
  */
 
 #include <Eigen/Dense>
@@ -26,31 +25,6 @@ struct SatelliteSnapshot {
 
 /// Phase at time t_s assuming constant omega: theta + omega*(t_s - snapshot.t_s), wrapped to (-pi, pi].
 double phaseAt(const SatelliteSnapshot& snapshot, double t_s);
-
-/// PROVISIONAL thresholds: they depend on the camera accuracy, which is not known.
-struct ReselectionThresholds {
-    double rel_omega_change = 0.05;
-    double axis_angle_rad = 1.0 * 3.14159265358979323846 / 180.0;
-    double center_shift_m = 0.01;
-};
-
-struct ReselectionCheck {
-    bool needed = false;  ///< any of the three flags below
-    bool omega_changed = false;
-    bool axis_changed = false;
-    bool center_changed = false;
-    double rel_omega_change = 0.0;
-    double axis_angle_rad = 0.0;
-    double center_shift_m = 0.0;
-};
-
-/// Compares the satellite state at selection time with the one at launch time.
-/// rel_omega_change = |omega_l - omega_s| / |omega_s|; axis_angle between the normalized axes;
-/// center_shift = distance between centers. A sign change of omega always counts as omega_changed.
-/// @throws std::invalid_argument if omega_s == 0 or an axis has norm < 1e-9.
-ReselectionCheck needsReselection(const SatelliteSnapshot& at_selection,
-                                  const SatelliteSnapshot& at_launch,
-                                  const ReselectionThresholds& thresholds = ReselectionThresholds());
 
 struct LaunchPlan {
     double delay_s = 0.0;

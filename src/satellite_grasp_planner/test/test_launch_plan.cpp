@@ -81,43 +81,7 @@ TEST(LaunchPlanPlan, ContactPhaseAlwaysMatchesTarget) {
     EXPECT_EQ(n, 20);
 }
 
-TEST(LaunchPlanReselection, Flags) {
-    const SatelliteSnapshot base = snap(-2.0);
-    EXPECT_FALSE(needsReselection(base, base).needed);
-
-    SatelliteSnapshot l = snap(-2.2);
-    ReselectionCheck c = needsReselection(base, l);
-    EXPECT_TRUE(c.omega_changed);
-    EXPECT_NEAR(c.rel_omega_change, 0.1, 1e-12);
-    EXPECT_TRUE(c.needed);
-    EXPECT_FALSE(c.axis_changed);
-    EXPECT_FALSE(c.center_changed);
-
-    l = base;
-    l.axis = Eigen::AngleAxisd(degToRad(2.0), Eigen::Vector3d::UnitX()) * base.axis;
-    c = needsReselection(base, l);
-    EXPECT_TRUE(c.axis_changed);
-    EXPECT_NEAR(c.axis_angle_rad, degToRad(2.0), 1e-12);
-    EXPECT_TRUE(c.needed);
-
-    l = base;
-    l.center = Eigen::Vector3d(0.02, 0.0, 0.0);
-    c = needsReselection(base, l);
-    EXPECT_TRUE(c.center_changed);
-    EXPECT_NEAR(c.center_shift_m, 0.02, 1e-15);
-    EXPECT_TRUE(c.needed);
-
-    c = needsReselection(base, snap(2.0));
-    EXPECT_TRUE(c.omega_changed);  // sign change
-    EXPECT_TRUE(c.needed);
-}
-
 TEST(LaunchPlanThrows, InvalidInputs) {
-    EXPECT_THROW(needsReselection(snap(0.0), snap(-2.0)), std::invalid_argument);
-    SatelliteSnapshot zero_axis = snap(-2.0);
-    zero_axis.axis = Eigen::Vector3d::Zero();
-    EXPECT_THROW(needsReselection(snap(-2.0), zero_axis), std::invalid_argument);
-    EXPECT_THROW(needsReselection(zero_axis, snap(-2.0)), std::invalid_argument);
     EXPECT_THROW(planLaunch(snap(0.0), 0.0, 0.0, 30.0), std::invalid_argument);
     EXPECT_THROW(planLaunch(snap(-2.0), 0.0, 0.0, 0.0), std::invalid_argument);
     EXPECT_THROW(planLaunch(snap(-2.0), 0.0, 0.0, -1.0), std::invalid_argument);

@@ -56,9 +56,9 @@ struct S3Context {
     const haptic_dmp_learning::core::ProDMP* prodmp_template = nullptr;  ///< required, not modified
     Eigen::Vector3d contact_to_end_offset = Eigen::Vector3d::Zero();     ///< ScanParams::contact_to_end_offset
     double tau_contact_s = 0.0;  ///< <= 0: the template's tau (as ScanParams); used for the velocity check
-    double tau_launch_s = 0.0;   ///< > 0, forwarded to planLaunch() (see planGraspAndLaunch)
+    double tau_launch_s = 0.0;   ///< > 0, forwarded to planLaunch() (see planGraspAndLaunchS1)
     SatelliteSnapshot snapshot;  ///< omega, center, axis, theta/t of the acquisition
-    double t_now_s = 0.0;        ///< instant the selection ends (as planGraspAndLaunch's t_now_s)
+    double t_now_s = 0.0;        ///< instant the selection ends (as planGraspAndLaunchS1's t_now_s)
     double min_delay_s = 0.0;
 };
 
