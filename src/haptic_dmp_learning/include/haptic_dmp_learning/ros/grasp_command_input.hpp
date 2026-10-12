@@ -25,9 +25,11 @@ static_assert(si::kGraspStatusNoFeasibleCandidate == GraspCommand::STATUS_NO_FEA
               "GraspCommand STATUS_NO_FEASIBLE_CANDIDATE changed");
 static_assert(si::kGraspStatusBudgetExhaustedNoCandidate == GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE,
               "GraspCommand STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE changed");
+static_assert(si::kGraspStatusPosthocFailed == GraspCommand::STATUS_POSTHOC_FAILED,
+              "GraspCommand STATUS_POSTHOC_FAILED changed");
 
-/// Copies the fields the executor uses (position only: goal orientation, psi, k, provisional_delay_s and
-/// best_total_cost are not read). header.stamp -> seconds via rclcpp::Time.
+/// Copies the fields the executor uses (position only: goal orientation, wrist_flip, k, provisional_delay_s and
+/// the candidate diagnostics are not read). header.stamp -> seconds via rclcpp::Time.
 inline si::GraspCommandInputs toGraspCommandInputs(const GraspCommand& msg) {
     si::GraspCommandInputs in;
     in.status = msg.status;
@@ -41,9 +43,7 @@ inline si::GraspCommandInputs toGraspCommandInputs(const GraspCommand& msg) {
     in.snapshot_theta_rad = msg.snapshot_theta_rad;
     in.snapshot_t_s = msg.snapshot_t_s;
     in.weights_sha256 = msg.weights_sha256;
-    in.rows_evaluated = msg.rows_evaluated;
-    in.stop_reason = msg.stop_reason;
-    in.bound_violated = msg.bound_violated;
+    in.evaluations = msg.evaluations;
     return in;
 }
 

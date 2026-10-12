@@ -25,9 +25,7 @@ TEST(GraspCommandInputTest, CopiesTheFieldsTheExecutorUses) {
     msg.snapshot_theta_rad = 0.2;
     msg.snapshot_t_s = 9.5;
     msg.weights_sha256 = std::string(64, 'c');
-    msg.rows_evaluated = 7;
-    msg.stop_reason = GraspCommand::STOP_MAX_ROWS_REACHED;
-    msg.bound_violated = true;
+    msg.evaluations = 7;
 
     const si::GraspCommandInputs in = toGraspCommandInputs(msg);
     EXPECT_EQ(in.status, si::kGraspStatusSelected);
@@ -41,9 +39,7 @@ TEST(GraspCommandInputTest, CopiesTheFieldsTheExecutorUses) {
     EXPECT_DOUBLE_EQ(in.snapshot_theta_rad, 0.2);
     EXPECT_DOUBLE_EQ(in.snapshot_t_s, 9.5);
     EXPECT_EQ(in.weights_sha256, std::string(64, 'c'));
-    EXPECT_EQ(in.rows_evaluated, 7);
-    EXPECT_EQ(in.stop_reason, GraspCommand::STOP_MAX_ROWS_REACHED);
-    EXPECT_TRUE(in.bound_violated);
+    EXPECT_EQ(in.evaluations, 7u);
 }
 
 TEST(GraspCommandInputTest, StatusNamesMatchTheMessageConstants) {
@@ -52,4 +48,5 @@ TEST(GraspCommandInputTest, StatusNamesMatchTheMessageConstants) {
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE), "STATUS_NO_FEASIBLE_CANDIDATE");
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE),
                  "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE");
+    EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_POSTHOC_FAILED), "STATUS_POSTHOC_FAILED");
 }

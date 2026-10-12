@@ -540,6 +540,7 @@ inline constexpr std::uint8_t kGraspStatusUnset = 0;
 inline constexpr std::uint8_t kGraspStatusSelected = 1;
 inline constexpr std::uint8_t kGraspStatusNoFeasibleCandidate = 2;
 inline constexpr std::uint8_t kGraspStatusBudgetExhaustedNoCandidate = 3;
+inline constexpr std::uint8_t kGraspStatusPosthocFailed = 4;
 
 inline const char* graspStatusName(std::uint8_t status) {
     switch (status) {
@@ -547,12 +548,13 @@ inline const char* graspStatusName(std::uint8_t status) {
         case kGraspStatusSelected: return "STATUS_SELECTED";
         case kGraspStatusNoFeasibleCandidate: return "STATUS_NO_FEASIBLE_CANDIDATE";
         case kGraspStatusBudgetExhaustedNoCandidate: return "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE";
+        case kGraspStatusPosthocFailed: return "STATUS_POSTHOC_FAILED";
         default: return "STATUS_<unknown>";
     }
 }
 
 /// The fields of a GraspCommand the executor uses, as plain values (position only: goal orientation,
-/// psi, k, provisional_delay_s and best_total_cost are deliberately not used in v1).
+/// wrist_flip, k, provisional_delay_s and the candidate diagnostics are deliberately not used in v1).
 struct GraspCommandInputs {
     std::uint8_t status = kGraspStatusUnset;
     std::string frame_id;
@@ -566,9 +568,7 @@ struct GraspCommandInputs {
     double snapshot_t_s = 0.0;
     std::string weights_sha256;
     // Diagnostics only, for the error text of a non-SELECTED command.
-    int rows_evaluated = 0;
-    std::uint8_t stop_reason = 0;
-    bool bound_violated = false;
+    std::uint32_t evaluations = 0;
 };
 
 struct GraspCommandCheckParams {
@@ -618,9 +618,8 @@ inline GraspCommandPlan validateGraspCommand(const GraspCommandInputs& in, const
     if (in.status != kGraspStatusSelected) {
         std::ostringstream m;
         m << "status=" << static_cast<int>(in.status) << " (" << graspStatusName(in.status)
-          << "), not STATUS_SELECTED; rows_evaluated=" << in.rows_evaluated
-          << " stop_reason=" << static_cast<int>(in.stop_reason)
-          << " bound_violated=" << (in.bound_violated ? "true" : "false") << ". No motion is started.";
+          << "), not STATUS_SELECTED; evaluations=" << in.evaluations
+          << ". No motion is started.";
         rejectCommand(m.str());
     }
     if (in.frame_id != p.world_frame) {

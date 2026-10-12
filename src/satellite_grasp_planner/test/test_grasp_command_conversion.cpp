@@ -1,6 +1,5 @@
 // Tests for toGraspCommandMsg() (grasp_command_conversion.hpp): a pure conversion, no rclcpp::init()
-// needed. Covers all three GraspLaunchResult::Status values, all four StopReason values and
-// best_total_cost.
+// needed. Covers all three GraspLaunchResult::Status values and the candidate diagnostics.
 
 #include <gtest/gtest.h>
 
@@ -43,12 +42,8 @@ ros_wrapper::GraspCommandProvenance makeProvenance() {
 TEST(GraspCommandConversionTest, NoFeasibleCandidateLeavesGoalFieldsDefault) {
     core::GraspLaunchResult result;
     result.status = core::GraspLaunchResult::Status::kNoFeasibleCandidate;
-    result.selection.rows_evaluated = 5;
-    result.selection.total_rollouts = 10;
-    result.selection.elapsed_s = 1.5;
-    result.selection.stop_reason = core::GraspSelection::StopReason::kCompleted;
-    result.selection.bound_violated = false;
-    result.selection.max_w_hat_seen = 0.9;
+    result.evaluations = 5;
+    result.elapsed_s = 1.5;
 
     const auto snapshot = makeSnapshot();
     const rclcpp::Time stamp(12, 500000000, RCL_ROS_TIME);
@@ -60,29 +55,26 @@ TEST(GraspCommandConversionTest, NoFeasibleCandidateLeavesGoalFieldsDefault) {
     EXPECT_EQ(msg.goal_pose.position.z, 0.0);
     EXPECT_EQ(msg.k, 0);
     EXPECT_EQ(msg.theta_star_rad, 0.0);
-    EXPECT_EQ(msg.psi_rad, 0.0);
+    EXPECT_FALSE(msg.wrist_flip);
     EXPECT_EQ(msg.provisional_delay_s, 0.0);
     EXPECT_EQ(msg.contact_time_s, 0.0);  // tau_launch_s defaults to 0.0 when not SELECTED
     EXPECT_DOUBLE_EQ(msg.omega_rad_s, snapshot.omega_rad_s);
-    EXPECT_EQ(msg.rows_evaluated, 5);
-    EXPECT_EQ(msg.total_rollouts, 10);
+    EXPECT_EQ(msg.evaluations, 5u);
     EXPECT_DOUBLE_EQ(msg.selection_elapsed_s, 1.5);
-    EXPECT_EQ(msg.stop_reason, GraspCommand::STOP_COMPLETED);
-    EXPECT_FALSE(msg.bound_violated);
-    EXPECT_DOUBLE_EQ(msg.max_w_hat_seen, 0.9);
 }
 
-TEST(GraspCommandConversionTest, BudgetExhaustedNoCandidate) {
+TEST(GraspCommandConversionTest, PosthocFailedHasItsOwnStatus) {
     core::GraspLaunchResult result;
-    result.status = core::GraspLaunchResult::Status::kBudgetExhaustedNoCandidate;
-    result.selection.stop_reason = core::GraspSelection::StopReason::kTimeBudgetExhausted;
+    result.status = core::GraspLaunchResult::Status::kPosthocFailed;
+    result.evaluations = 880;
 
     const auto snapshot = makeSnapshot();
     const rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
     const GraspCommand msg = ros_wrapper::toGraspCommandMsg(result, snapshot, stamp, makeProvenance());
 
-    EXPECT_EQ(msg.status, GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE);
-    EXPECT_EQ(msg.stop_reason, GraspCommand::STOP_TIME_BUDGET_EXHAUSTED);
+    EXPECT_EQ(msg.status, GraspCommand::STATUS_POSTHOC_FAILED);
+    EXPECT_NE(msg.status, GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE);
+    EXPECT_EQ(msg.evaluations, 880u);
     EXPECT_EQ(msg.contact_time_s, 0.0);
 }
 
@@ -93,11 +85,10 @@ TEST(GraspCommandConversionTest, SelectedPopulatesGoalFieldsAndContactTimeVerbat
     result.goal_orientation = Eigen::Quaterniond(0.9, 0.1, 0.2, 0.3).normalized();
     result.k = haptic_dmp_learning::core::GraspPointId::kP90;
     result.theta_star_rad = 0.77;
-    result.psi_rad = 1.57;
+    result.wrist_flip = true;
     result.tau_launch_s = 0.42;
     result.launch = core::LaunchPlan{};
     result.launch->delay_s = 3.3;
-    result.selection.stop_reason = core::GraspSelection::StopReason::kBoundSatisfied;
 
     const auto snapshot = makeSnapshot();
     const rclcpp::Time stamp(1, 0, RCL_ROS_TIME);
@@ -109,32 +100,12 @@ TEST(GraspCommandConversionTest, SelectedPopulatesGoalFieldsAndContactTimeVerbat
     EXPECT_DOUBLE_EQ(msg.goal_pose.position.z, 0.2);
     EXPECT_EQ(msg.k, 1);  // kP90 == 1
     EXPECT_DOUBLE_EQ(msg.theta_star_rad, 0.77);
-    EXPECT_DOUBLE_EQ(msg.psi_rad, 1.57);
+    EXPECT_TRUE(msg.wrist_flip);
     EXPECT_DOUBLE_EQ(msg.contact_time_s, 0.42);  // tau_launch_s verbatim, no +dt (D6)
     EXPECT_DOUBLE_EQ(msg.provisional_delay_s, 3.3);
-    EXPECT_EQ(msg.stop_reason, GraspCommand::STOP_BOUND_SATISFIED);
 }
 
-TEST(GraspCommandConversionTest, AllStopReasonsMapToTheirConstants) {
-    using SR = core::GraspSelection::StopReason;
-    const std::vector<std::pair<SR, uint8_t>> expected = {
-        {SR::kCompleted, GraspCommand::STOP_COMPLETED},
-        {SR::kBoundSatisfied, GraspCommand::STOP_BOUND_SATISFIED},
-        {SR::kMaxRowsReached, GraspCommand::STOP_MAX_ROWS_REACHED},
-        {SR::kTimeBudgetExhausted, GraspCommand::STOP_TIME_BUDGET_EXHAUSTED},
-    };
-    const auto snapshot = makeSnapshot();
-    const rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
-    for (const auto& [reason, constant] : expected) {
-        core::GraspLaunchResult result;  // status kNoFeasibleCandidate: only the stop_reason mapping matters
-        result.selection.stop_reason = reason;
-        const GraspCommand msg = ros_wrapper::toGraspCommandMsg(result, snapshot, stamp, makeProvenance());
-        EXPECT_EQ(msg.stop_reason, constant) << "StopReason=" << static_cast<int>(reason);
-        EXPECT_NE(msg.stop_reason, GraspCommand::STOP_UNSET);
-    }
-}
-
-TEST(GraspCommandConversionTest, BestTotalCostOnlySetWhenSelected) {
+TEST(GraspCommandConversionTest, CandidateDiagnosticsOnlySetWhenSelected) {
     const auto snapshot = makeSnapshot();
     const rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
 
@@ -144,36 +115,51 @@ TEST(GraspCommandConversionTest, BestTotalCostOnlySetWhenSelected) {
     selected.goal_orientation = Eigen::Quaterniond::Identity();
     selected.k = haptic_dmp_learning::core::GraspPointId::kP0;
     selected.theta_star_rad = 0.0;
-    selected.psi_rad = 0.0;
     selected.launch = core::LaunchPlan{};
-    selected.selection.best.cost.total = -1.75;  // negative is legal: manipulability term lowers the cost
-    EXPECT_DOUBLE_EQ(ros_wrapper::toGraspCommandMsg(selected, snapshot, stamp, makeProvenance()).best_total_cost, -1.75);
+    selected.cost = 0.1427;
+    selected.d_pos_m = 0.0134;
+    selected.w_hat = 0.7536;
+    selected.min_joint_margin_rad = 0.7664;
+    selected.posthoc_dv_m_s = 2.5e-3;
+    const GraspCommand sel = ros_wrapper::toGraspCommandMsg(selected, snapshot, stamp, makeProvenance());
+    EXPECT_DOUBLE_EQ(sel.cost, 0.1427);
+    EXPECT_DOUBLE_EQ(sel.d_pos_m, 0.0134);
+    EXPECT_DOUBLE_EQ(sel.w_hat, 0.7536);
+    EXPECT_DOUBLE_EQ(sel.min_joint_margin_rad, 0.7664);
+    EXPECT_DOUBLE_EQ(sel.posthoc_dv_m_s, 2.5e-3);
 
-    // Not SELECTED: a stale best.cost.total in the diagnostics must NOT leak into the message.
+    // Not SELECTED: stale candidate values must NOT leak into the message.
     for (const auto status : {core::GraspLaunchResult::Status::kNoFeasibleCandidate,
-                              core::GraspLaunchResult::Status::kBudgetExhaustedNoCandidate}) {
+                              core::GraspLaunchResult::Status::kPosthocFailed}) {
         core::GraspLaunchResult r;
         r.status = status;
-        r.selection.best.cost.total = 9.0;
-        EXPECT_EQ(ros_wrapper::toGraspCommandMsg(r, snapshot, stamp, makeProvenance()).best_total_cost, 0.0);
+        r.cost = 9.0;
+        r.d_pos_m = 9.0;
+        r.w_hat = 9.0;
+        r.min_joint_margin_rad = 9.0;
+        r.posthoc_dv_m_s = 9.0;
+        const GraspCommand msg = ros_wrapper::toGraspCommandMsg(r, snapshot, stamp, makeProvenance());
+        EXPECT_EQ(msg.cost, 0.0);
+        EXPECT_EQ(msg.d_pos_m, 0.0);
+        EXPECT_EQ(msg.w_hat, 0.0);
+        EXPECT_EQ(msg.min_joint_margin_rad, 0.0);
+        EXPECT_EQ(msg.posthoc_dv_m_s, 0.0);
     }
 }
 
 TEST(GraspCommandConversionTest, NamesMatchConstants) {
     EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_SELECTED), "STATUS_SELECTED");
+    EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_POSTHOC_FAILED), "STATUS_POSTHOC_FAILED");
     EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE),
                  "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE");
     EXPECT_STREQ(ros_wrapper::statusName(200), "STATUS_<unknown>");
-    EXPECT_STREQ(ros_wrapper::stopReasonName(GraspCommand::STOP_TIME_BUDGET_EXHAUSTED),
-                 "STOP_TIME_BUDGET_EXHAUSTED");
-    EXPECT_STREQ(ros_wrapper::stopReasonName(200), "STOP_<unknown>");
 }
 
 TEST(GraspCommandConversionTest, ProvenanceFieldsInAllThreeStatuses) {
     const auto snapshot = makeSnapshot();
     const rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
     using S = core::GraspLaunchResult::Status;
-    for (const S status : {S::kSelected, S::kNoFeasibleCandidate, S::kBudgetExhaustedNoCandidate}) {
+    for (const S status : {S::kSelected, S::kNoFeasibleCandidate, S::kPosthocFailed}) {
         core::GraspLaunchResult r;
         r.status = status;
         if (status == S::kSelected) {
@@ -181,7 +167,6 @@ TEST(GraspCommandConversionTest, ProvenanceFieldsInAllThreeStatuses) {
             r.goal_orientation = Eigen::Quaterniond::Identity();
             r.k = haptic_dmp_learning::core::GraspPointId::kP0;
             r.theta_star_rad = 0.0;
-            r.psi_rad = 0.0;
             r.launch = core::LaunchPlan{};
         }
         const GraspCommand msg = ros_wrapper::toGraspCommandMsg(r, snapshot, stamp, makeProvenance());

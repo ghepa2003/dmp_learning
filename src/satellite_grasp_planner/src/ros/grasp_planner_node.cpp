@@ -242,11 +242,9 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         const auto msg = toGraspCommandMsg(result, snapshot, now, provenance);
         pub_->publish(msg);
         RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: published GraspCommand (status=%u %s, stop_reason=%u %s, "
-                    "rows_evaluated=%d), now idle.",
+                    "grasp_planner_node: published GraspCommand (status=%u %s, evaluations=%u), now idle.",
                     static_cast<unsigned>(msg.status), statusName(msg.status),
-                    static_cast<unsigned>(msg.stop_reason), stopReasonName(msg.stop_reason),
-                    msg.rows_evaluated);
+                    static_cast<unsigned>(msg.evaluations));
     } catch (const std::exception& e) {
         RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: selection failed: %s", e.what());
         rclcpp::shutdown();

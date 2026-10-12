@@ -14,7 +14,6 @@ namespace core {
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s, S3Result* s3_result_out) {
-    // Same preconditions as planGraspAndLaunch().
     if (!std::isfinite(min_delay_s) || min_delay_s < 0.0) {
         throw std::invalid_argument("planGraspAndLaunchS1: min_delay_s must be finite and >= 0.");
     }
@@ -56,15 +55,12 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     if (s3_result_out) *s3_result_out = r;
 
     GraspLaunchResult out;
-    out.selection.rows_evaluated = r.evaluations;
-    out.selection.total_rollouts = r.posthoc_checks;
-    out.selection.max_w_hat_seen = r.max_w_hat_passing;
-    out.selection.bound_violated = false;
-    out.selection.stop_reason = GraspSelection::StopReason::kCompleted;
-    out.selection.elapsed_s = elapsed_s;
+    out.evaluations = r.evaluations;
+    out.elapsed_s = elapsed_s;
 
     if (r.status != S3Result::kSelected) {
-        out.status = GraspLaunchResult::Status::kNoFeasibleCandidate;
+        out.status = r.status == S3Result::kPosthocFailed ? GraspLaunchResult::Status::kPosthocFailed
+                                                          : GraspLaunchResult::Status::kNoFeasibleCandidate;
         return out;
     }
     out.status = GraspLaunchResult::Status::kSelected;
@@ -76,17 +72,6 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
         c.eval.wrist_flip ? haptic_dmp_learning::core::applyRoll(q_nominal, haptic_dmp_learning::core::kPi)
                           : q_nominal;
     const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-    const double psi = c.eval.wrist_flip ? haptic_dmp_learning::core::kPi : 0.0;
-
-    out.selection.found = true;
-    out.selection.goal_position = goal;
-    out.selection.goal_orientation = q_goal;
-    out.selection.best.row.k = c.eval.k;
-    out.selection.best.row.theta_rad = c.eval.theta_rad;
-    out.selection.best.row.contact_point = c.eval.pose.position_world;
-    out.selection.best.row.goal_param = goal;
-    out.selection.best.psi_rad = psi;
-    out.selection.best.cost.total = c.cost;
 
     const double t_now_s = t_now_override_s.value_or(snapshot.t_s + elapsed_s);
     out.launch = planLaunch(snapshot, t_now_s, c.eval.theta_rad, tau_launch_s, min_delay_s);
@@ -94,7 +79,12 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     out.goal_orientation = q_goal;
     out.k = c.eval.k;
     out.theta_star_rad = c.eval.theta_rad;
-    out.psi_rad = psi;
+    out.wrist_flip = c.eval.wrist_flip;
+    out.cost = c.cost;
+    out.d_pos_m = c.d_pos_m;
+    out.w_hat = c.eval.w_hat;
+    out.min_joint_margin_rad = c.eval.margins.min_margin_rad;
+    out.posthoc_dv_m_s = r.posthoc_dv_m_s;
     return out;
 }
 
