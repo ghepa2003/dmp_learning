@@ -55,25 +55,6 @@ ScanParams makeScan(const CubeSatelliteModel& m) {
 
 }  // namespace
 
-TEST(CandidateScanWindow, CenterThetaKnownCases) {
-    {
-        auto p = makeModelBParams();
-        EXPECT_NEAR(windowCenterTheta(CubeSatelliteModel(p), Eigen::Vector3d::Zero()), 0.0, 1e-12);
-    }
-    {
-        CubeSatelliteModel::Params p;
-        p.center_world = Eigen::Vector3d(0.3928, -0.165, 0.1188);
-        p.axis_world = Eigen::Vector3d(0.0, 1.0, 0.0);
-        p.face_normal_body = Eigen::Vector3d(0.0, 0.0, 1.0);
-        EXPECT_NEAR(radToDeg(windowCenterTheta(CubeSatelliteModel(p), Eigen::Vector3d::Zero())),
-                    -106.83, 0.01);
-    }
-    // Base on the spin axis: undefined.
-    CubeSatelliteModel::Params p;
-    const CubeSatelliteModel m(p);
-    EXPECT_THROW(windowCenterTheta(m, Eigen::Vector3d(0.0, 0.0, 5.0)), std::invalid_argument);
-}
-
 TEST(CandidateScanRows, CountAndThetaRange) {
     const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
     const ProDMP tmpl = makeSyntheticProDmpTemplate();

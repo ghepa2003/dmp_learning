@@ -14,6 +14,7 @@
 #include "haptic_dmp_learning/core/surface_velocity.hpp"
 #include "satellite_grasp_planner/core/candidate_scan.hpp"
 #include "satellite_grasp_planner/core/manipulability.hpp"
+#include "satellite_grasp_planner/core/window_center.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
