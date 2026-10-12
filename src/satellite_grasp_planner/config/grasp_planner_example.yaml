@@ -47,22 +47,13 @@ grasp_planner_node:
     q_ref_consistency_tol_deg: 0.5
     robot_base_world_tol_m: 1.0e-6
     grasp_command_topic: "/grasp_command"
-    # time_budget_s: 10.0   # optional, soft wall-clock budget for the whole selectGrasp() call
-    # Optional SelectionParams overrides; each must be finite and > 0. Unset = default (shown).
-    # scan_step_deg: 5.0
-    # max_rows: 40           # integer
-    # w_hat_upper_bound: 2.5
-    # psi_tol_deg: 10.0
     # Optional start configuration of the selection: 7 values in fer_joint1..7 order (rad), finite and within the
     # URDF joint limits. Empty / unset (default) = RobotModel::readyPose() (or demo_params start_joints_rad if the
     # file has it). When set it wins over the demo file. p0 / start_position then are FK(this q).
     # start_joints_override_rad: [0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]
 
-    # Selection mode: "legacy" (default, selectGrasp: e_v/e_g/manipulability/roll cost, collision) or "s1"
-    # (selectGraspS3: reduced problem, position-only deformation distance + constraints, velocity and path
-    # checked a posteriori). In "s1" the legacy search parameters above (scan_step_deg, max_rows, psi_tol_deg,
-    # w_hat_upper_bound, time_budget_s) are ignored. All s1.* are optional; the values below are the defaults.
-    selection_mode: "legacy"
+    # Selection (selectGraspS3): reduced problem, position-only deformation distance + constraints, velocity and
+    # path checked a posteriori. All s1.* are optional; the values below are the defaults.
     # s1.length_scale_m: 0.10          # l in d = sqrt(d_pos^2/l^2 + orientation_weight*ori^2/angle_scale^2)
     # s1.orientation_weight: 0.0       # 0 = distance on position only
     # s1.angle_scale_rad: 1.0

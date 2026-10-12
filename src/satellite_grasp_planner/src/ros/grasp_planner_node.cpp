@@ -8,7 +8,6 @@
 
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
-#include "satellite_grasp_planner/core/grasp_launch.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_launch.hpp"
 #include "satellite_grasp_planner/core/selection_inputs.hpp"
 #include "satellite_grasp_planner/ros/grasp_command_conversion.hpp"
@@ -105,11 +104,8 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     const double q_ref_tol_deg = this->declare_parameter<double>("q_ref_consistency_tol_deg", 0.5);
     const double robot_base_world_tol_m = this->declare_parameter<double>("robot_base_world_tol_m", 1e-6);
     grasp_command_topic_ = this->declare_parameter<std::string>("grasp_command_topic", "/grasp_command");
-    const double time_budget_s = this->declare_parameter<double>("time_budget_s", -1.0);
-    if (time_budget_s >= 0.0) time_budget_s_ = time_budget_s;
 
-    // SelectionParams overrides: declared by type only, so "not set" (keep the SelectionParams
-    // default) is distinguishable from any value. Validated here so a bad value fails at startup.
+    // Declared by type only, so "not set" (keep the default) is distinguishable from any value.
     auto opt_double = [this](const char* name) -> std::optional<double> {
         const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
         if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) return std::nullopt;
@@ -117,20 +113,6 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     };
     // Optional: unset => grasp points at collar_radius_m (CubeSatelliteModel::Params default).
     cube_geometry_.grasp_radius_m = opt_double("cube_geometry.grasp_radius_m");
-    selection_overrides_.scan_step_deg = opt_double("scan_step_deg");
-    selection_overrides_.w_hat_upper_bound = opt_double("w_hat_upper_bound");
-    selection_overrides_.psi_tol_deg = opt_double("psi_tol_deg");
-    {
-        const auto v = this->declare_parameter("max_rows", rclcpp::ParameterType::PARAMETER_INTEGER);
-        if (v.get_type() != rclcpp::ParameterType::PARAMETER_NOT_SET) {
-            const int64_t rows = v.get<int64_t>();
-            if (rows > std::numeric_limits<int>::max()) {
-                throw std::invalid_argument("parameter 'max_rows' is too large: " + std::to_string(rows));
-            }
-            selection_overrides_.max_rows = static_cast<int>(rows);  // <= 0 is rejected below
-        }
-    }
-    validateSelectionOverrides(selection_overrides_);
 
     // Optional start configuration: 7 values in fer_joint1..7 order. Empty (default) = readyPose (previous
     // behaviour). Validated here, at startup, against the joint limits of the URDF at urdf_path.
@@ -140,11 +122,7 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         if (!values.empty()) start_state_ = core::makeStartStateFromOverride(values, urdf_path_);
     }
 
-    // Selection mode: "legacy" (default, unchanged behaviour) or "s1" (selectGraspS3, parameters s1.*, all optional).
-    selection_mode_ = this->declare_parameter<std::string>("selection_mode", "legacy");
-    if (selection_mode_ != "legacy" && selection_mode_ != "s1") {
-        throw std::invalid_argument("parameter 'selection_mode' must be \"legacy\" or \"s1\", got \"" + selection_mode_ + "\"");
-    }
+    // Selection (selectGraspS3): parameters s1.*, all optional.
     {
         core::S3Params& p = s3_params_;
         auto dbl = [this](const char* name, double def) { return this->declare_parameter<double>(name, def); };
@@ -239,27 +217,16 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
             core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, robot_base_world_,
                                        start_state_);
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
-        if (time_budget_s_) in.params.time_budget_s = time_budget_s_;
-        applySelectionOverrides(in.params, selection_overrides_);
-        RCLCPP_INFO(this->get_logger(), "grasp_planner_node: starting selection with %s",
-                    describeSelectionParams(in.params, selection_overrides_).c_str());
 
-        core::GraspLaunchResult result;
-        if (selection_mode_ == "s1") {
-            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selection_mode=s1 (selectGraspS3)");
-            core::S3Result s3_result;
-            result = core::planGraspAndLaunchS1(in, snapshot, min_delay_s_, s3_params_,
-                                                /*t_now_override_s=*/std::nullopt, &s3_result);
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: s1 status=%d evaluations=%d posthoc_checks=%d dv=%.3g m/s "
-                        "path_margin=%.3f rad%s%s",
-                        static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
-                        s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
-                        s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
-        } else {
-            result = core::planGraspAndLaunch(in, snapshot, min_delay_s_, /*clock=*/nullptr,
-                                              /*t_now_override_s=*/std::nullopt);
-        }
+        core::S3Result s3_result;
+        const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
+            in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result);
+        RCLCPP_INFO(this->get_logger(),
+                    "grasp_planner_node: s1 status=%d evaluations=%d posthoc_checks=%d dv=%.3g m/s "
+                    "path_margin=%.3f rad%s%s",
+                    static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
+                    s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
+                    s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
 
         const rclcpp::Time now = this->get_clock()->now();
         if (now.seconds() < snapshot.t_s) {
@@ -270,7 +237,7 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         }
 
         GraspCommandProvenance provenance;
-        provenance.start_position = in.params.scan.p0;
+        provenance.start_position = in.p0;
         provenance.weights_sha256 = in.weights_sha256;
         const auto msg = toGraspCommandMsg(result, snapshot, now, provenance);
         pub_->publish(msg);

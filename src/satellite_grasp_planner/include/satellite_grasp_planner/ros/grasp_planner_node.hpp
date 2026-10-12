@@ -73,16 +73,12 @@ private:
     double satellite_omega_rad_s_ = 0.0;
     Eigen::Quaterniond satellite_q_ref_ = Eigen::Quaterniond::Identity();
     double omega_consistency_tol_rad_s_ = 0.0;
-    std::optional<double> time_budget_s_;
-    SelectionOverrides selection_overrides_;  ///< optional SelectionParams overrides, see grasp_planner_checks.hpp
     std::string grasp_command_topic_;
     /// Set iff the start_joints_override_rad parameter is non-empty (validated at startup); unset = readyPose,
     /// i.e. buildSelectionInputs() keeps its previous behaviour.
     std::optional<core::StartState> start_state_;
 
-    /// "legacy" (default: selectGrasp) or "s1" (selectGraspS3); see grasp_planner_example.yaml.
-    std::string selection_mode_ = "legacy";
-    core::S3Params s3_params_;  ///< s1.* parameters, used only when selection_mode_ == "s1"
+    core::S3Params s3_params_;  ///< s1.* parameters, see grasp_planner_example.yaml
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;
