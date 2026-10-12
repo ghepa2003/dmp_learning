@@ -15,6 +15,7 @@
 #include "haptic_dmp_learning/core/grasp_cost.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
+#include "satellite_grasp_planner/core/launch_delay.hpp"  // launchDelay: moved out, re-included for existing users
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -71,13 +72,6 @@ std::vector<CandidateRow> sortedByPartialCost(std::vector<CandidateRow> rows);
 /// For each grasp point (kP0..kP270 order) the n_per_point rows of lowest partial_cost, ascending
 /// (fewer if the point has fewer rows). @throws std::invalid_argument if n_per_point <= 0.
 std::vector<CandidateRow> bestPerPoint(const std::vector<CandidateRow>& rows, int n_per_point);
-
-/// Delay [s] before launch so that the contact happens at phase theta_star:
-/// t = (theta_star - theta_now)/omega - tau_contact, omega SIGNED (clockwise rotation: omega < 0
-/// and theta decreases in time), reduced modulo the period T = 2*pi/|omega| into
-/// [min_delay_s, min_delay_s + T). @throws std::invalid_argument if omega == 0.
-double launchDelay(double theta_now_rad, double theta_star_rad, double omega_rad_s,
-                   double tau_contact_s, double min_delay_s = 0.0);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 #include "haptic_dmp_learning/core/math_utils.hpp"
-#include "satellite_grasp_planner/core/candidate_scan.hpp"
+#include "satellite_grasp_planner/core/launch_delay.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {

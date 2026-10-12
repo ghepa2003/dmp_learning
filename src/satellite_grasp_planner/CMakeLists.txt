@@ -38,6 +38,7 @@ add_library(${PROJECT_NAME}_core
   src/core/candidate_scan.cpp
   src/core/candidate_eval.cpp
   src/core/grasp_selection.cpp
+  src/core/launch_delay.cpp
   src/core/launch_plan.cpp
   src/core/selection_inputs.cpp
   src/core/start_state.cpp
@@ -189,6 +190,16 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_start_state
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_launch_delay test/test_launch_delay.cpp)
+  target_link_libraries(test_launch_delay
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_launch_delay
     haptic_dmp_learning
     franka_cartesian_control
   )
