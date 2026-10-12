@@ -48,10 +48,6 @@ Eigen::Vector3d CubeSatelliteModel::faceNormalWorld(double theta_rad) const {
     return rotation(theta_rad) * params_.face_normal_body;
 }
 
-Eigen::Vector3d CubeSatelliteModel::radialDirectionWorld(GraspPointId k, double theta_rad) const {
-    return rotation(theta_rad) * radialDirectionBody(k);
-}
-
 GraspTargetPose CubeSatelliteModel::graspPoseAt(GraspPointId k, double theta_rad) const {
     const Eigen::Matrix3d R = rotation(theta_rad);
     const Eigen::Vector3d r_k = radialDirectionBody(k);
@@ -76,11 +72,7 @@ GraspTargetPose CubeSatelliteModel::graspPoseAt(GraspPointId k, double theta_rad
 
 Eigen::Vector3d CubeSatelliteModel::cubeCenterWorld() const { return params_.center_world; }
 
-double CubeSatelliteModel::cubeSideM() const { return params_.cube_side_m; }
-
 Eigen::Vector3d CubeSatelliteModel::axisWorld() const { return params_.axis_world; }
-
-Eigen::Vector3d CubeSatelliteModel::faceNormalBody() const { return params_.face_normal_body; }
 
 }  // namespace core
 }  // namespace haptic_dmp_learning

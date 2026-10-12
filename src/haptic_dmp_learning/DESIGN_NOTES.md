@@ -267,6 +267,8 @@ clock that never advances.
 
 ## `satellite_rotation_mode="continuous"` (v0): predictive open-loop intercept
 
+> Le menzioni di `PhaseSelector` in questa sezione (righe ~275–427): analisi storica, codice rimosso nel commit 5e8e423 (tag pre_s1_removal).
+
 Pure logic lives in `include/haptic_dmp_learning/core/satellite_intercept.hpp` (Eigen + STL, no ROS;
 tests in `test/test_satellite_intercept.cpp`). The node wiring is in `prodmp_gazebo_executor_node.cpp`.
 Nothing of it is active with `satellite_rotation_enabled=false` or `mode="frozen"`; the frozen branch only

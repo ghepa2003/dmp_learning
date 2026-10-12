@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -84,7 +85,7 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     out.d_pos_m = c.d_pos_m;
     out.w_hat = c.eval.w_hat;
     out.min_joint_margin_rad = c.eval.margins.min_margin_rad;
-    out.posthoc_dv_m_s = r.posthoc_dv_m_s;
+    out.posthoc_dv_m_s = s3.posthoc_velocity_check ? r.posthoc_dv_m_s : std::numeric_limits<double>::quiet_NaN();
     return out;
 }
 

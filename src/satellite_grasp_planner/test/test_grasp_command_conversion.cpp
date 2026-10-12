@@ -3,7 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -128,6 +130,10 @@ TEST(GraspCommandConversionTest, CandidateDiagnosticsOnlySetWhenSelected) {
     EXPECT_DOUBLE_EQ(sel.min_joint_margin_rad, 0.7664);
     EXPECT_DOUBLE_EQ(sel.posthoc_dv_m_s, 2.5e-3);
 
+    // Velocity check off: the launch result carries NaN ("not measured"), and it reaches the message as NaN.
+    selected.posthoc_dv_m_s = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_TRUE(std::isnan(ros_wrapper::toGraspCommandMsg(selected, snapshot, stamp, makeProvenance()).posthoc_dv_m_s));
+
     // Not SELECTED: stale candidate values must NOT leak into the message.
     for (const auto status : {core::GraspLaunchResult::Status::kNoFeasibleCandidate,
                               core::GraspLaunchResult::Status::kPosthocFailed}) {
@@ -150,8 +156,6 @@ TEST(GraspCommandConversionTest, CandidateDiagnosticsOnlySetWhenSelected) {
 TEST(GraspCommandConversionTest, NamesMatchConstants) {
     EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_SELECTED), "STATUS_SELECTED");
     EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_POSTHOC_FAILED), "STATUS_POSTHOC_FAILED");
-    EXPECT_STREQ(ros_wrapper::statusName(GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE),
-                 "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE");
     EXPECT_STREQ(ros_wrapper::statusName(200), "STATUS_<unknown>");
 }
 

@@ -23,8 +23,6 @@ static_assert(si::kGraspStatusUnset == GraspCommand::STATUS_UNSET, "GraspCommand
 static_assert(si::kGraspStatusSelected == GraspCommand::STATUS_SELECTED, "GraspCommand STATUS_SELECTED changed");
 static_assert(si::kGraspStatusNoFeasibleCandidate == GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE,
               "GraspCommand STATUS_NO_FEASIBLE_CANDIDATE changed");
-static_assert(si::kGraspStatusBudgetExhaustedNoCandidate == GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE,
-              "GraspCommand STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE changed");
 static_assert(si::kGraspStatusPosthocFailed == GraspCommand::STATUS_POSTHOC_FAILED,
               "GraspCommand STATUS_POSTHOC_FAILED changed");
 

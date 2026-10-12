@@ -447,7 +447,21 @@ vecchia ricerca (`scan_step_deg`, `max_rows`, `psi_tol_deg`, `w_hat_upper_bound`
   `<= s1.delta_v_max_m_s` (`s1.posthoc_velocity_check`) e limiti di giunto lungo il percorso
   (`s1.posthoc_path_check`).
 - **Parametri**: tutti opzionali, valori di default e commenti in `satellite_grasp_planner/config/grasp_planner_example.yaml`.
-  Esempio: `ros2 run satellite_grasp_planner grasp_planner_node --ros-args --params-file <yaml> -p s1.posthoc_velocity_check:=false`.
+  Esempio (il file YAML fornisce i parametri obbligatori; gli `-p` sovrascrivono; `cube_geometry.center_world`
+  deve coincidere con `satellite_rotation_center`):
+
+  ```bash
+  ros2 run satellite_grasp_planner grasp_planner_node --ros-args \
+    --params-file src/satellite_grasp_planner/config/grasp_planner_example.yaml \
+    -p use_sim_time:=true \
+    -p urdf_path:=/root/thesis_ws/fer_flat_effort.urdf \
+    -p demo_params_path:=/root/thesis_ws/runs/<run>/weights_demo_params.yaml \
+    -p "start_joints_override_rad:=[0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]" \
+    -p "cube_geometry.center_world:=[0.75, 0.0, 0.35]" \
+    -p s1.posthoc_velocity_check:=false
+  ```
+
+  Comando non eseguito da Claude Code.
 - **Esito** nel messaggio `GraspCommand`: `STATUS_SELECTED`, `STATUS_NO_FEASIBLE_CANDIDATE` (nessun candidato passa i vincoli)
   o `STATUS_POSTHOC_FAILED` (passano i vincoli, falliscono tutti i controlli a posteriori).
 - **Il fit deve registrare `end_joints_rad`**: `w_trans_demo` si calcola dai giunti finali della demo, quindi il fit va

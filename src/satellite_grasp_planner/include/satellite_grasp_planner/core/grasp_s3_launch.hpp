@@ -32,7 +32,8 @@ namespace core {
  *   goal_position = grasp position + contact_to_end_offset;
  *   goal_orientation = nominal orientation, rolled by pi about z_tcp if wrist_flip
  *   k, theta_star_rad, wrist_flip, cost, d_pos_m, w_hat = chosen candidate; min_joint_margin_rad = margin of its
- *     IK solution; posthoc_dv_m_s = S3Result::posthoc_dv_m_s
+ *     IK solution; posthoc_dv_m_s = S3Result::posthoc_dv_m_s, or NaN if
+ *     s3.posthoc_velocity_check is false (the velocity was not measured)
  *   evaluations = S3Result::evaluations; elapsed_s = wall-clock time of the selection
  */
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot_at_acquisition,

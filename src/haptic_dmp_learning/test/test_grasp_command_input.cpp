@@ -46,7 +46,5 @@ TEST(GraspCommandInputTest, StatusNamesMatchTheMessageConstants) {
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_SELECTED), "STATUS_SELECTED");
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_UNSET), "STATUS_UNSET");
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE), "STATUS_NO_FEASIBLE_CANDIDATE");
-    EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE),
-                 "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE");
     EXPECT_STREQ(si::graspStatusName(GraspCommand::STATUS_POSTHOC_FAILED), "STATUS_POSTHOC_FAILED");
 }

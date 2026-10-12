@@ -638,8 +638,7 @@ TEST(GraspCommandValidate, AcceptsAValidCommandAndComputesTheTrigger) {
 TEST(GraspCommandValidate, RejectsEveryNonSelectedStatus) {
     const double tau = 4.0;
     for (const auto st : {kGraspStatusUnset, kGraspStatusNoFeasibleCandidate,
-                          kGraspStatusBudgetExhaustedNoCandidate, kGraspStatusPosthocFailed,
-                          static_cast<std::uint8_t>(9)}) {
+                          kGraspStatusPosthocFailed, static_cast<std::uint8_t>(9)}) {
         auto in = validCommand(tau);
         in.status = st;
         const std::string why = rejectionOf(in, checkParams(tau));

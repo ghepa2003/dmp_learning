@@ -36,7 +36,7 @@ struct GraspLaunchResult {
     double d_pos_m = 0.0;
     double w_hat = 0.0;
     double min_joint_margin_rad = 0.0; ///< min joint-limit margin of the IK solution
-    double posthoc_dv_m_s = 0.0;       ///< |v_target - v_ee| at contact (0 if the velocity check is off)
+    double posthoc_dv_m_s = 0.0;       ///< |v_target - v_ee| at contact; NaN if the velocity check is off (not measured)
 
     /// Always populated, whatever the status.
     int evaluations = 0;               ///< evaluateGraspPose calls

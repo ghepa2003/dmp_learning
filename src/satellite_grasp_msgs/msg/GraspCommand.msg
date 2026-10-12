@@ -10,8 +10,7 @@ std_msgs/Header header                 # stamp = node's own SIM clock (this->get
 uint8 STATUS_UNSET = 0
 uint8 STATUS_SELECTED = 1
 uint8 STATUS_NO_FEASIBLE_CANDIDATE = 2
-uint8 STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE = 3   # not produced by the planner any more (kept for numbering)
-uint8 STATUS_POSTHOC_FAILED = 4                  # constraint-passing candidates exist, all failed the post-hoc checks
+uint8 STATUS_POSTHOC_FAILED = 3                  # constraint-passing candidates exist, all failed the post-hoc checks
 uint8 status
 
 # Meaningful ONLY when status == STATUS_SELECTED. A zero-initialized (or STATUS_UNSET) message must
@@ -43,7 +42,9 @@ float64 cost                            # d + epsilon_wait_per_s * wait_s, to be
 float64 d_pos_m                         # |(goal - p0) - delta_g_demo|
 float64 w_hat                           # w_trans / w_trans_demo at the IK solution
 float64 min_joint_margin_rad            # min joint-limit margin of the IK solution
-float64 posthoc_dv_m_s                  # |v_target - v_ee| at contact (0 if the velocity check is off)
+float64 posthoc_dv_m_s                  # |v_target - v_ee| at contact. NaN if the planner ran with
+                                        # s1.posthoc_velocity_check=false (velocity NOT measured: 0.0 would read as
+                                        # "measured zero"); 0.0 if status != SELECTED.
 
 # Meaningful ONLY when status == STATUS_SELECTED; zero otherwise (0,0,0 is a legitimate point too, so
 # read status first). p0 the planner used (forward kinematics at q0), so a

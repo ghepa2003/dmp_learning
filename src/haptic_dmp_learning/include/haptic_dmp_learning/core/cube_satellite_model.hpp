@@ -50,13 +50,10 @@ public:
     GraspTargetPose graspPoseAt(GraspPointId k, double theta_rad) const;
 
     Eigen::Vector3d faceNormalWorld(double theta_rad) const;                       // R(theta) * n
-    Eigen::Vector3d radialDirectionWorld(GraspPointId k, double theta_rad) const;  // R(theta) * r_k
 
     // Cube body pose (pure geometry): centered at center_world, rotated by R(theta) about axis_world.
     Eigen::Vector3d cubeCenterWorld() const;
-    double cubeSideM() const;
     Eigen::Vector3d axisWorld() const;  // normalized spin axis (theta-independent)
-    Eigen::Vector3d faceNormalBody() const;  // normalized face normal at theta = 0                                   // cube_side_m
 
     /// Tolerance on |axis . n| for "face is lateral". 1e-6 (~1 microrad) is far above double
     /// round-off on unit vectors (~1e-16), so exactly-perpendicular inputs always pass, yet

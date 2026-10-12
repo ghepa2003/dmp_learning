@@ -539,15 +539,13 @@ inline constexpr double kPlannerRolloutDtS = 0.005;
 inline constexpr std::uint8_t kGraspStatusUnset = 0;
 inline constexpr std::uint8_t kGraspStatusSelected = 1;
 inline constexpr std::uint8_t kGraspStatusNoFeasibleCandidate = 2;
-inline constexpr std::uint8_t kGraspStatusBudgetExhaustedNoCandidate = 3;
-inline constexpr std::uint8_t kGraspStatusPosthocFailed = 4;
+inline constexpr std::uint8_t kGraspStatusPosthocFailed = 3;
 
 inline const char* graspStatusName(std::uint8_t status) {
     switch (status) {
         case kGraspStatusUnset: return "STATUS_UNSET";
         case kGraspStatusSelected: return "STATUS_SELECTED";
         case kGraspStatusNoFeasibleCandidate: return "STATUS_NO_FEASIBLE_CANDIDATE";
-        case kGraspStatusBudgetExhaustedNoCandidate: return "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE";
         case kGraspStatusPosthocFailed: return "STATUS_POSTHOC_FAILED";
         default: return "STATUS_<unknown>";
     }

@@ -63,7 +63,6 @@ const char* statusName(uint8_t status) {
         case GraspCommand::STATUS_UNSET: return "STATUS_UNSET";
         case GraspCommand::STATUS_SELECTED: return "STATUS_SELECTED";
         case GraspCommand::STATUS_NO_FEASIBLE_CANDIDATE: return "STATUS_NO_FEASIBLE_CANDIDATE";
-        case GraspCommand::STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE: return "STATUS_BUDGET_EXHAUSTED_NO_CANDIDATE";
         case GraspCommand::STATUS_POSTHOC_FAILED: return "STATUS_POSTHOC_FAILED";
         default: return "STATUS_<unknown>";
     }
