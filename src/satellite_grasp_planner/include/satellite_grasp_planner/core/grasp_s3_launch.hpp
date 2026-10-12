@@ -8,8 +8,9 @@
 
 #include <optional>
 
-#include "satellite_grasp_planner/core/grasp_launch.hpp"
+#include "satellite_grasp_planner/core/grasp_launch_result.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
+#include "satellite_grasp_planner/core/selection_inputs.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {

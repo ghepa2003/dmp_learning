@@ -11,7 +11,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
-#include "satellite_grasp_planner/core/grasp_launch.hpp"
+#include "satellite_grasp_planner/core/grasp_launch_result.hpp"
 #include "satellite_grasp_planner/ros/grasp_command_conversion.hpp"
 
 using namespace satellite_grasp_planner;

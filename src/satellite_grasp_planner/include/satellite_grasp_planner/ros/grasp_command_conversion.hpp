@@ -15,7 +15,7 @@
 #include <rclcpp/time.hpp>
 
 #include "satellite_grasp_msgs/msg/grasp_command.hpp"
-#include "satellite_grasp_planner/core/grasp_launch.hpp"
+#include "satellite_grasp_planner/core/grasp_launch_result.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 
 namespace satellite_grasp_planner {
