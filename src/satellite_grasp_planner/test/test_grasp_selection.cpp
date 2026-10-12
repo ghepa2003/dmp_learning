@@ -1,4 +1,4 @@
-// Tests for referenceWTrans()/selectGrasp() with a synthetic ProDMP (mechanism only), small scan
+// Tests for selectGrasp() with a synthetic ProDMP (mechanism only), small scan
 // (60 deg step, 1 eval per point) so they stay short, plus an empirical selection probe with the
 // production template. Need Pinocchio, Coal and $HOME/thesis_ws/fer_flat_effort.urdf.
 
@@ -89,15 +89,6 @@ SelectionParams makeSmallParams(const CubeSatelliteModel& m, const RobotModel::J
 }
 
 }  // namespace
-
-TEST(GraspSelectionTest, ReferenceWTransFinitePositive) {
-    auto robot = loadPandaRobotModel();
-    ASSERT_NE(robot, nullptr);
-    const double w = referenceWTrans(makeSyntheticProDmpTemplate(), robot, RobotModel::readyPose(),
-                                     Eigen::Vector3d(0.1, 0.0, 0.0));
-    EXPECT_TRUE(std::isfinite(w));
-    EXPECT_GT(w, 0.0);
-}
 
 TEST(GraspSelectionTest, SelectionInvariants) {
     auto robot = loadPandaRobotModel();

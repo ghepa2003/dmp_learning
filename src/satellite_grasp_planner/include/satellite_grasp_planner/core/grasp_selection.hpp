@@ -22,6 +22,7 @@
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "satellite_grasp_planner/core/candidate_eval.hpp"
 #include "satellite_grasp_planner/core/candidate_scan.hpp"
+#include "satellite_grasp_planner/core/demo_reference.hpp"  // referenceWTrans: moved out, re-included for existing users
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -30,15 +31,6 @@ namespace core {
 /// differences are meaningful. Passing nullptr to selectGrasp() uses a std::chrono::steady_clock
 /// wrapper; tests inject a fake one for determinism (see grasp_selection.cpp / test_grasp_selection.cpp).
 using ClockFn = std::function<double()>;
-
-/// PROVISIONAL proxy of w_trans,demo: translational manipulability at the END of a replica of the
-/// demo from the starting posture (orientation kept), i.e. the w_trans_final of
-/// checkKinematicFeasibility(template, p_start + delta_g_demo, q_start, robot, q0). To be replaced
-/// by the value recorded with the new demo.
-double referenceWTrans(const haptic_dmp_learning::core::ProDMP& prodmp_template,
-                       const std::shared_ptr<franka_cartesian_control::core::RobotModel>& robot,
-                       const franka_cartesian_control::core::RobotModel::JointVector& q0,
-                       const Eigen::Vector3d& delta_g_demo);
 
 struct SelectionParams {
     ScanParams scan;
