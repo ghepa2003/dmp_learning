@@ -1,7 +1,7 @@
-// Level-1 core tests: manipulability formula parity with the already-
-// validated Python analysis, the JointPathSimulator DLS-vs-impedance proxy
-// gap (point 2 of the Phase-1/2 review), and PhaseSelector's degenerate
-// omega=0 behaviour against the 5 known static goals.
+// Level-1 core tests of PhaseSelector: degenerate omega=0 behaviour against the 5 known static goals,
+// wall-time budget, score lower bound, indecision margin, reach pruning. (The manipulability parity and
+// JointPathSimulator tests that used to live here are in test_manipulability.cpp and
+// test_joint_path_simulator.cpp.)
 //
 // NOTE ON FILE PATHS: these tests read the SAME data files the offline
 // Python manipulability analysis already validated
@@ -32,6 +32,7 @@
 #include "satellite_grasp_planner/core/manipulability.hpp"
 #include "satellite_grasp_planner/core/joint_path_simulator.hpp"
 #include "satellite_grasp_planner/core/phase_selector.hpp"
+#include "test_goal_data.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/types.hpp"
 #include "franka_cartesian_control/core/robot_model.hpp"
@@ -45,56 +46,12 @@ using satellite_grasp_planner::core::createStrategyForController;
 using satellite_grasp_planner::core::PhaseSelector;
 using satellite_grasp_planner::core::SatelliteRotationModel;
 using RobotModel = franka_cartesian_control::core::RobotModel;
+using satellite_grasp_planner::test_goal_data::dataDir;
+using satellite_grasp_planner::test_goal_data::jointVectorFromRow;
+using satellite_grasp_planner::test_goal_data::readCsv;
+using satellite_grasp_planner::test_goal_data::workspaceRoot;
 
 namespace {
-
-std::string workspaceRoot() {
-    const char* home = std::getenv("HOME");
-    return std::string(home ? home : "/root") + "/thesis_ws";
-}
-
-std::string dataDir() {
-    return workspaceRoot() + "/tools/gazebo_cartesian_eval/data";
-}
-
-/// @brief Minimal CSV reader: header row -> column names, each following row
-/// -> a name->value map. Good enough for the small, well-formed CSVs written
-/// by compute_manipulability_goals.py / the Gazebo eval pipeline.
-std::vector<std::unordered_map<std::string, double>> readCsv(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        ADD_FAILURE() << "Could not open CSV (required test fixture, see file-level NOTE): " << path;
-        return {};
-    }
-    std::vector<std::unordered_map<std::string, double>> rows;
-    std::string header_line;
-    std::getline(f, header_line);
-    if (!header_line.empty() && header_line.back() == '\r') header_line.pop_back();
-    std::vector<std::string> cols;
-    {
-        std::stringstream ss(header_line);
-        std::string col;
-        while (std::getline(ss, col, ',')) {
-            if (!col.empty() && col.back() == '\r') col.pop_back();
-            cols.push_back(col);
-        }
-    }
-    std::string line;
-    while (std::getline(f, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        std::stringstream ss(line);
-        std::string cell;
-        std::unordered_map<std::string, double> row;
-        size_t i = 0;
-        while (std::getline(ss, cell, ',') && i < cols.size()) {
-            row[cols[i]] = std::stod(cell);
-            ++i;
-        }
-        rows.push_back(std::move(row));
-    }
-    return rows;
-}
 
 std::shared_ptr<RobotModel> loadPandaRobotModel() {
     const std::string urdf_path = workspaceRoot() + "/fer_flat_effort.urdf";
@@ -110,14 +67,6 @@ std::shared_ptr<RobotModel> loadPandaRobotModel() {
     for (int i = 1; i <= 7; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
 
     return std::make_shared<RobotModel>(buffer.str(), joint_names, "fer_hand_tcp");
-}
-
-RobotModel::JointVector jointVectorFromRow(const std::unordered_map<std::string, double>& row) {
-    RobotModel::JointVector q;
-    for (int i = 0; i < 7; ++i) {
-        q(i) = row.at("fer_joint" + std::to_string(i + 1));
-    }
-    return q;
 }
 
 /// @brief Builds a short, self-contained synthetic ProDMP (2 s, few basis
@@ -143,150 +92,6 @@ haptic_dmp_learning::core::ProDMP makeSyntheticProDmpTemplate() {
 }
 
 }  // namespace
-
-// ---------------------------------------------------------------------
-// Test 1: C++ wTrans() matches the already-validated Python analysis
-// ---------------------------------------------------------------------
-TEST(ManipulabilityTest, MatchesValidatedPythonValuesForAllFiveGoals) {
-    auto robot_model = loadPandaRobotModel();
-    ASSERT_NE(robot_model, nullptr);
-    Manipulability manip(robot_model);
-
-    const std::vector<std::string> goal_runs = {
-        "reach_task_goal_1_prodmp", "reach_task_goal_2_prodmp", "reach_task_goal_3_prodmp",
-        "reach_task_goal_4_prodmp", "reach_task_goal_5_prodmp"};
-
-    for (const auto& run : goal_runs) {
-        auto rows = readCsv(dataDir() + "/manipulability_" + run + ".csv");
-        ASSERT_FALSE(rows.empty()) << "run=" << run;
-
-        // Last row = steady-state / pre-clamp configuration, the same one
-        // compute_manipulability_goals.py reports as "pre-clamp" stats.
-        const auto& last_row = rows.back();
-        RobotModel::JointVector q = jointVectorFromRow(last_row);
-        double w_trans_python = last_row.at("w_trans");
-
-        double w_trans_cpp = manip.wTrans(q);
-
-        EXPECT_NEAR(w_trans_cpp, w_trans_python, 1e-6)
-            << "run=" << run << ": C++ wTrans() must match the validated Python "
-            << "compute_manipulability_goals.py value bit-for-bit (same URDF/frame/formula).";
-    }
-}
-
-// ---------------------------------------------------------------------
-// Test 2 (review point 2): Redundancy resolution strategies (MinNormDls vs
-// NullspaceBiased) against real impedance-control runs for Goal 2 and Goal 4.
-// ---------------------------------------------------------------------
-TEST(JointPathSimulatorTest, StrategyComparisonVsRealImpedanceControlGoals) {
-    auto robot_model = loadPandaRobotModel();
-    ASSERT_NE(robot_model, nullptr);
-    Manipulability manip(robot_model);
-    const double kDeg2Rad = M_PI / 180.0;
-
-    struct GoalTestCase {
-        std::string name;
-        std::string run_key;
-        RobotModel::JointVector q_real_impedance;
-    };
-
-    std::vector<GoalTestCase> cases;
-    {
-        GoalTestCase g2;
-        g2.name = "Goal 2 (critical zone)";
-        g2.run_key = "reach_task_goal_2_prodmp";
-        g2.q_real_impedance << -0.6 * kDeg2Rad, -40.5 * kDeg2Rad, -9.2 * kDeg2Rad, -154.8 * kDeg2Rad,
-            -12.1 * kDeg2Rad, 115.7 * kDeg2Rad, 54.5 * kDeg2Rad;
-        cases.push_back(g2);
-
-        GoalTestCase g4;
-        g4.name = "Goal 4 (nominal zone)";
-        g4.run_key = "reach_task_goal_4_prodmp";
-        g4.q_real_impedance << -0.4 * kDeg2Rad, -37.9 * kDeg2Rad, -16.8 * kDeg2Rad, -141.4 * kDeg2Rad,
-            -15.4 * kDeg2Rad, 106.5 * kDeg2Rad, 47.7 * kDeg2Rad;
-        cases.push_back(g4);
-    }
-
-    for (const auto& tc : cases) {
-        auto target_rows = readCsv(dataDir() + "/target_aligned_" + tc.run_key + ".csv");
-        auto js_rows = readCsv(dataDir() + "/joint_states_" + tc.run_key + ".csv");
-        ASSERT_FALSE(target_rows.empty()) << tc.name;
-        ASSERT_FALSE(js_rows.empty()) << tc.name;
-
-        RobotModel::JointVector q0 = jointVectorFromRow(js_rows.front());
-        const auto& target = target_rows.back();
-        Eigen::Vector3d goal_pos(target.at("x"), target.at("y"), target.at("z"));
-        Eigen::Quaterniond goal_quat(target.at("qw"), target.at("qx"), target.at("qy"), target.at("qz"));
-        goal_quat.normalize();
-
-        const double hold_duration = 8.0;
-        const double dt = 0.005;
-        const int n_steps = static_cast<int>(hold_duration / dt);
-        std::vector<CartesianSample> trajectory(static_cast<size_t>(n_steps));
-        for (auto& s : trajectory) {
-            s.position = goal_pos;
-            s.orientation = goal_quat;
-        }
-
-        // 1. MinNormDlsResolution (pure velocity control proxy)
-        JointPathSimulator::Params dls_params;
-        dls_params.dt = dt;
-        dls_params.strategy = std::make_shared<MinNormDlsResolution>();
-        JointPathSimulator dls_sim(robot_model, dls_params);
-        auto dls_steps = dls_sim.simulate(trajectory, q0);
-        ASSERT_FALSE(dls_steps.empty());
-        RobotModel::JointVector q_dls = dls_steps.back().q;
-        double w_dls = manip.wTrans(q_dls);
-
-        // 2. NullspaceBiasedResolution (impedance control proxy)
-        JointPathSimulator::Params ns_params;
-        ns_params.dt = dt;
-        ns_params.strategy = std::make_shared<NullspaceBiasedResolution>();
-        JointPathSimulator ns_sim(robot_model, ns_params);
-        auto ns_steps = ns_sim.simulate(trajectory, q0);
-        ASSERT_FALSE(ns_steps.empty());
-        RobotModel::JointVector q_ns = ns_steps.back().q;
-        double w_ns = manip.wTrans(q_ns);
-
-        double w_real = manip.wTrans(tc.q_real_impedance);
-        double gap_dls_pct = 100.0 * (w_dls - w_real) / w_real;
-        double gap_ns_pct = 100.0 * (w_ns - w_real) / w_real;
-
-        std::cout << "\n=== Strategy Comparison vs Real Impedance Control (" << tc.name << ") ===\n";
-        std::cout << std::fixed << std::setprecision(3);
-        std::cout << "  w_trans (Real Impedance)   : " << w_real << "\n";
-        std::cout << "  w_trans (MinNormDls)       : " << w_dls << " (gap = " << gap_dls_pct << "%)\n";
-        std::cout << "  w_trans (NullspaceBiased)  : " << w_ns  << " (gap = " << gap_ns_pct  << "%)\n";
-
-        for (int i = 0; i < 7; ++i) {
-            double real_deg = tc.q_real_impedance(i) / kDeg2Rad;
-            double dls_deg  = q_dls(i) / kDeg2Rad;
-            double ns_deg   = q_ns(i) / kDeg2Rad;
-            std::cout << "  fer_joint" << (i + 1)
-                      << ": Real=" << real_deg << " deg | DLS=" << dls_deg << " deg | NS=" << ns_deg << " deg\n";
-        }
-        std::cout << "=======================================================================\n";
-
-        EXPECT_GT(w_dls, 0.0);
-        EXPECT_GT(w_ns, 0.0);
-    }
-}
-
-TEST(RedundancyStrategyTest, FactoryCreatesCorrectStrategies) {
-    auto strat_imp = createStrategyForController("cartesian_impedance_controller");
-    EXPECT_NE(dynamic_cast<NullspaceBiasedResolution*>(strat_imp.get()), nullptr);
-
-    auto strat_imp_short = createStrategyForController("impedance");
-    EXPECT_NE(dynamic_cast<NullspaceBiasedResolution*>(strat_imp_short.get()), nullptr);
-
-    auto strat_vel = createStrategyForController("velocity_cartesian_controller");
-    EXPECT_NE(dynamic_cast<MinNormDlsResolution*>(strat_vel.get()), nullptr);
-
-    auto strat_vel_alt = createStrategyForController("cartesian_velocity_controller");
-    EXPECT_NE(dynamic_cast<MinNormDlsResolution*>(strat_vel_alt.get()), nullptr);
-
-    EXPECT_THROW(createStrategyForController("unknown_controller"), std::invalid_argument);
-}
 
 // ---------------------------------------------------------------------
 // Test 3: PhaseSelector degenerate omega=0 case against the 5 known static

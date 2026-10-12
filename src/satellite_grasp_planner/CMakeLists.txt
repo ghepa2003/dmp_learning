@@ -166,6 +166,26 @@ if(BUILD_TESTING)
     franka_cartesian_control
   )
 
+  ament_add_gtest(test_manipulability test/test_manipulability.cpp)
+  target_link_libraries(test_manipulability
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_manipulability
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_joint_path_simulator test/test_joint_path_simulator.cpp)
+  target_link_libraries(test_joint_path_simulator
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_joint_path_simulator
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
   ament_add_gtest(test_kinematic_feasibility test/test_kinematic_feasibility.cpp)
   target_link_libraries(test_kinematic_feasibility
     ${PROJECT_NAME}_core
