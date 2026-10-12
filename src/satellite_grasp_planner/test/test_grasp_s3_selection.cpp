@@ -33,7 +33,7 @@ namespace {
 
 constexpr double kOmega = -2.0 * M_PI / 180.0;
 
-struct Setup {
+struct S3TestSetup {
     std::shared_ptr<RobotModel> robot;
     RobotModel::JointVector q_start;
     DemoReference demo;
@@ -58,8 +58,8 @@ CubeSatelliteModel makeModel(const Eigen::Vector3d& center) {
 
 /// Satellite placed so that the (k = 0, theta = 0) grasp point is ~7 cm from the start TCP (same trick as the
 /// grasp_pose_eval end-to-end test).
-Setup makeSetup() {
-    Setup s{tf::loadPandaRobotModel(), RobotModel::JointVector::Zero(), DemoReference(), tf::makeSyntheticProDmpTemplate(),
+S3TestSetup makeS3TestSetup() {
+    S3TestSetup s{tf::loadPandaRobotModel(), RobotModel::JointVector::Zero(), DemoReference(), tf::makeSyntheticProDmpTemplate(),
             Eigen::Vector3d(0.1, 0.0, 0.0), makeModel(Eigen::Vector3d::Zero()), S3Context()};
     s.q_start << 0.0, -0.7854, 0.0, -2.3562, 0.0, 3.1416, 0.7854;
     s.demo = demoReferenceFromEndJoints(*s.robot, s.q_start);
@@ -94,8 +94,8 @@ S3Params looseParams() {
 
 TEST(GraspS3Test, ImpossibleConstraintGivesNoCandidate) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     S3Params p = looseParams();
     p.w_hat_min = 5.0;
@@ -109,8 +109,8 @@ TEST(GraspS3Test, ImpossibleConstraintGivesNoCandidate) {
 
 TEST(GraspS3Test, WinnerPassesConstraintsAndIsCheapest) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     const S3Params p = looseParams();
     const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -127,7 +127,9 @@ TEST(GraspS3Test, WinnerPassesConstraintsAndIsCheapest) {
     for (std::size_t i = 0; i < r.ranked.size(); ++i) {
         EXPECT_TRUE(r.ranked[i].passes_constraints);
         EXPECT_GE(r.ranked[i].cost, r.chosen.cost);
-        if (i > 0) EXPECT_GE(r.ranked[i].cost, r.ranked[i - 1].cost);
+        if (i > 0) {
+            EXPECT_GE(r.ranked[i].cost, r.ranked[i - 1].cost);
+        }
     }
 }
 
@@ -140,8 +142,8 @@ TEST(GraspS3Test, DistanceIgnoresOrientationWithZeroWeight) {
     EXPECT_THROW(s3Distance(0.05, 0.0, 0.1, -1.0, 1.0), std::invalid_argument);
 
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     const S3Params p = looseParams();  // orientation_weight = 0
     const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -152,8 +154,8 @@ TEST(GraspS3Test, DistanceIgnoresOrientationWithZeroWeight) {
 
 TEST(GraspS3Test, WaitTimeWithinOnePeriod) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     const S3Params p = looseParams();
     const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -166,8 +168,8 @@ TEST(GraspS3Test, WaitTimeWithinOnePeriod) {
 
 TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     S3Params p = looseParams();
     p.posthoc_velocity_check = true;
@@ -192,8 +194,8 @@ TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
 
 TEST(GraspS3Test, Deterministic) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     const S3Params p = looseParams();
     const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -214,8 +216,8 @@ TEST(GraspS3Test, Deterministic) {
 
 TEST(GraspS3Test, BestPerKHasFourDistinctPoints) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     const S3Params p = looseParams();
     const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -226,8 +228,8 @@ TEST(GraspS3Test, BestPerKHasFourDistinctPoints) {
 
 TEST(GraspS3Test, InvalidInputsThrow) {
     REQUIRE_URDF_OR_SKIP();
-    Setup s = makeSetup();
-    s.ctx.prodmp_template = &s.tmpl;  // set here: Setup may be moved out of makeSetup()
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
     ASSERT_NE(s.robot, nullptr);
     S3Params p = looseParams();
     S3Context bad = s.ctx;
