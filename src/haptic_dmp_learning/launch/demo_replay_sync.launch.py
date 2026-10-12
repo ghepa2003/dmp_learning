@@ -96,12 +96,19 @@ def _nodes(context, *_args, **_kwargs):
         remappings=[('/touch0/buttons', '/touch0/buttons_synced')],
     )
 
+    # Override of csv_master_pose_player_node.demo_csv_path (params.yaml) ONLY when non-empty;
+    # later dict entries win over params_file.
+    demo_csv_override = LaunchConfiguration('demo_csv_path').perform(context).strip()
+    player_overrides = {'use_sim_time': True}
+    if demo_csv_override:
+        player_overrides['demo_csv_path'] = demo_csv_override
+
     csv_master_pose_player_node = Node(
         package='haptic_dmp_learning',
         executable='csv_master_pose_player_node',
         name='csv_master_pose_player_node',
         output='screen',
-        parameters=[params_file, {'use_sim_time': True}],
+        parameters=[params_file, player_overrides],
         condition=IfCondition(use_csv_playback),
     )
 
@@ -124,6 +131,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file', default_value=default_params_file,
             description='YAML file with ros__parameters for both nodes.'),
+        DeclareLaunchArgument(
+            'demo_csv_path', default_value='',
+            description='If non-empty, overrides csv_master_pose_player_node.demo_csv_path of '
+                        'params_file. Empty => params.yaml value.'),
         DeclareLaunchArgument(
             'anchor_enabled', default_value='false',
             description="'true' anchors the recorder's /target_pose (see DESIGN_NOTES.md).",

@@ -223,7 +223,7 @@ Argomenti principali (default tra parentesi): `name` (`free_target_object`),
 plugin `VelocityControl` che **tiene** il twist costante. Pubblica
 `/<name>/odometry` (`nav_msgs/Odometry`, sim-time) via `parameter_bridge`.
 
-> Nota: l'orchestratore (§3) spawna il target da sé con `size 0.045` e `mass 5.0` —
+> Nota: l'orchestratore (§3) spawna il target da sé con `size 0.150`, `mass 4.412` e collare —
 > non lanciare `free_target_object.launch.py` a mano se usi l'orchestrator.
 
 ---
@@ -270,7 +270,7 @@ ros2 run haptic_dmp_learning demo_replay_sync_orchestrator_node --ros-args \
   (default `/root/thesis_ws/real_demo/reach_task_baseline.csv`) e **genera da sé**
   i fronti start/stop su `/touch0/buttons`. Non devi premere nulla per start/stop.
 - L'orchestratore: attende `/clock` → spawna il target `free_target_object`
-  (`0.045³ m`, `5 kg`, a `(0.6, 0, 0.5)`) → ancora la finestra di sync alla prima
+  (`0.150³ m`, `4.412 kg`, collare, a `(0.6, 0, 0.5)` salvo `target_x/y/z`) → ancora la finestra di sync alla prima
   odometria del target → dopo `sync_delay_sec` (default 5.0 s sim-time) emette il
   fronte start su `/touch0/buttons_synced` → il recorder registra → a fine CSV
   emette lo stop, addestra e salva `demo_raw_<run_id>.csv` + `dmp_weights_<run_id>.yaml`.
@@ -286,8 +286,9 @@ clock_wait_timeout_sec (10.0)   odom_wait_timeout_sec (30.0)   sync_delay_sec (5
 target_name (free_target_object)
 target_x (0.6)  target_y (0.0)  target_z (0.5)
 target_vx/vy/vz (0.0)   target_wx/wy/wz (0.0)
-target_size_x/y/z (0.045)   target_mass (5.0)   target_yaw (0.0, rad)
-target_with_collar (false)   target_collar_collision (true)
+target_size_x/y/z (0.150)   target_mass (4.412)   target_yaw (0.0, rad)
+target_with_collar (true)   target_collar_collision (true)
+demo_csv_path ("" = params.yaml; se non vuoto, inoltrato a demo_replay_sync.launch.py -> csv_master_pose_player_node)
 buttons_topic (/touch0/buttons)   buttons_synced_topic (/touch0/buttons_synced)
 use_csv_playback (true)
 anchor_enabled (false)   anchor_position_m ([])   anchor_orientation_xyzw ([])
@@ -744,7 +745,7 @@ find /root/thesis_ws/src/haptic_dmp_learning/src -newer \
 | `dmp_gazebo_executor_node`: rollout con `tau` incoerente / pesi stale | Stai usando un path relativo o un `dmp_weights.yaml` registrato prima della conversione sim-time. Passa `weights_yaml_path:=` **assoluto**; se i pesi sono pre-sim-time, ri-registra la demo. |
 | Controller non si attiva / plugin non trovato | `ros2 control list_controllers`; grep del log `Successfully loaded controller`. Se manca il plugin: `full_reset_franka_container.sh` (step 3 e 5 verificano `controllers_plugin.xml` in `src` e in `install`). |
 | Modifica ai gain YAML "ignorata" | Hai editato `src/franka_gazebo_overrides/...yaml` ma il bringup legge la **copia** in `$FRANKA_WS/.../franka_gazebo_bringup/config/`. `diff` tra i due (§6.6), ricopia o rilancia `full_reset`; conferma con `ros2 param get /cartesian_impedance_controller translational_stiffness`. |
-| `geometric_grasp_monitor` non conferma mai / conferma troppo presto | Soglia `epsilon_pos` (default 0.035 m nel nodo, tarata sul cubo 0.045 m dell'orchestratore) — se cambi `target_size_*` nell'orchestratore senza aggiornare `epsilon_pos` di conseguenza, la soglia torna scollegata dalla dimensione reale del target. Verifica con `/geometric_grasp_monitor/geometric_grasp_debug` (campo `dist`). |
+| `geometric_grasp_monitor` non conferma mai / conferma troppo presto | Soglia `epsilon_pos` (default 0.035 m nel nodo, tarata sul cubo 0.045 m dei default storici dell'orchestratore (ora 0.150 m)) — se cambi `target_size_*` nell'orchestratore senza aggiornare `epsilon_pos` di conseguenza, la soglia torna scollegata dalla dimensione reale del target. Verifica con `/geometric_grasp_monitor/geometric_grasp_debug` (campo `dist`). |
 | Edit di `dmp_io.cpp` / costruttore nodo / `params.yaml` senza effetto | Serve `colcon build` vero (§6.7), non solo `--symlink-install`. Verifica mtime binari vs sorgenti. |
 | `grasp_state_machine` resta in `limit_action` | È latched by design. Esci con `ros2 topic pub --once /grasp_state_machine/reset_limit_action std_msgs/msg/Bool "{data: true}"` (§3.3). |
 

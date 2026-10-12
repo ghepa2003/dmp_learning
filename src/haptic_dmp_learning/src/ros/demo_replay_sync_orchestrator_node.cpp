@@ -101,13 +101,17 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     twx_ = this->declare_parameter<double>("target_wx", 0.0);
     twy_ = this->declare_parameter<double>("target_wy", 0.0);
     twz_ = this->declare_parameter<double>("target_wz", 0.0);
-    tsx_ = this->declare_parameter<double>("target_size_x", 0.045);
-    tsy_ = this->declare_parameter<double>("target_size_y", 0.045);
-    tsz_ = this->declare_parameter<double>("target_size_z", 0.045);
-    tmass_ = this->declare_parameter<double>("target_mass", 5.0);
+    // Real satellite defaults: 150 mm cube (matches satellite_m.stl; the collar needs
+    // collar_radius <= size/2), CAD mass 4.412 kg (inertia: CAD default in the xacro, not recomputed).
+    tsx_ = this->declare_parameter<double>("target_size_x", 0.150);
+    tsy_ = this->declare_parameter<double>("target_size_y", 0.150);
+    tsz_ = this->declare_parameter<double>("target_size_z", 0.150);
+    tmass_ = this->declare_parameter<double>("target_mass", 4.412);
     target_yaw_ = this->declare_parameter<double>("target_yaw", 0.0);
-    target_with_collar_ = this->declare_parameter<bool>("target_with_collar", false);
+    target_with_collar_ = this->declare_parameter<bool>("target_with_collar", true);
     target_collar_collision_ = this->declare_parameter<bool>("target_collar_collision", true);
+    // Empty => demo_replay_sync.launch.py keeps the demo_csv_path of params.yaml.
+    demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "");
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
     buttons_synced_topic_ = this->declare_parameter<std::string>(
         "buttons_synced_topic", "/touch0/buttons_synced");
@@ -334,6 +338,9 @@ void DemoReplaySyncOrchestratorNode::tick() {
                 "ros2", "launch", "haptic_dmp_learning", "demo_replay_sync.launch.py",
                 "run_id:=" + run_id_,
                 std::string("use_csv_playback:=") + (use_csv_playback_ ? "true" : "false")};
+            if (!demo_csv_path_.empty()) {  // empty: argv identical to before
+                argv.push_back("demo_csv_path:=" + demo_csv_path_);
+            }
             if (anchor_enabled_) {  // anchor_enabled=false: argv identical to before
                 argv.push_back("anchor_enabled:=true");
                 argv.push_back(listArg("anchor_position_m", anchor_position_m_));
