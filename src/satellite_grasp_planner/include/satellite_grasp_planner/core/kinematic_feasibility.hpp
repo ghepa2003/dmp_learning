@@ -28,6 +28,9 @@ struct FeasibilityResult {
     double worst_step_fraction = 0.0;    ///< worst_step / (n_steps - 1)
     double worst_joint_value_rad = 0.0;  ///< q of that joint at that Step
     double worst_joint_limit_rad = 0.0;  ///< the limit that was exceeded
+    /// min over all simulated Steps and joints of min(q - lower, upper - q) [rad]; negative if a limit is
+    /// exceeded. DIAGNOSTIC ONLY (does not influence `feasible`); 0.0 if nothing was simulated.
+    double min_joint_margin_rad = 0.0;
 };
 
 /**

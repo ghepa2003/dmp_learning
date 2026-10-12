@@ -43,6 +43,7 @@ add_library(${PROJECT_NAME}_core
   src/core/start_state.cpp
   src/core/grasp_launch.cpp
   src/core/grasp_pose_eval.cpp
+  src/core/grasp_s3_selection.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -266,6 +267,16 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_grasp_command_conversion
     rclcpp
     satellite_grasp_msgs
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_grasp_s3_selection test/test_grasp_s3_selection.cpp)
+  target_link_libraries(test_grasp_s3_selection
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_grasp_s3_selection
     haptic_dmp_learning
     franka_cartesian_control
   )

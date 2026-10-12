@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -65,8 +66,10 @@ FeasibilityResult checkKinematicFeasibility(
     const RobotModel::JointVector& lo = robot_model->jointLowerLimits();
     const RobotModel::JointVector& hi = robot_model->jointUpperLimits();
     double max_viol = 0.0;
+    double min_margin = std::numeric_limits<double>::infinity();
     for (std::size_t i = 0; i < steps.size(); ++i) {
         const auto& step = steps[i];
+        min_margin = std::min(min_margin, (step.q - lo).cwiseMin(hi - step.q).minCoeff());
         for (int j = 0; j < RobotModel::kNumJoints; ++j) {
             const double below = lo(j) - step.q(j);
             const double above = step.q(j) - hi(j);
@@ -85,6 +88,7 @@ FeasibilityResult checkKinematicFeasibility(
                              : 0.0;
     }
     res.max_joint_violation_rad = max_viol;
+    res.min_joint_margin_rad = min_margin;
     res.q_final = steps.back().q;
     res.w_trans_final = steps.back().w_trans;
 
