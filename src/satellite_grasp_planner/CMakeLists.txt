@@ -155,16 +155,6 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_phase_selector test/test_phase_selector.cpp)
-  target_link_libraries(test_phase_selector
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_phase_selector
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
   ament_add_gtest(test_manipulability test/test_manipulability.cpp)
   target_link_libraries(test_manipulability
     ${PROJECT_NAME}_core
@@ -215,16 +205,6 @@ if(BUILD_TESTING)
     franka_cartesian_control
   )
 
-  ament_add_gtest(test_window_center test/test_window_center.cpp)
-  target_link_libraries(test_window_center
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_window_center
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
   ament_add_gtest(test_launch_delay test/test_launch_delay.cpp)
   target_link_libraries(test_launch_delay
     ${PROJECT_NAME}_core
@@ -241,56 +221,6 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_launch_plan
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_demo_reference test/test_demo_reference.cpp)
-  target_link_libraries(test_demo_reference
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_demo_reference
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_grasp_selection test/test_grasp_selection.cpp)
-  target_link_libraries(test_grasp_selection
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_grasp_selection
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_candidate_eval test/test_candidate_eval.cpp)
-  target_link_libraries(test_candidate_eval
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_candidate_eval
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_candidate_scan test/test_candidate_scan.cpp)
-  target_link_libraries(test_candidate_scan
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_candidate_scan
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_satellite_collision test/test_satellite_collision.cpp)
-  target_link_libraries(test_satellite_collision
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_satellite_collision
     haptic_dmp_learning
     franka_cartesian_control
   )

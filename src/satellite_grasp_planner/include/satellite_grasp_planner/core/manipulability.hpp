@@ -32,7 +32,7 @@ namespace core {
  * (fer_flat_effort.urdf), the SAME frame (fer_hand_tcp, default) and the SAME
  * Jacobian convention (LOCAL_WORLD_ALIGNED, via franka_cartesian_control's
  * core::RobotModel), so the numbers match the ones already validated in the
- * thesis - see test_phase_selector.cpp for the cross-check against the
+ * thesis - see test_manipulability.cpp for the cross-check against the
  * recorded Gazebo runs.
  *
  * Templated on the Jacobian block's Eigen expression type (rather than a

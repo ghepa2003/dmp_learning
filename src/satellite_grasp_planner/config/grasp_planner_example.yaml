@@ -7,8 +7,7 @@
 # If you change axis_world/face_normal_body/the physical spin axis, satellite_q_ref must still satisfy
 # checkQRefOnAxis (a rotation about satellite_rotation_axis) - it does NOT need to equal any B matrix.
 
-# Satellite center/axis below match the production selection probe (test_grasp_selection.cpp:459-460,
-# SatelliteSelectionFromDemoParamsProbe): snap.center = (0.75, 0.0, 0.35), snap.axis = (0, 0, 1).
+# Satellite center/axis below are the production values: center = (0.75, 0.0, 0.35), axis = (0, 0, 1).
 # free_target_object MUST be spawned at exactly x=0.75 y=0.0 z=0.35 (launch args x/y/z): the node's
 # first odometry sample must be within 10 mm of satellite_rotation_center (checkFirstOdomSample) or
 # the node fails loud. The cube must ALREADY be spinning (wz below) when the planner starts: the very

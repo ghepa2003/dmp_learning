@@ -1,5 +1,5 @@
 // Tests for RobotModel joint limits / readyPose() and checkKinematicFeasibility().
-// Like test_phase_selector.cpp these need Pinocchio and $HOME/thesis_ws/fer_flat_effort.urdf.
+// These need Pinocchio and $HOME/thesis_ws/fer_flat_effort.urdf.
 
 #include <gtest/gtest.h>
 

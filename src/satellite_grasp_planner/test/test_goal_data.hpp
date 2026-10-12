@@ -2,7 +2,7 @@
 
 // Shared, header-only helpers of the tests that read the recorded Gazebo goal data
 // (tools/gazebo_cartesian_eval/data/*.csv), resolved via $HOME/thesis_ws (falls back to /root).
-// Used by test_manipulability, test_joint_path_simulator and test_phase_selector.
+// Used by test_manipulability and test_joint_path_simulator.
 
 #include <cstdlib>
 #include <fstream>
