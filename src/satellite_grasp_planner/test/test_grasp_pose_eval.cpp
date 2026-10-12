@@ -119,7 +119,9 @@ TEST(GraspPoseEvalTest, ResultNeverOutsideLimits) {
         EXPECT_TRUE((r.q.array() >= lo.array()).all());
         EXPECT_TRUE((r.q.array() <= hi.array()).all());
         EXPECT_TRUE(r.limits_ok);
-        if (r.converged) EXPECT_TRUE(r.limits_ok);
+        if (r.converged) {
+            EXPECT_TRUE(r.limits_ok);
+        }
     }
     // A seed outside the limits is clamped, never returned as is.
     RobotModel::JointVector q_out = q_seed;
@@ -252,8 +254,12 @@ TEST(GraspPoseEvalTest, WristFlipIsConsistent) {
     const IkResult nominal = solvePoseIk(*robot, pose.position_world, pose.orientation_nominal_world, q_start, q_start, params);
     const IkResult flipped = solvePoseIk(*robot, pose.position_world, q_flip, q_start, q_start, params);
 
-    if (nominal.converged && !flipped.converged) EXPECT_FALSE(ev.wrist_flip);
-    if (!nominal.converged && flipped.converged) EXPECT_TRUE(ev.wrist_flip);
+    if (nominal.converged && !flipped.converged) {
+        EXPECT_FALSE(ev.wrist_flip);
+    }
+    if (!nominal.converged && flipped.converged) {
+        EXPECT_TRUE(ev.wrist_flip);
+    }
     EXPECT_EQ(ev.feasible_basic, nominal.converged || flipped.converged);
     const IkResult& chosen_ref = ev.wrist_flip ? flipped : nominal;
     EXPECT_LT((ev.ik.q - chosen_ref.q).norm(), 1e-9);  // deterministic: same inputs, same branch result
