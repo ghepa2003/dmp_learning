@@ -12,7 +12,7 @@
  *           (contact_to_end_offset comes from the demo, see SelectionInputs)
  *   d     = sqrt(d_pos^2 / l^2 + orientation_weight * ori^2 / angle_scale^2)
  *   cost  = d + epsilon_wait_per_s * wait_s
- * wait_s is the delay of planLaunch() (same launchDelay logic and min_delay_s as the legacy planner).
+ * wait_s is the delay of planLaunch() (launchDelay logic, with min_delay_s).
  */
 
 #include <array>

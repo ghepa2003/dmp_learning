@@ -5,7 +5,7 @@
  * @brief Header-only math helpers shared across packages (Eigen + STL only, NO ROS):
  *        angle wrapping, degree/radian conversion and shortest-path quaternion SLERP.
  *
- * Names kept from their previous homes (satellite_intercept.hpp, phase_selector.cpp).
+ * Names kept from their previous home (satellite_intercept.hpp).
  */
 
 #include <cmath>

@@ -431,6 +431,29 @@ ros2 run <driver_pkg> <driver_node> --ros-args -r <driver_topic>:=/master_pose_r
 **`[DA VERIFICARE]`** — `<driver_pkg>`, `<driver_node>` e `<driver_topic>` non
 sono nel repo; `haptic_dmp_wrapper_node` si aspetta il topic pose su `/touch0/pose`.
 
+### 3.8 Selezione del planner (S1)
+
+`grasp_planner_node` usa sempre la selezione S1 (`selectGraspS3`); il parametro `selection_mode` e i parametri della
+vecchia ricerca (`scan_step_deg`, `max_rows`, `psi_tol_deg`, `w_hat_upper_bound`, `time_budget_s`) non esistono più.
+
+- **Variabili**: punto di presa `k` in {0, 90, 180, 270} e fase `theta` in [-180, 180) (passo `s1.theta_step_deg`,
+  poi raffinamento `s1.theta_refine_step_deg` attorno al migliore di ogni k).
+- **Distanza**: deformazione della demo in sola posizione, `d_pos = |(goal - p0) - delta_g_demo|`; costo
+  `d + s1.epsilon_wait_per_s * attesa`.
+- **Vincoli a priori**: IK convergente, `w_hat >= s1.w_hat_min`, margine di giunto `>= s1.margin_min_rad`,
+  `d_pos <= s1.r_trust_m`.
+- **Controlli a posteriori** (candidati in ordine di costo, al massimo `s1.max_posthoc_candidates` controlli, saltando
+  i candidati dello stesso k entro `s1.posthoc_cluster_deg` da uno già controllato): velocità relativa a contatto
+  `<= s1.delta_v_max_m_s` (`s1.posthoc_velocity_check`) e limiti di giunto lungo il percorso
+  (`s1.posthoc_path_check`).
+- **Parametri**: tutti opzionali, valori di default e commenti in `satellite_grasp_planner/config/grasp_planner_example.yaml`.
+  Esempio: `ros2 run satellite_grasp_planner grasp_planner_node --ros-args --params-file <yaml> -p s1.posthoc_velocity_check:=false`.
+- **Esito** nel messaggio `GraspCommand`: `STATUS_SELECTED`, `STATUS_NO_FEASIBLE_CANDIDATE` (nessun candidato passa i vincoli)
+  o `STATUS_POSTHOC_FAILED` (passano i vincoli, falliscono tutti i controlli a posteriori).
+- **Il fit deve registrare `end_joints_rad`**: `w_trans_demo` si calcola dai giunti finali della demo, quindi il fit va
+  fatto con il CSV `*_joint_states.csv` accanto al CSV della demo. Un `*_demo_params.yaml` con `end_joints_rad: null`
+  viene rifiutato dal planner (rifare il fit).
+
 ---
 
 ## 4. Test automatici

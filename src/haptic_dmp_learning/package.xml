@@ -3,7 +3,7 @@
 <package format="3">
   <name>haptic_dmp_learning</name>
   <version>0.1.0</version>
-  <description>Core DMP implementation and ROS2 wrapper node to learn a translational DMP from Geomagic Touch demonstrations.</description>
+  <description>Core DMP/ProDMP implementation, demo fitting tools, satellite geometry model and the executor node that replays a learned ProDMP (optionally intercepting a rotating satellite from a GraspCommand), built on demonstrations from the Geomagic Touch.</description>
   <maintainer email="lorenzo.ghessi@mail.polimi.it">Lorenzo Ghessi</maintainer>
   <license>Apache-2.0</license>
 

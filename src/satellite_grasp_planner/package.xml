@@ -4,9 +4,11 @@
   <name>satellite_grasp_planner</name>
   <version>0.1.0</version>
   <description>
-    Phase/goal planner for model-mediated teleoperated grasping of a rotating
-    target satellite: picks the approach start time that maximizes Panda
-    translational manipulability along the ProDMP approach path (Level 1).
+    Grasp planner for model-mediated teleoperated grasping of a rotating target
+    satellite (selection "S1"): picks the grasp point k and phase theta whose
+    position is closest to the deformation of the single demo, subject to
+    manipulability, joint-margin, trust-radius and IK constraints, checks velocity
+    and kinematic path a posteriori, and plans the launch time.
   </description>
   <maintainer email="lorenzo.ghessi@mail.polimi.it">Lorenzo Ghessi</maintainer>
   <license>Apache-2.0</license>

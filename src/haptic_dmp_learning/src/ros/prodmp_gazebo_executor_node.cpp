@@ -556,8 +556,7 @@ void ProDmpGazeboExecutorNode::startTimer() {
             // GraspForceCalibrationNode::finishCaptureWindow()) but never
             // arms step_timer_, so the rollout simply never starts.
             RCLCPP_ERROR(this->get_logger(),
-                         "satellite_rotation_mode='%s' not implemented yet - requires Level 1 "
-                         "PhaseSelector integration. Node will not start the rollout.",
+                         "satellite_rotation_mode='%s' not implemented yet. Node will not start the rollout.",
                          satellite_rotation_mode_.c_str());
             return;
         }

@@ -32,7 +32,7 @@ old ready values), the demonstrations, and the weights learned from them.
 start-up `std::invalid_argument` naming the parameter; not declared in the other modes).
 - `demo_native`: the QuaternionDMP of the demonstration, unchanged (the previous behaviour).
 - `planner_goal`: SLERP from the hold quaternion (read once from TF by the hold target, which is therefore
-  required: `hold_target_enabled=true`) to `GraspCommand.goal_pose.orientation` (psi is already in it, never
+  required: `hold_target_enabled=true`) to `GraspCommand.goal_pose.orientation` (the wrist flip is already in it, never
   re-applied), shortest path (q and -q equivalent). Pure logic in `haptic_dmp_learning/core/grasp_orientation.hpp`.
 - s(t) is the planner's own (`kinematic_feasibility.cpp`): `s = min(1, t / tau)`, a function of TIME, not of the
   ProDMP phase (planner sample i: t = (i+1)*dt; executor: t = elapsed = now - t_roll0, 0 on the first tick). Same
@@ -51,7 +51,7 @@ start-up `std::invalid_argument` naming the parameter; not declared in the other
 - Logs: hold -> goal angle at acceptance; angle(TF, commanded) at acceptance (commanded = hold), at the trigger
   (commanded = SLERP start: small when the planner started from the real configuration) and at at_end.
 
-## Module map — grasp selection pipeline (as of 2026-09-29)
+## Module map — grasp selection pipeline (S1 only, as of 2026-10-12)
 
 **Dependency direction** (`package.xml`/`CMakeLists.txt`): `satellite_grasp_planner` depends
 on `haptic_dmp_learning` and `franka_cartesian_control`; neither of those depends on
@@ -65,40 +65,49 @@ dependency cycle.
 |---|---|
 | `haptic_dmp_learning/core/prodmp` | Integral-form ProDMP for 3D Cartesian position, "level 1" variant |
 | `haptic_dmp_learning/core/cube_satellite_model` | Pure geometry of the cube-shaped target satellite (replaces the ring model) |
-| `haptic_dmp_learning/core/grasp_roll` | Pure helpers for grasp roll psi about the TCP approach axis |
-| `haptic_dmp_learning/core/grasp_cost` | Pure functions for the grasp-candidate cost (SI units); builds surface velocity, combines normalized terms into a scalar to minimize |
+| `haptic_dmp_learning/core/surface_velocity` | Velocity of the grasp points on the spinning satellite: `(omega * axis) x (p_k(theta) - center)` |
+| `haptic_dmp_learning/core/tcp_roll` | Rotation of an orientation about the TCP approach axis (`applyRoll`), used for the wrist flip |
 | `haptic_dmp_learning/core/math_utils` | Header-only shared math helpers (angle wrap, deg/rad, SLERP) |
 | `haptic_dmp_learning/core/demo_params` | Demo-parameters file read by the on-board optimizer next to the ProDMP weights file |
 | `haptic_dmp_learning/core/joint_states_csv_io` | Buffering/CSV I/O for `/joint_states` recorded alongside a demo |
 | `franka_cartesian_control/core/robot_model` | Rigid-body kinematic/dynamic model of the Panda/FR3 (Pinocchio-backed) |
-| `satellite_grasp_planner/core/selection_inputs` | Assembles everything `selectGrasp()` needs from the demo-params file + current satellite measurement |
-| `satellite_grasp_planner/core/candidate_scan` | Offline scan of candidates (grasp point k x phase theta): ProDMP EE velocity vs. satellite surface velocity + goal term. No IK, no RobotModel, no collision |
-| `satellite_grasp_planner/core/candidate_eval` | Full evaluation of one candidate: kinematic feasibility of the rollout + arm/satellite collision at the final configuration |
-| `satellite_grasp_planner/core/grasp_selection` | Selects (k, theta, psi): candidate scan followed by full evaluations in partial-cost order, stopped by a bound |
-| `satellite_grasp_planner/core/launch_plan` | Pure functions to plan launch time from a satellite measurement and decide whether reselection is needed |
+| `satellite_grasp_planner/core/selection_inputs` | Assembles what the S1 selection needs from the demo-params file + current satellite measurement (p0, start joints, `delta_g_demo`, contact data, omega, ProDMP template, `w_trans_demo` from `end_joints_rad`, weights hash, snapshot) |
+| `satellite_grasp_planner/core/grasp_pose_eval` | Evaluation of one candidate (k, theta): grasp pose, IK, manipulability ratio `w_hat`, joint margin, wrist flip, distance to the demo |
+| `satellite_grasp_planner/core/grasp_s3_selection` | `selectGraspS3`: S1 selection (see below) |
+| `satellite_grasp_planner/core/grasp_s3_launch` | `planGraspAndLaunchS1`: `selectGraspS3` + `planLaunch`, returned as a `GraspLaunchResult` |
+| `satellite_grasp_planner/core/kinematic_feasibility` | Offline joint-limit check of the whole path to a target pose (ProDMP rollout + orientation SLERP + `JointPathSimulator`) |
+| `satellite_grasp_planner/core/launch_plan` | Pure functions to plan the launch time from a satellite measurement (`phaseAt`, `planLaunch`) |
 | `satellite_grasp_planner/core/manipulability` | Translational manipulability index (product of singular values of the 3xN Jacobian block) |
 | `satellite_grasp_planner/core/joint_path_simulator` | Simulates a Cartesian task-space trajectory via `RobotModel`/`VelocityIkSolver` |
 
-**Data flow** (per header doc comments): `selection_inputs::buildSelectionInputs` (reads
-`demo_params` + URDF + `SatelliteSnapshot`) -> `selectGrasp()` (`scanCandidates`, then
-`evaluateCandidate` = `checkKinematicFeasibility` + `checkSatelliteCollision`, best-first
-with a stopping bound) -> `planLaunch()`. This is the documented, but not yet wired-up, data
-flow: `selectGrasp()` (declared `grasp_selection.hpp`) is called only from `TEST(...)` bodies
-in `test/test_grasp_selection.cpp` (`GraspSelectionTest.*`, `SatelliteSelectionProbe.*`,
-`SatelliteSelectionFromDemoParamsProbe.*`); `planLaunch()` (declared `launch_plan.hpp`) is
-called only from `TEST(...)` bodies in `test/test_launch_plan.cpp` (`LaunchPlanPhase.*`,
-`LaunchPlanPlan.*`, `LaunchPlanReselection.*`, `LaunchPlanThrows.*`). No file outside those two
-test binaries calls either function, and no single test body calls both.
+**Selection S1** (`selectGraspS3`, the only selection of the planner; legacy search removed):
+- Variables: the grasp point `k` in {0, 90, 180, 270} and the phase `theta` in [-180, 180) deg (coarse step
+  `s1.theta_step_deg`, then refinement of the best of each k with `s1.theta_refine_step_deg`).
+- Distance: deformation of the single demo, position only (`orientation_weight = 0` by default):
+  `d_pos = |(goal - p0) - delta_g_demo|`, `goal` = grasp position + `contact_to_end_offset`,
+  `d = sqrt(d_pos^2/l^2 + orientation_weight*ori^2/angle_scale^2)`; cost `d + epsilon_wait_per_s * wait_s`
+  (`wait_s` from `planLaunch`).
+- A-priori constraints: IK converges, `w_hat = w_trans/w_trans_demo >= s1.w_hat_min`, joint margin
+  `>= s1.margin_min_rad`, `d_pos <= s1.r_trust_m`.
+- A-posteriori checks, candidates in cost order, at most `s1.max_posthoc_candidates` checks, skipping a
+  candidate of the same k within `s1.posthoc_cluster_deg` of one already checked: relative velocity at
+  contact `|v_target - v_ProDMP| <= s1.delta_v_max_m_s` (can be disabled with
+  `s1.posthoc_velocity_check`) and joint limits along the ProDMP path (`s1.posthoc_path_check`).
+  `S3Result::posthoc_log` records every check.
+- Outcomes: `kSelected`, `kNoCandidate` (no candidate passes the constraints, `STATUS_NO_FEASIBLE_CANDIDATE`)
+  or `kPosthocFailed` (`STATUS_POSTHOC_FAILED`).
+- Parameters: `s1.*` in `config/grasp_planner_example.yaml` (all optional, defaults shown there).
+- **The fit must record `end_joints_rad`**: `w_trans_demo` comes from the demo's last joint configuration,
+  so the demo-params file must have been written with the demo's joint-states CSV next to the demo CSV.
+  `buildSelectionInputs` rejects a file with `end_joints_rad: null` (redo the fit).
+- Data flow: `buildSelectionInputs` (`demo_params` + URDF + `SatelliteSnapshot`) -> `planGraspAndLaunchS1`
+  (`selectGraspS3`, then `planLaunch`) -> `toGraspCommandMsg` -> `GraspCommand`.
 
-**Superseded / legacy**: `satellite_grasp_planner/core/phase_selector` is still compiled into
-the core library and has its own test (`test/test_phase_selector.cpp`), but is not referenced
-by `grasp_selection.cpp`/`selection_inputs.cpp`/`candidate_scan.cpp`/`candidate_eval.cpp` (the
-current pipeline). `haptic_dmp_learning/core/satellite_intercept.hpp` (`anchorAndRotate`,
-`PhaseTracker`, ...) is still used by `prodmp_gazebo_executor_node`'s "continuous" mode.
-Planned for removal together with the ring code (author's plan, not tracked in the repo).
+`haptic_dmp_learning/core/satellite_intercept.hpp` (`anchorAndRotate`, `PhaseTracker`, ...) is still used by
+`prodmp_gazebo_executor_node`'s "continuous" mode.
 
 **`satellite_grasp_msgs`**: new interfaces-only package, one message `GraspCommand.msg` (status, goal
-pose, grasp point, theta/psi, contact time, selection diagnostics); depends only on
+pose, grasp point, theta, wrist flip, contact time, selection diagnostics); depends only on
 `std_msgs`/`geometry_msgs`, no dependency on any other package here.
 **`satellite_grasp_planner/ros/grasp_planner_node`** (Task 1 of 2; not yet consumed by the executor):
 one-shot - on the first `satellite_odom_topic` sample builds a snapshot, runs selection off the ROS
@@ -118,8 +127,8 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   every query; "no temporal state", queries are pure functions of `(k, theta_rad, params_)`.
 - `launch_plan.hpp` (`SatelliteSnapshot`) — `omega_rad_s` is SIGNED (CCW seen from +axis
   positive, CW negative; theta decreases in time when omega < 0); degrees appear only at the
-  CLI level (`mp_tool.py --satellite-omega-deg-s`). `needsReselection`/`planLaunch` throw
-  `std::invalid_argument` on `omega == 0`. `launchDelay` (`candidate_scan.hpp/.cpp`) =
+  CLI level (`mp_tool.py --satellite-omega-deg-s`). `planLaunch` throws
+  `std::invalid_argument` on `omega == 0`. `launchDelay` (`launch_delay.hpp/.cpp`) =
   `(theta* - theta_now)/omega - tau_contact`, reduced mod `T = 2*pi/|omega|` into
   `[min_delay, min_delay + T)`.
 - `prodmp.hpp`/`prodmp.cpp` (`ProDMP::velocityForCandidateGoal`) — `const`; requires `s_ > 0`
@@ -132,13 +141,10 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   note (2026-09-25, not in the repo) suggested that mixing `setGoal()` with the queries gives
   silently wrong results; the 2026-09-29 probe did not reproduce it. `setInitialConditions()`
   (via `resetIntegrationState()`) resets `s_` and the accumulators to zero.
-- `robot_model.hpp` / `kinematic_feasibility.hpp` / `grasp_selection.hpp` (`RobotModel`) —
-  PIMPL-cached kinematics, no mutex; `grasp_selection.hpp` states "RobotModel is not
-  thread-safe" and recommends one instance per thread; `kinematic_feasibility.hpp` documents
-  that `checkKinematicFeasibility` mutates the shared model via `update()` and must not be
-  called concurrently on the same instance. `checkSatelliteCollision` requires the caller to
-  have called `update()` first (`satellite_collision.hpp`); `evaluateCandidate`
-  (`candidate_eval.cpp`) does `update(kin.q_final, ...)` explicitly before calling it.
+- `robot_model.hpp` / `kinematic_feasibility.hpp` / `grasp_s3_selection.hpp` (`RobotModel`) —
+  PIMPL-cached kinematics, no mutex; `selectGraspS3` uses the model as-is ("not thread-safe", one instance
+  per thread); `kinematic_feasibility.hpp` documents that `checkKinematicFeasibility` mutates the shared
+  model via `update()` and must not be called concurrently on the same instance.
 - `demo_params.hpp`/`.cpp` — binds itself to one weights file by name + SHA-256 of its bytes;
   `verifyWeightsAlignment` throws `std::runtime_error` on missing file or hash mismatch;
   `sha256Hex`/`sha256FileHex` are self-implemented (no libcrypto). All YAML keys required;
@@ -148,19 +154,6 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   normalize it). Written as `<stem>_demo_params.yaml` by `learn_and_test_prodmp.cpp`. Exit
   code 3 = weights saved, demo_params write failed; `NonIncreasingTimestampsError` only prints
   a warning, writes no file, exits 0.
-- `satellite_grasp_planner/test/probe_gate.hpp` — long probes are skipped unless
-  `GRASP_RUN_PROBES` is set to something other than `""`/`"0"`. MEASURED 2026-09-29, dev laptop,
-  Release (-O3): production selection = 66 rollouts + scan in 5.2 s (at most ~80 ms per rollout).
-  A build without optimization flags is far slower: ~7.6 s per rollout / ~500 s per selection were
-  reported on 2026-09-28 (build type not recorded at the time).
-- `grasp_cost.hpp` (`meanSurfaceSpeedSquared`) — mean over the 4 grasp points at theta = 0 of
-  `|omega * axis x r|^2`, `r` from `graspPoseAt(k, 0) - cubeCenterWorld()`; independent of
-  theta. MEASURED 2026-09-29 (default `CubeSatelliteModel::Params`: side 0.20 m, standoff
-  0.08 m, collar radius 0.05 m; omega = -2 deg/s; re-derived here directly from the formulas
-  above, not rerun as an external probe): perpendicular distance from the axis 0.186815 m
-  (kP0/kP180) and 0.18 m (kP90/kP270); `|v|^2` = 4.25246e-5 and 3.94784e-5 m^2/s^2, mean
-  4.10015e-5; hand-still `e_v_hat = t.e_v/ref.e_v_ref` = 1.037 (kP0/kP180) and 0.963
-  (kP90/kP270) — geometry only, cancels out `omega`.
 
 **Offline fit tooling**:
 - `tools/dmp_offline_test/build/learn_and_test_prodmp` mtime 2026-09-29 09:49, vs.
@@ -184,7 +177,7 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
 
 ## 2026-09-29 — GraspCommand provenance fields
 
-- `start_position`: planner p0 (`scan.p0`, FK at q0), world frame; zero unless `status == SELECTED`.
+- `start_position`: planner p0 (FK at q0), world frame; zero unless `status == SELECTED`.
   Equals the robot-base frame only because `robot_base_world = 0` (enforced at node startup).
 - `snapshot_theta_rad` / `snapshot_t_s`: theta and sim-clock time (odometry `header.stamp`) of the
   snapshot the selection used; always set. Not the same as `header.stamp`, read after selection ends.
@@ -192,7 +185,7 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   `demo_params.weights_sha256`, which `buildSelectionInputs` verifies against the real file
   (`verifyWeightsAlignment` throws on mismatch), so no separate re-hash is needed.
 - Plumbing: `toGraspCommandMsg` takes a `GraspCommandProvenance` (named fields) filled by the node from
-  `in.params.scan.p0` and the new `SelectionInputs::weights_sha256`; `GraspLaunchResult` unchanged.
+  `SelectionInputs::p0` and `SelectionInputs::weights_sha256`.
 
 ## 2026-09-29 — Convention of theta and of the virtual collar
 
@@ -200,30 +193,30 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   which is why `satellite_q_ref` is identity in `config/grasp_planner_example.yaml`.
   `PhaseTracker` and `CubeSatelliteModel` use the same theta (`test_theta_convention.cpp`).
 - The virtual collar sits on the `+x` body face in the example YAML
-  (`cube_geometry.face_normal_body = [1, 0, 0]`). The selection probe fixtures in
-  `test_grasp_selection.cpp` use `-x` (`face_normal_body = [-1, 0, 0]`). Both are valid.
+  (`cube_geometry.face_normal_body = [1, 0, 0]`). The selection fixtures in
+  `test_selection_inputs.cpp` use `-x` (`face_normal_body = [-1, 0, 0]`). Both are valid.
 - Equivalence: `(face_normal_body = n, theta)` and `(face_normal_body = -n, theta + pi)` give the
   same grasp position, nominal orientation and approach axis, for all four points k. It is
   proved numerically, for several theta values and three center/axis setups, in
   `OppositeFaceNormalWithThetaPlusPiGivesSameGraspPose`. The test also checks that
   `(-n, theta)` without the `+pi` does NOT match, so the comparison cannot pass vacuously.
   So a YAML with `-x` describes the same physical collar as `+x`, with theta shifted by `pi`.
-- The collar exists ONLY in `CubeSatelliteModel` (planner geometry and collision model). It is
+- The collar exists ONLY in `CubeSatelliteModel` (planner geometry; the planner no longer checks arm/satellite collisions). It is
   NOT in the Gazebo SDF of `free_target_object`: the simulated cube has no collar geometry.
 
 ## 2026-09-29 — `prodmp_gazebo_executor_node` with `grasp_goal_source=grasp_command` (v1 limits)
 
-- **The executed orientation is not the planner's.** The planner checks kinematic feasibility and
-  collision with `applyRoll(orientation_nominal, psi)` and a SLERP from the start orientation
-  (`kinematic_feasibility.cpp`, `candidate_eval.cpp`); the executor runs `QuaternionDMP` with its
-  demo-native goal and uses only the position of the message. The planner's feasibility and collision
-  checks therefore do NOT cover the pose that is executed. The gap SLERP vs `QuaternionDMP`
+- **The executed orientation is not the planner's.** The planner checks kinematic feasibility
+  with `applyRoll(orientation_nominal, pi)` for the wrist flip and a SLERP from the start orientation
+  (`kinematic_feasibility.cpp`); the executor runs `QuaternionDMP` with its
+  demo-native goal and uses only the position of the message. The planner's feasibility
+  check therefore does NOT cover the pose that is executed. The gap SLERP vs `QuaternionDMP`
   (checklist 3a) is not measured yet.
 - Contact is assumed at the end of the rollout: `|contact_time_s - tau| <= 1e-6 s` is required, otherwise
   the executor refuses (the planner's feasibility rollout goes to `contact_point` without
   `contact_to_end_offset`, so it only matches the executed goal when `t_contact_s` is null).
 - Trigger: `theta_trig = wrapPi(theta_star - omega*contact_time_s)`, no `+dt`; the residual `omega*dt` is
-  logged at acceptance. Planner rollout dt = 0.005 s (`candidate_scan.cpp`, `kinematic_feasibility.hpp`);
+  logged at acceptance. Planner rollout dt = 0.005 s (`grasp_s3_selection.cpp`, `kinematic_feasibility.hpp`);
   the executor logs its own `dt_` next to it and warns if they differ.
 
 ## 2026-09-30 — Hold target (executor) and `start_joints_override_rad` (planner)
@@ -240,13 +233,11 @@ this identity. `cube_geometry.center_world`/`axis_world` are ignored by the pipe
   readyPose = previous behaviour). It becomes `q0` (`SelectionInputs::q0`, `q0_source`) through
   `buildSelectionInputs(..., std::optional<StartState>)`; precedence override > `demo.start_joints_rad` > readyPose.
   `start_position` is then FK(q0). No `/joint_states` subscription in this step (the value is passed by the caller).
-- **What else depends on q0** (read): the feasibility/collision rollouts start from it (`kinematic_feasibility.cpp`),
-  it is the nullspace attractor of `JointPathSimulator` (`joint_path_simulator.cpp`), and - with `end_joints_rad: null`,
-  as in the production `weights_demo_params.yaml` - `w_trans_demo` comes from the PROXY rollout started at q0
-  (`selection_inputs.cpp`). So a start other than readyPose can change (theta*, k, cost). The node logs, at the start
+- **What else depends on q0** (read): the feasibility rollout starts from it (`kinematic_feasibility.cpp`),
+  it is the nullspace attractor of `JointPathSimulator` (`joint_path_simulator.cpp`), and the IK
+  seed and `p0` of every candidate evaluation. So a start other than readyPose can change (theta*, k, cost). The node logs, at the start
   of every selection, the source of q0, q0, p0, the distance from readyPose (joints: norm and max; task space: mm) and
-  the whole `SelectionInputs::provenance`. `SatelliteSelectionFromDemoParamsProbe` reads `PROBE_START_Q="a,b,c,d,e,f,g"`
-  to run the same selection from another q0 and prints the distance from readyPose.
+  the whole `SelectionInputs::provenance`.
 - **Message**: unchanged schema. `hash`/`verifyWeightsAlignment` do not depend on q0.
 - **Not done here**: the rollout orientation. The first rollout message carries `qdmp_.q0()` (demo-native); the
   executor only LOGS the angle to the hold quaternion at the trigger (92.75 deg for production weights and the Z18

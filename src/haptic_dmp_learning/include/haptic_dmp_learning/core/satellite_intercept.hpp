@@ -530,7 +530,7 @@ inline ContinuousConfig validateContinuous(const ContinuousInputs& in) {
 // 7. Consumption of a GraspCommand (grasp_goal_source = "grasp_command"), ROS-free
 // ---------------------------------------------------------------------------------------
 
-/// Rollout step of the planner's offline simulations: candidate_scan.cpp (kDt) and
+/// Rollout step of the planner's offline simulations: grasp_s3_selection.cpp (kDt) and
 /// kinematic_feasibility.hpp (dt default). The executor logs it next to its own dt_.
 inline constexpr double kPlannerRolloutDtS = 0.005;
 

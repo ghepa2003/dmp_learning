@@ -36,7 +36,7 @@ struct FeasibilityResult {
 /**
  * @brief Offline kinematic feasibility of reaching a complete target pose from @p q0.
  *
- * Same mechanism as tools/cpp_sweep_free_roll.cpp: ProDMP position rollout (absolute goal, ceil(tau/dt)
+ * ProDMP position rollout (absolute goal, ceil(tau/dt)
  * steps) + shortest-path SLERP of the orientation from the FK pose at q0 to @p target_orientation,
  * simulated with JointPathSimulator (NullspaceBiasedResolution) and checked against the joint limits
  * of @p robot_model. It knows nothing about grasp points, phase or roll: the caller supplies the pose.

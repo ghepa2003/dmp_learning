@@ -32,7 +32,7 @@ namespace {
 TEST(RobotModelLimitsTest, JointLimitsMatchKnownFrankaValuesFromUrdf) {
     auto model = loadPandaRobotModel();
     ASSERT_NE(model, nullptr);
-    // Values hardcoded as JOINT_LIMITS in tools/cpp_sweep_free_roll.cpp (4-decimal rounding).
+    // Known Franka (FR3) joint limits, 4-decimal rounding.
     const double lo[7] = {-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973};
     const double hi[7] = {2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973};
     for (int j = 0; j < 7; ++j) {
