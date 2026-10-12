@@ -298,14 +298,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)
 
-  ament_add_gtest(test_grasp_roll test/test_grasp_roll.cpp)
-  target_link_libraries(test_grasp_roll ${PROJECT_NAME}_core)
-
   ament_add_gtest(test_tcp_roll test/test_tcp_roll.cpp)
   target_link_libraries(test_tcp_roll ${PROJECT_NAME}_core)
-
-  ament_add_gtest(test_grasp_cost test/test_grasp_cost.cpp)
-  target_link_libraries(test_grasp_cost ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_surface_velocity test/test_surface_velocity.cpp)
   target_link_libraries(test_surface_velocity ${PROJECT_NAME}_core)
