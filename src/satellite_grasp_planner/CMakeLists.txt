@@ -127,6 +127,24 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# ---- Optional offline analysis executables (default OFF: no existing build changes) ----
+option(BUILD_ANALYSIS_TOOLS "Build offline analysis executables" OFF)
+if(BUILD_ANALYSIS_TOOLS)
+  add_executable(orientation_law_compare analysis/orientation_law_compare.cpp)
+  target_link_libraries(orientation_law_compare
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+    coal::coal
+  )
+  ament_target_dependencies(orientation_law_compare
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  install(TARGETS orientation_law_compare
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
