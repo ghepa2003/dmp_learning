@@ -64,7 +64,10 @@ def clean_processes():
         "rm -rf /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*",
     ]
     for c in cmds:
-        subprocess.run(c, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.run(c, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        except subprocess.TimeoutExpired:
+            print(f"[ATTENZIONE] timeout (15 s) in clean_processes: {c}", flush=True)
     time.sleep(1.0)
 
 
@@ -145,8 +148,110 @@ def setup_bringup_share():
             shutil.copyfile(CONFIG_YAML_OVERRIDE, CONFIG_YAML_SRC)
 
 
+class RunInvalid(Exception):
+    """La run non e' valida e va chiusa (stato non pulito, launch morto, ...)."""
+
+
+class SigtermAsException:
+    """Context manager: SIGTERM (e SIGHUP) alzano un'eccezione, cosi' i finally/__exit__ eseguono sempre."""
+    def __enter__(self):
+        def _raise(signum, frame):
+            raise KeyboardInterrupt(f"segnale {signum} ricevuto")
+        self._old = {}
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            self._old[sig] = signal.signal(sig, _raise)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for sig, old in self._old.items():
+            signal.signal(sig, old)
+
+
+class ProcessGuard:
+    """Context manager: all'uscita (anche per eccezione/segnale) chiude Gazebo, bag, executor."""
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        clean_processes()
+
+
+GAIN_KEYS = {"Kt": "translational_stiffness", "Kr": "rotational_stiffness",
+             "Dt": "translational_damping", "Dr": "rotational_damping"}
+
+
+def read_gains_yaml(path=None):
+    """sha256 e guadagni (Kt, Kr, Dt, Dr) letti dallo yaml che il controller_manager carica.
+
+    Se una chiave compare con valori diversi nel file, il valore e' la lista dei valori trovati.
+    """
+    path = path or CONFIG_YAML_INSTALL
+    sha, real, err = _sha256_file(path)
+    info = {"path": real, "sha256": sha}
+    if err:
+        info["error"] = err
+        return info
+    with open(real, "r") as f:
+        lines = f.read().splitlines()
+    for short, key in GAIN_KEYS.items():
+        vals = []
+        for line in lines:
+            code = line.split("#", 1)[0].strip()
+            if code.startswith(key + ":"):
+                vals.append(float(code.split(":", 1)[1]))
+        info[short] = vals[0] if len(set(vals)) == 1 else (vals or None)
+    return info
+
+
+def check_gains_yaml_clean():
+    """Il file tracciato in src non deve differire da HEAD. Ritorna (ok, messaggio)."""
+    import difflib
+    rel = os.path.relpath(CONFIG_YAML_OVERRIDE, WS_ROOT)
+    try:
+        res = subprocess.run(["git", "-C", WS_ROOT, "show", f"HEAD:{rel}"],
+                             capture_output=True, text=True, timeout=20)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, f"YAML DEI GUADAGNI NON VERIFICABILE: git show fallito ({type(e).__name__})"
+    if res.returncode != 0:
+        return False, f"YAML DEI GUADAGNI NON VERIFICABILE: git show HEAD:{rel}: {res.stderr.strip()}"
+    try:
+        with open(CONFIG_YAML_OVERRIDE, "r") as f:
+            cur = f.read()
+    except OSError as e:
+        return False, f"YAML DEI GUADAGNI NON VERIFICABILE: {e}"
+    if cur == res.stdout:
+        return True, "YAML dei guadagni identico a HEAD"
+    diff = [l for l in difflib.unified_diff(res.stdout.splitlines(), cur.splitlines(),
+                                            "HEAD", "working tree", lineterm="", n=0)
+            if l[:1] in "+-" and not l.startswith(("+++", "---"))]
+    return False, "YAML DEI GUADAGNI MODIFICATO RISPETTO A HEAD: " + " | ".join(diff[:10])
+
+
+def find_other_eval_runs():
+    """PID di altri processi python che eseguono eval_controllers.py (escluso questo)."""
+    pids = []
+    me = os.getpid()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+        except OSError:
+            continue
+        if argv and os.path.basename(argv[0]).startswith("python") and \
+                any(os.path.basename(a) == "eval_controllers.py" for a in argv[1:]):
+            pids.append(int(entry))
+    return pids
+
+
 class YamlGainManager:
-    """Context manager per impostare e ripristinare i guadagni del controller impedance."""
+    """Context manager per impostare e ripristinare i guadagni del controller impedance.
+
+    Modifica SOLO la copia regolare nel bringup (CONFIG_YAML_INSTALL), cioe' il file che il
+    controller_manager carica via $(find franka_gazebo_bringup)/config/... nello xacro ros2_control.
+    I file in src (override tracciato, franka_ws/src) non vengono mai scritti.
+    """
     def __init__(self, kt=200.0, dt=10.0, kr=150.0, dr=1.0):
         self.kt = kt
         self.dt = dt
@@ -155,20 +260,15 @@ class YamlGainManager:
         self.saved_contents = {}
 
     def __enter__(self):
-        # Salva stato iniziale
-        for path in [CONFIG_YAML_OVERRIDE, CONFIG_YAML_SRC, CONFIG_YAML_INSTALL]:
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    self.saved_contents[path] = f.read()
-
-        # Applica nuovi guadagni
-        for path in [CONFIG_YAML_OVERRIDE, CONFIG_YAML_SRC, CONFIG_YAML_INSTALL]:
-            if not os.path.exists(path):
-                continue
+        path = CONFIG_YAML_INSTALL
+        if os.path.islink(path):
+            raise RunInvalid(f"{path} e' un symlink: rifiuto di modificarlo (scriverebbe il file sorgente)")
+        try:
             with open(path, "r") as f:
-                lines = f.readlines()
+                original = f.read()
+            self.saved_contents[path] = original
             new_lines = []
-            for line in lines:
+            for line in original.splitlines(keepends=True):
                 if "translational_stiffness:" in line:
                     new_lines.append(f"    translational_stiffness: {self.kt:.1f}\n")
                 elif "translational_damping:" in line:
@@ -181,33 +281,65 @@ class YamlGainManager:
                     new_lines.append(line)
             with open(path, "w") as f:
                 f.writelines(new_lines)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Ripristina file originali
         for path, content in self.saved_contents.items():
-            if os.path.exists(os.path.dirname(path)):
-                with open(path, "w") as f:
-                    f.write(content)
+            with open(path, "w") as f:
+                f.write(content)
+        return False
 
 
-def wait_for_controller(launch_log_path, controller_name="cartesian_impedance_controller", timeout_sec=60):
-    """Attende che il controller specificato sia attivo controllando il log e ros2 control."""
+LAUNCH_ERROR_MARKERS = ("[ERROR]", "process has died")
+
+
+def _log_tail(path, n=20):
+    try:
+        with open(path, "r", errors="replace") as f:
+            return "".join(f.readlines()[-n:])
+    except OSError as e:
+        return f"(log illeggibile: {e})"
+
+
+def wait_for_controller(launch_log_path, controller_name="cartesian_impedance_controller", timeout_sec=60,
+                        launch_proc=None, poll_timeout_sec=10):
+    """Attende che il controller sia attivo. True = attivo, False = timeout.
+
+    Ogni giro controlla che il processo di launch sia vivo e che il log non contenga ERROR di launch:
+    in tal caso alza RunInvalid con le ultime 20 righe del log. Ogni chiamata a ros2 control ha timeout.
+    """
     check_cmd = (
         f"source /opt/ros/humble/setup.bash && "
         f"source {FRANKA_WS}/install/setup.bash && "
-        f"ros2 control list_controllers 2>/dev/null"
+        f"exec ros2 control list_controllers 2>/dev/null"
     )
-    for _ in range(timeout_sec):
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        log_text = ""
         if os.path.exists(launch_log_path):
-            with open(launch_log_path, "r") as f:
+            with open(launch_log_path, "r", errors="replace") as f:
                 log_text = f.read()
-            if (f"Configured and activated {controller_name}" in log_text or
-                f"Successfully loaded controller {controller_name}" in log_text):
-                return True
-        res = subprocess.run(check_cmd, shell=True, executable="/bin/bash", capture_output=True, text=True)
-        if controller_name in res.stdout and "active" in res.stdout:
+        activated = (f"Configured and activated {controller_name}" in log_text or
+                     f"Successfully loaded controller {controller_name}" in log_text)
+        if activated:
             return True
+        if launch_proc is not None and launch_proc.poll() is not None:
+            raise RunInvalid(f"processo di launch terminato (rc={launch_proc.returncode}) prima dell'attivazione "
+                             f"del controller. Ultime 20 righe del log:\n{_log_tail(launch_log_path)}")
+        bad = [m for m in LAUNCH_ERROR_MARKERS if m in log_text]
+        if bad:
+            raise RunInvalid(f"errore di launch nel log ({', '.join(bad)}). "
+                             f"Ultime 20 righe del log:\n{_log_tail(launch_log_path)}")
+        try:
+            res = subprocess.run(check_cmd, shell=True, executable="/bin/bash", capture_output=True,
+                                 text=True, timeout=poll_timeout_sec)
+            if controller_name in res.stdout and "active" in res.stdout:
+                return True
+        except subprocess.TimeoutExpired:
+            pass  # ros2 control appeso: si riprova fino alla scadenza del deadline
         time.sleep(1.0)
     return False
 

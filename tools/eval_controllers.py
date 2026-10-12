@@ -40,6 +40,26 @@ HISTORICAL_REFERENCES = {
 }
 
 
+def _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers, reason):
+    """Marca la run INVALIDA: scrive metrics.json e stampa il riepilogo."""
+    summary = dict(run_info)
+    summary.update({
+        "run_name": run_name, "controller_type": controller_type,
+        "kt": kt, "dt": dt, "start_pose": start_pose, "fingers": fingers,
+        "is_valid": False, "validation_reason": reason,
+    })
+    json_path = os.path.join(output_dir, f"{run_name}_metrics.json")
+    with open(json_path, "w") as f_json:
+        json.dump(summary, f_json, indent=2)
+    print("\n=================================================================")
+    print(f"RISULTATI RUN: {run_name}")
+    print("=================================================================")
+    print(f"Stato Validità:          INVALIDA ({reason})")
+    print(f"Metriche salvate in:     {json_path}")
+    print("=================================================================\n")
+    return summary
+
+
 def run_canonical_evaluation(
     output_dir,
     controller_type="prodmp",
@@ -126,11 +146,21 @@ def run_canonical_evaluation(
         print("=================================================================\n")
         return summary
 
-    # 2. Setup e avvio ambiente con ripristino garantito dello YAML
+    # Stato pulito: yaml dei guadagni tracciato = HEAD, nessun'altra run in corso (prima di toccare processi)
+    others = ec.find_other_eval_runs()
+    if others:
+        return _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers,
+                              "ALTRA RUN IN ESECUZIONE: PID " + ", ".join(str(p) for p in others))
+    yaml_ok, yaml_msg = ec.check_gains_yaml_clean()
+    if not yaml_ok:
+        return _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers, yaml_msg)
+
+    # 2. Setup e avvio ambiente. SIGTERM -> eccezione; ProcessGuard chiude i processi e YamlGainManager
+    # ripristina la copia nel bringup (il file in src non viene mai scritto), anche su KeyboardInterrupt/SIGTERM.
     ec.clean_processes()
     ec.setup_bringup_share()
 
-    with ec.YamlGainManager(kt=kt, dt=dt, kr=kr, dr=dr):
+    with ec.SigtermAsException(), ec.YamlGainManager(kt=kt, dt=dt, kr=kr, dr=dr), ec.ProcessGuard():
         # Selezione launch file
         if controller_type == "velocity":
             launch_file = "gazebo_velocity_cartesian_control.launch.py"
@@ -158,10 +188,31 @@ def run_canonical_evaluation(
             )
 
         print("Attesa attivazione controller...")
-        if not ec.wait_for_controller(launch_log, controller_name=controller_name, timeout_sec=60):
-            print(f"[ERRORE FATALE] Controller {controller_name} non attivato entro il timeout.")
+        try:
+            activated = ec.wait_for_controller(launch_log, controller_name=controller_name, timeout_sec=60,
+                                               launch_proc=launch_proc)
+            fail_reason = f"controller {controller_name} non attivato entro il timeout"
+        except ec.RunInvalid as e:
+            activated, fail_reason = False, str(e)
+        if not activated:
+            print(f"[ERRORE FATALE] {fail_reason}")
+            ec.clean_processes()  # ProcessGuard lo rifa' comunque all'uscita
+            return _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers,
+                                  fail_reason)
+
+        # Guadagni effettivamente letti dal controller_manager (copia del bringup)
+        gains = ec.read_gains_yaml()
+        run_info["controller_gains_yaml"] = gains
+        expected = {"Kt": kt, "Kr": kr, "Dt": dt, "Dr": dr}
+        bad_gains = [k for k, v in expected.items() if gains.get(k) != round(v, 1)]
+        print(f"  YAML guadagni: sha256={gains.get('sha256')} Kt={gains.get('Kt')} Kr={gains.get('Kr')} "
+              f"Dt={gains.get('Dt')} Dr={gains.get('Dr')}")
+        if bad_gains:
+            reason = f"GUADAGNI NEL YAML DEL CONTROLLER DIVERSI DAI RICHIESTI: {bad_gains} ({gains})"
+            print(f"[ERRORE FATALE] {reason}")
             ec.clean_processes()
-            return None
+            return _write_invalid(output_dir, run_name, run_info, controller_type, kt, dt, start_pose, fingers,
+                                  reason)
 
         # Guardia sulla posa di partenza: prima di bag, executor e qualsiasi target
         print("Controller ATTIVO! Verifica posa di partenza (q6 da /joint_states)...", flush=True)
