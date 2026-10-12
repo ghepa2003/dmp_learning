@@ -178,36 +178,9 @@ TEST(CubeSatelliteModelRotation, ThetaPiFlipsDefaultPointsThroughCenter) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Hollow-cylinder geometry
+// Construction checks on the collar geometry
 // ---------------------------------------------------------------------------------------
-TEST(CubeSatelliteModelCylinder, RadiiMatchParamsAndThickness) {
-    const CubeSatelliteModel::Params par;
-    const CubeSatelliteModel m(par);
-    EXPECT_NEAR(m.cylinderOuterRadius(), 0.0725, 1e-15);
-    EXPECT_NEAR(m.cylinderInnerRadius(), 0.0635, 1e-15);
-    EXPECT_NEAR(m.cylinderOuterRadius() - m.cylinderInnerRadius(), par.wall_thickness_m, 1e-15);
-}
-
-TEST(CubeSatelliteModelCylinder, EndpointsAtThetaZeroDefaultParams) {
-    const CubeSatelliteModel m{CubeSatelliteModel::Params{}};
-    // Base on the face (side/2 = 0.075), top at side/2 + standoff = 0.155 along +x.
-    const Eigen::Vector3d base = m.cylinderBaseCenterWorld(0.0);
-    const Eigen::Vector3d top = m.cylinderTopCenterWorld(0.0);
-    expectVecNear(base, {0.075, 0.0, 0.0}, 1e-12);
-    expectVecNear(top, {0.155, 0.0, 0.0}, 1e-12);
-    EXPECT_NEAR((top - base).norm(), 0.08, 1e-12);
-}
-
-TEST(CubeSatelliteModelCylinder, AxisEqualsFaceNormalComponentwise) {
-    for (const auto& par : {CubeSatelliteModel::Params{}, generalParams()}) {
-        const CubeSatelliteModel m(par);
-        for (double theta : {deg(30.0), deg(90.0), deg(-200.0)}) {
-            expectVecNear(m.cylinderAxisWorld(theta), m.faceNormalWorld(theta), 1e-15);
-        }
-    }
-}
-
-TEST(CubeSatelliteModelCylinder, ConstructorRejectsInvalidWallThickness) {
+TEST(CubeSatelliteModelCollar, ConstructorRejectsInvalidWallThickness) {
     CubeSatelliteModel::Params p;
     p.wall_thickness_m = 0.0;
     EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
@@ -219,34 +192,17 @@ TEST(CubeSatelliteModelCylinder, ConstructorRejectsInvalidWallThickness) {
     EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
 }
 
-TEST(CubeSatelliteModelCylinder, EndpointsRotateRigidlyAboutAxis) {
-    const CubeSatelliteModel::Params par = generalParams();
-    const CubeSatelliteModel m(par);
-    const Eigen::Vector3d axis = par.axis_world.normalized();
-    for (double theta : {deg(90.0), deg(45.0), deg(-120.0)}) {
-        const Eigen::AngleAxisd rot(theta, axis);
-        const Eigen::Vector3d b0 = m.cylinderBaseCenterWorld(0.0) - par.center_world;
-        const Eigen::Vector3d t0 = m.cylinderTopCenterWorld(0.0) - par.center_world;
-        const Eigen::Vector3d bt = m.cylinderBaseCenterWorld(theta) - par.center_world;
-        const Eigen::Vector3d tt = m.cylinderTopCenterWorld(theta) - par.center_world;
-        expectVecNear(bt, rot * b0, 1e-12);
-        expectVecNear(tt, rot * t0, 1e-12);
-        EXPECT_NEAR(bt.norm(), b0.norm(), 1e-12);
-        EXPECT_NEAR(bt.dot(axis), b0.dot(axis), 1e-12);  // axial component unchanged
-        EXPECT_NEAR((tt - bt).norm(), par.standoff_m, 1e-12);
-    }
-}
-
 // ---------------------------------------------------------------------------------------
-// Consistency between graspPoseAt() and the cylinder geometry
+// Consistency between graspPoseAt() and the collar (cylinder along the face normal: base on the cube
+// face, top at standoff_m beyond it)
 // ---------------------------------------------------------------------------------------
-TEST(CubeSatelliteModelConsistency, GraspPointsLieOnCylinderTopRim) {
+TEST(CubeSatelliteModelConsistency, GraspPointsLieOnCollarTopRim) {
     for (const auto& par : {CubeSatelliteModel::Params{}, generalParams()}) {
         const CubeSatelliteModel m(par);
         for (double theta : {0.0, deg(60.0), deg(-100.0)}) {
-            const Eigen::Vector3d axis = m.cylinderAxisWorld(theta);
-            const Eigen::Vector3d base = m.cylinderBaseCenterWorld(theta);
-            const Eigen::Vector3d top = m.cylinderTopCenterWorld(theta);
+            const Eigen::Vector3d axis = m.faceNormalWorld(theta);
+            const Eigen::Vector3d base = m.cubeCenterWorld() + 0.5 * par.cube_side_m * axis;
+            const Eigen::Vector3d top = base + par.standoff_m * axis;
             for (auto k : kAllPoints) {
                 const Eigen::Vector3d p = m.graspPoseAt(k, theta).position_world;
                 const double axial = (p - base).dot(axis);
@@ -262,13 +218,13 @@ TEST(CubeSatelliteModelConsistency, GraspPointsLieOnCylinderTopRim) {
     }
 }
 
-TEST(CubeSatelliteModelConsistency, ApproachAxisIsOppositeOfCylinderAxis) {
+TEST(CubeSatelliteModelConsistency, ApproachAxisIsOppositeOfFaceNormal) {
     for (const auto& par : {CubeSatelliteModel::Params{}, generalParams()}) {
         const CubeSatelliteModel m(par);
         for (double theta : {0.0, deg(60.0), deg(-100.0)}) {
             for (auto k : kAllPoints) {
                 expectVecNear(m.graspPoseAt(k, theta).approach_axis_world,
-                              -m.cylinderAxisWorld(theta), 1e-12);
+                              -m.faceNormalWorld(theta), 1e-12);
             }
         }
     }
@@ -278,8 +234,8 @@ TEST(CubeSatelliteModelConsistency, ProjectedGraspPointsFormSquareOnTopPlane) {
     for (const auto& par : {CubeSatelliteModel::Params{}, generalParams()}) {
         const CubeSatelliteModel m(par);
         for (double theta : {0.0, deg(60.0), deg(-100.0)}) {
-            const Eigen::Vector3d axis = m.cylinderAxisWorld(theta);
-            const Eigen::Vector3d top = m.cylinderTopCenterWorld(theta);
+            const Eigen::Vector3d axis = m.faceNormalWorld(theta);
+            const Eigen::Vector3d top = m.cubeCenterWorld() + (0.5 * par.cube_side_m + par.standoff_m) * axis;
             std::vector<Eigen::Vector3d> d;  // in-plane offsets from the top center
             for (auto k : kAllPoints) {
                 const Eigen::Vector3d q = m.graspPoseAt(k, theta).position_world - top;
@@ -354,10 +310,3 @@ TEST(CubeSatelliteModelRealGeometry, UnsetGraspRadiusEqualsCollarRadius) {
     }
 }
 
-TEST(CubeSatelliteModelRealGeometry, GraspRadiusDoesNotChangeCylinderRadii) {
-    CubeSatelliteModel::Params par;
-    par.grasp_radius_m = 0.068;
-    const CubeSatelliteModel m(par);
-    EXPECT_NEAR(m.cylinderOuterRadius(), 0.0725, 1e-15);
-    EXPECT_NEAR(m.cylinderInnerRadius(), 0.0635, 1e-15);
-}

@@ -37,12 +37,6 @@ public:
     using Matrix7d = Eigen::Matrix<double, kNumJoints, kNumJoints>;
     using Matrix6d = Eigen::Matrix<double, 6, 6>;
 
-    /// @brief Pose of a frame in the robot base frame (fer_link0).
-    struct FramePose {
-        Eigen::Vector3d position;
-        Eigen::Quaterniond orientation;
-    };
-
     /**
      * @brief Constructs the robot model from URDF XML content.
      * @param urdf_xml_content String containing the complete URDF XML model description.
@@ -80,20 +74,6 @@ public:
 
     /// @brief Returns cached 7x7 joint-space mass/inertia matrix M(q), computed via CRBA.
     const Matrix7d& massMatrix() const { return mass_matrix_; }
-
-    /**
-     * @brief Pose of an arbitrary URDF frame, by name, in the base frame, as computed by the last
-     *        update() (no recomputation here). Generic counterpart of eePosition()/eeOrientation().
-     * @throws std::invalid_argument if @p frame_name does not exist in the URDF.
-     */
-    FramePose framePose(const std::string& frame_name) const;
-
-    /// @brief Names of the arm link frames (fer_link0..fer_link8, fer_hand), for downstream
-    /// modules such as collision checking. The model itself stays purely kinematic.
-    static const std::vector<std::string>& armLinkFrameNames();
-
-    /// @brief Names of the gripper finger frames (fer_leftfinger, fer_rightfinger).
-    static const std::vector<std::string>& gripperFrameNames();
 
     /// @brief Lower position limits of the 7 actuated joints (rad), read from the URDF via
     /// Pinocchio and ordered like jointNames() (not the full model.nq vector).

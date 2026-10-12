@@ -76,30 +76,6 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
 
 RobotModel::~RobotModel() = default;
 
-RobotModel::FramePose RobotModel::framePose(const std::string& frame_name) const {
-    if (!impl_->model.existFrame(frame_name)) {
-        throw std::invalid_argument("RobotModel::framePose: frame not found in URDF: " + frame_name);
-    }
-    const pinocchio::FrameIndex idx = impl_->model.getFrameId(frame_name);
-    const auto& oMf = impl_->data.oMf[idx];
-    FramePose pose;
-    pose.position = oMf.translation();
-    pose.orientation = Eigen::Quaterniond(oMf.rotation());
-    return pose;
-}
-
-const std::vector<std::string>& RobotModel::armLinkFrameNames() {
-    static const std::vector<std::string> names = {
-        "fer_link0", "fer_link1", "fer_link2", "fer_link3", "fer_link4",
-        "fer_link5", "fer_link6", "fer_link7", "fer_link8", "fer_hand"};
-    return names;
-}
-
-const std::vector<std::string>& RobotModel::gripperFrameNames() {
-    static const std::vector<std::string> names = {"fer_leftfinger", "fer_rightfinger"};
-    return names;
-}
-
 RobotModel::JointVector RobotModel::readyPose() {
     JointVector q;
     q << 0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0, 1.5707963267948966,

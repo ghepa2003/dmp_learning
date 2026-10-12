@@ -74,37 +74,7 @@ GraspTargetPose CubeSatelliteModel::graspPoseAt(GraspPointId k, double theta_rad
     return pose;
 }
 
-double CubeSatelliteModel::cylinderOuterRadius() const { return params_.collar_radius_m; }
-
-double CubeSatelliteModel::cylinderInnerRadius() const {
-    return params_.collar_radius_m - params_.wall_thickness_m;
-}
-
-Eigen::Vector3d CubeSatelliteModel::cylinderAxisWorld(double theta_rad) const {
-    return faceNormalWorld(theta_rad);
-}
-
-Eigen::Vector3d CubeSatelliteModel::cylinderBaseCenterWorld(double theta_rad) const {
-    // On the face itself (no standoff_m, unlike p_body in graspPoseAt).
-    const Eigen::Vector3d base_body = (params_.cube_side_m / 2.0) * params_.face_normal_body;
-    return params_.center_world + rotation(theta_rad) * base_body;
-}
-
-Eigen::Vector3d CubeSatelliteModel::cylinderTopCenterWorld(double theta_rad) const {
-    return cylinderBaseCenterWorld(theta_rad) + params_.standoff_m * cylinderAxisWorld(theta_rad);
-}
-
 Eigen::Vector3d CubeSatelliteModel::cubeCenterWorld() const { return params_.center_world; }
-
-Eigen::Matrix3d CubeSatelliteModel::cubeRotationWorld(double theta_rad) const {
-    // Cube body axes = the graspPoseAt frame: columns (n, axis, n x axis), right-handed and
-    // orthonormal (n is lateral, both unit). At theta = 0 this is NOT the identity in general.
-    Eigen::Matrix3d B;
-    B.col(0) = params_.face_normal_body;
-    B.col(1) = params_.axis_world;
-    B.col(2) = params_.face_normal_body.cross(params_.axis_world).normalized();
-    return rotation(theta_rad) * B;
-}
 
 double CubeSatelliteModel::cubeSideM() const { return params_.cube_side_m; }
 
