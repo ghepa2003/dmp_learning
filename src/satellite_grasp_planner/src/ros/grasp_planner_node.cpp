@@ -9,6 +9,7 @@
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/satellite_intercept.hpp"
 #include "satellite_grasp_planner/core/grasp_launch.hpp"
+#include "satellite_grasp_planner/core/grasp_s3_launch.hpp"
 #include "satellite_grasp_planner/core/selection_inputs.hpp"
 #include "satellite_grasp_planner/ros/grasp_command_conversion.hpp"
 #include "satellite_grasp_planner/ros/grasp_planner_checks.hpp"
@@ -139,6 +140,43 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         if (!values.empty()) start_state_ = core::makeStartStateFromOverride(values, urdf_path_);
     }
 
+    // Selection mode: "legacy" (default, unchanged behaviour) or "s1" (selectGraspS3, parameters s1.*, all optional).
+    selection_mode_ = this->declare_parameter<std::string>("selection_mode", "legacy");
+    if (selection_mode_ != "legacy" && selection_mode_ != "s1") {
+        throw std::invalid_argument("parameter 'selection_mode' must be \"legacy\" or \"s1\", got \"" + selection_mode_ + "\"");
+    }
+    {
+        core::S3Params& p = s3_params_;
+        auto dbl = [this](const char* name, double def) { return this->declare_parameter<double>(name, def); };
+        auto bol = [this](const char* name, bool def) { return this->declare_parameter<bool>(name, def); };
+        p.length_scale_m = dbl("s1.length_scale_m", p.length_scale_m);
+        p.orientation_weight = dbl("s1.orientation_weight", p.orientation_weight);
+        p.angle_scale_rad = dbl("s1.angle_scale_rad", p.angle_scale_rad);
+        p.epsilon_wait_per_s = dbl("s1.epsilon_wait_per_s", p.epsilon_wait_per_s);
+        p.w_hat_min = dbl("s1.w_hat_min", p.w_hat_min);
+        p.margin_min_rad = dbl("s1.margin_min_rad", p.margin_min_rad);
+        p.r_trust_m = dbl("s1.r_trust_m", p.r_trust_m);
+        p.delta_v_max_m_s = dbl("s1.delta_v_max_m_s", p.delta_v_max_m_s);
+        p.theta_step_deg = dbl("s1.theta_step_deg", p.theta_step_deg);
+        p.theta_refine_step_deg = dbl("s1.theta_refine_step_deg", p.theta_refine_step_deg);
+        p.posthoc_path_check = bol("s1.posthoc_path_check", p.posthoc_path_check);
+        p.posthoc_velocity_check = bol("s1.posthoc_velocity_check", p.posthoc_velocity_check);
+        p.ik.pos_tol_m = dbl("s1.ik.pos_tol_m", p.ik.pos_tol_m);
+        p.ik.ori_tol_rad = dbl("s1.ik.ori_tol_rad", p.ik.ori_tol_rad);
+        p.ik.damping = dbl("s1.ik.damping", p.ik.damping);
+        p.ik.nullspace_gain = dbl("s1.ik.nullspace_gain", p.ik.nullspace_gain);
+        p.ik.max_step_rad = dbl("s1.ik.max_step_rad", p.ik.max_step_rad);
+        const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
+        const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
+        if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
+            max_posthoc > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument("parameters s1.ik.max_iter (>= 1) / s1.max_posthoc_candidates (>= 0) out of range");
+        }
+        p.ik.max_iter = static_cast<int>(max_iter);
+        p.max_posthoc_candidates = static_cast<int>(max_posthoc);
+        core::validateS3Params(p);  // fail at startup, not after the first odometry sample
+    }
+
     // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
     checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
     checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
@@ -205,8 +243,22 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: starting selection with %s",
                     describeSelectionParams(in.params, selection_overrides_).c_str());
 
-        const core::GraspLaunchResult result = core::planGraspAndLaunch(
-            in, snapshot, min_delay_s_, /*clock=*/nullptr, /*t_now_override_s=*/std::nullopt);
+        core::GraspLaunchResult result;
+        if (selection_mode_ == "s1") {
+            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selection_mode=s1 (selectGraspS3)");
+            core::S3Result s3_result;
+            result = core::planGraspAndLaunchS1(in, snapshot, min_delay_s_, s3_params_,
+                                                /*t_now_override_s=*/std::nullopt, &s3_result);
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: s1 status=%d evaluations=%d posthoc_checks=%d dv=%.3g m/s "
+                        "path_margin=%.3f rad%s%s",
+                        static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
+                        s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
+                        s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
+        } else {
+            result = core::planGraspAndLaunch(in, snapshot, min_delay_s_, /*clock=*/nullptr,
+                                              /*t_now_override_s=*/std::nullopt);
+        }
 
         const rclcpp::Time now = this->get_clock()->now();
         if (now.seconds() < snapshot.t_s) {

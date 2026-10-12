@@ -58,6 +58,31 @@ grasp_planner_node:
     # file has it). When set it wins over the demo file. p0 / start_position then are FK(this q).
     # start_joints_override_rad: [0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]
 
+    # Selection mode: "legacy" (default, selectGrasp: e_v/e_g/manipulability/roll cost, collision) or "s1"
+    # (selectGraspS3: reduced problem, position-only deformation distance + constraints, velocity and path
+    # checked a posteriori). In "s1" the legacy search parameters above (scan_step_deg, max_rows, psi_tol_deg,
+    # w_hat_upper_bound, time_budget_s) are ignored. All s1.* are optional; the values below are the defaults.
+    selection_mode: "legacy"
+    # s1.length_scale_m: 0.10          # l in d = sqrt(d_pos^2/l^2 + orientation_weight*ori^2/angle_scale^2)
+    # s1.orientation_weight: 0.0       # 0 = distance on position only
+    # s1.angle_scale_rad: 1.0
+    # s1.epsilon_wait_per_s: 1.0e-4    # cost = d + epsilon * wait_s
+    # s1.w_hat_min: 0.5                # constraint: w_trans / w_trans_demo >= w_hat_min
+    # s1.margin_min_rad: 0.3           # constraint: min joint-limit margin of the IK solution
+    # s1.r_trust_m: 0.30               # constraint: d_pos <= r_trust
+    # s1.delta_v_max_m_s: 3.0e-3       # post-hoc: |v_target - v_ProDMP| at contact
+    # s1.theta_step_deg: 2.0           # coarse theta scan over [-180, 180)
+    # s1.theta_refine_step_deg: 0.1    # refinement of the best candidate of each k, +- theta_step_deg
+    # s1.posthoc_path_check: true      # post-hoc: checkKinematicFeasibility along the ProDMP path
+    # s1.posthoc_velocity_check: true
+    # s1.max_posthoc_candidates: 10
+    # s1.ik.pos_tol_m: 1.0e-4
+    # s1.ik.ori_tol_rad: 1.0e-3
+    # s1.ik.max_iter: 300
+    # s1.ik.damping: 0.05
+    # s1.ik.nullspace_gain: 1.0
+    # s1.ik.max_step_rad: 0.2
+
 # Shown only to document the shared-YAML idea (D3): this node's satellite_rotation_* / satellite_q_ref
 # / satellite_odom_topic parameters above are meant to be read by prodmp_gazebo_executor_node too, via
 # the /**: wildcard section. That node's own parameters (Task 2, out of scope here) are unchanged.

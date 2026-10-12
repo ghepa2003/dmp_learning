@@ -23,21 +23,10 @@ constexpr double kDt = 0.005;  // same step as scanCandidates (candidate_scan.cp
 constexpr GraspPointId kAllK[4] = {GraspPointId::kP0, GraspPointId::kP90, GraspPointId::kP180,
                                    GraspPointId::kP270};
 
-void validate(const S3Params& p, const S3Context& ctx) {
+void validateCtx(const S3Params& p, const S3Context& ctx) {
     auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
+    (void)p;
     if (!ctx.prodmp_template) throw std::invalid_argument("selectGraspS3: ctx.prodmp_template is null.");
-    if (!pos(p.length_scale_m) || !pos(p.angle_scale_rad) || !pos(p.theta_step_deg) ||
-        !pos(p.theta_refine_step_deg) || !pos(p.r_trust_m) || !pos(p.delta_v_max_m_s)) {
-        throw std::invalid_argument("selectGraspS3: scales, steps, r_trust_m and delta_v_max_m_s must be finite and > 0.");
-    }
-    if (!(p.orientation_weight >= 0.0) || !std::isfinite(p.orientation_weight) ||
-        !(p.epsilon_wait_per_s >= 0.0) || !std::isfinite(p.epsilon_wait_per_s)) {
-        throw std::invalid_argument("selectGraspS3: orientation_weight and epsilon_wait_per_s must be finite and >= 0.");
-    }
-    if (!std::isfinite(p.w_hat_min) || !std::isfinite(p.margin_min_rad)) {
-        throw std::invalid_argument("selectGraspS3: w_hat_min and margin_min_rad must be finite.");
-    }
-    if (p.max_posthoc_candidates < 0) throw std::invalid_argument("selectGraspS3: max_posthoc_candidates < 0.");
     if (!pos(ctx.tau_launch_s)) throw std::invalid_argument("selectGraspS3: ctx.tau_launch_s must be > 0.");
     if (ctx.snapshot.omega_rad_s == 0.0) throw std::invalid_argument("selectGraspS3: omega is zero.");
     if (!std::isfinite(ctx.min_delay_s) || ctx.min_delay_s < 0.0) {
@@ -53,6 +42,26 @@ bool lessCost(const S3Candidate& a, const S3Candidate& b) {
 
 }  // namespace
 
+void validateS3Params(const S3Params& p) {
+    auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
+    if (!pos(p.length_scale_m) || !pos(p.angle_scale_rad) || !pos(p.theta_step_deg) ||
+        !pos(p.theta_refine_step_deg) || !pos(p.r_trust_m) || !pos(p.delta_v_max_m_s)) {
+        throw std::invalid_argument("selectGraspS3: scales, steps, r_trust_m and delta_v_max_m_s must be finite and > 0.");
+    }
+    if (!(p.orientation_weight >= 0.0) || !std::isfinite(p.orientation_weight) ||
+        !(p.epsilon_wait_per_s >= 0.0) || !std::isfinite(p.epsilon_wait_per_s)) {
+        throw std::invalid_argument("selectGraspS3: orientation_weight and epsilon_wait_per_s must be finite and >= 0.");
+    }
+    if (!std::isfinite(p.w_hat_min) || !std::isfinite(p.margin_min_rad)) {
+        throw std::invalid_argument("selectGraspS3: w_hat_min and margin_min_rad must be finite.");
+    }
+    if (p.max_posthoc_candidates < 0) throw std::invalid_argument("selectGraspS3: max_posthoc_candidates < 0.");
+    if (!(p.ik.max_iter > 0) || !pos(p.ik.pos_tol_m) || !pos(p.ik.ori_tol_rad) || !pos(p.ik.max_step_rad) ||
+        !pos(p.ik.damping) || !(std::isfinite(p.ik.nullspace_gain) && p.ik.nullspace_gain >= 0.0)) {
+        throw std::invalid_argument("selectGraspS3: invalid IkParams.");
+    }
+}
+
 double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double orientation_weight,
                   double angle_scale_rad) {
     if (!(std::isfinite(length_scale_m) && length_scale_m > 0.0 && std::isfinite(angle_scale_rad) &&
@@ -67,7 +76,8 @@ double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double 
 S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& model, RobotModel& robot,
                        const RobotModel::JointVector& q_start, const DemoReference& demo,
                        const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
-    validate(params, ctx);
+    validateS3Params(params);
+    validateCtx(params, ctx);
     const double kPi = haptic_dmp_learning::core::kPi;
 
     robot.update(q_start, RobotModel::JointVector::Zero());
@@ -97,6 +107,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             c.reject_reason = "r_trust";
         } else {
             c.passes_constraints = true;
+            res.max_w_hat_passing = std::max(res.max_w_hat_passing, c.eval.w_hat);
             c.wait_s = planLaunch(ctx.snapshot, ctx.t_now_s, theta, ctx.tau_launch_s, ctx.min_delay_s).delay_s;
             c.cost = c.d + params.epsilon_wait_per_s * c.wait_s;
         }

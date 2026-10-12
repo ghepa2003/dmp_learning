@@ -76,11 +76,16 @@ struct S3Result {
     std::vector<S3Candidate> ranked;  ///< first 20 constraint-passing candidates by cost (post-hoc annotated)
     std::array<S3Candidate, 4> best_per_k;  ///< best of each k (a rejected one, with its reason, if none passes)
     int evaluations = 0;       ///< evaluateGraspPose calls
+    double max_w_hat_passing = 0.0;  ///< max w_hat over ALL constraint-passing candidates (not just ranked)
     int posthoc_checks = 0;    ///< candidates examined by the post-hoc stage
     double posthoc_dv_m_s = 0.0;          ///< |v_target - v_ee| of the chosen candidate (0 if not checked)
     double posthoc_min_margin_rad = 0.0;  ///< min joint margin along the path of the chosen one (0 if not checked)
     std::string note;
 };
+
+/// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights).
+/// @throws std::invalid_argument.
+void validateS3Params(const S3Params& params);
 
 /// d = sqrt(d_pos^2/l^2 + orientation_weight * ori^2/angle_scale^2). @throws std::invalid_argument for
 /// non-positive/non-finite scales or a negative weight.

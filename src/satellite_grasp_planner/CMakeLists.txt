@@ -44,6 +44,7 @@ add_library(${PROJECT_NAME}_core
   src/core/grasp_launch.cpp
   src/core/grasp_pose_eval.cpp
   src/core/grasp_s3_selection.cpp
+  src/core/grasp_s3_launch.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
