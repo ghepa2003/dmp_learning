@@ -134,6 +134,33 @@ std::array<double, 7> asJoints(const YAML::Node& n, const std::string& full, con
     return q;
 }
 
+/// Keeps only the samples with t strictly greater than the last kept one.
+template <typename T>
+std::vector<T> keepStrictlyIncreasing(const std::vector<T>& in) {
+    std::vector<T> out;
+    out.reserve(in.size());
+    for (const T& x : in) {
+        if (out.empty() || x.t > out.back().t) out.push_back(x);
+    }
+    return out;
+}
+
+/// Warns on stderr with n_discarded/n_total (when > 0); throws NonIncreasingTimestampsError when the
+/// discarded fraction exceeds kMaxDiscardedTimestampFraction.
+void checkDiscardedFraction(const char* series, std::size_t n_discarded, std::size_t n_total) {
+    const double frac = static_cast<double>(n_discarded) / static_cast<double>(n_total);
+    if (frac > kMaxDiscardedTimestampFraction) {
+        throw NonIncreasingTimestampsError(
+            std::string("demo_params::buildFromDemo: ") + series + ": " + std::to_string(n_discarded) + "/" +
+            std::to_string(n_total) + " samples have non-increasing timestamps (limit " +
+            std::to_string(kMaxDiscardedTimestampFraction) + ")");
+    }
+    if (n_discarded > 0) {
+        std::cerr << "WARNING: demo_params::buildFromDemo: " << series << ": discarded " << n_discarded << "/"
+                  << n_total << " samples with non-increasing timestamps\n";
+    }
+}
+
 }  // namespace
 
 std::string sha256Hex(const std::string& bytes) {
@@ -293,32 +320,35 @@ DemoParams buildFromDemo(const std::vector<Sample>& demo,
                          const FitInfo& fit, const std::string& weights_path,
                          const std::optional<SatelliteAtDemo>& satellite) {
     if (demo.size() < 2) throw std::invalid_argument("demo_params::buildFromDemo: need at least 2 samples.");
-    for (std::size_t i = 1; i < demo.size(); ++i) {
-        if (!(demo[i].t > demo[i - 1].t)) {
-            throw NonIncreasingTimestampsError("demo_params::buildFromDemo: non-increasing timestamps at sample " +
-                                               std::to_string(i));
+    // Live demos are sampled at ~1 kHz and carry repeated/backward timestamps: clean each series
+    // independently (keep the first of every duplicate group, drop inversions).
+    const std::vector<Sample> pose = keepStrictlyIncreasing(demo);
+    checkDiscardedFraction("pose", demo.size() - pose.size(), demo.size());
+    std::optional<std::vector<joint_states_csv_io::JointStateSample>> joints;
+    if (joint_states) {
+        if (joint_states->empty()) {
+            throw std::invalid_argument("demo_params::buildFromDemo: joint_states is empty.");
         }
+        joints = keepStrictlyIncreasing(*joint_states);
+        checkDiscardedFraction("joints", joint_states->size() - joints->size(), joint_states->size());
     }
     DemoParams p;
-    const Sample& first = demo.front();
-    const Sample& last = demo.back();
+    const Sample& first = pose.front();
+    const Sample& last = pose.back();
     p.tau_s = last.t - first.t;
     p.delta_g_demo_m = last.position - first.position;
     p.start_position_demo_frame_m = first.position;
     p.contact_to_end_offset_m = Eigen::Vector3d::Zero();  // no trigger: contact assumed at the end
-    for (const Sample& s : demo) {
+    for (const Sample& s : pose) {
         if (s.gripper_trigger) {
             p.t_contact_s = s.t - first.t;
             p.contact_to_end_offset_m = last.position - s.position;
             break;
         }
     }
-    if (joint_states) {
-        if (joint_states->empty()) {
-            throw std::invalid_argument("demo_params::buildFromDemo: joint_states is empty.");
-        }
-        p.start_joints_rad = joint_states->front().q;
-        p.end_joints_rad = joint_states->back().q;
+    if (joints) {
+        p.start_joints_rad = joints->front().q;
+        p.end_joints_rad = joints->back().q;
     }
     const std::size_t slash = weights_path.find_last_of('/');
     p.weights_file = (slash == std::string::npos) ? weights_path : weights_path.substr(slash + 1);

@@ -359,13 +359,119 @@ TEST(DemoParamsBuild, InvalidDemosThrow) {
     EXPECT_THROW(buildFromDemo({}, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt),
                  std::invalid_argument);
     std::vector<Sample> bad = makeDemo(-1);
-    bad[3].t = bad[2].t;  // repeated timestamp
+    bad[2].t = bad[1].t;  // repeated timestamps: 2/5 = 40% > 20%
+    bad[3].t = bad[1].t;
     EXPECT_THROW(buildFromDemo(bad, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt),
                  std::invalid_argument);
     bad = makeDemo(-1);
-    bad[3].t = 0.1;  // backwards
+    bad[2].t = 0.1;  // backwards: 2/5 = 40% > 20%
+    bad[3].t = 0.1;
     EXPECT_THROW(buildFromDemo(bad, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt),
                  std::invalid_argument);
+}
+
+// ---- timestamp cleaning (live demos at ~1 kHz: repeated / backward timestamps)
+
+namespace {
+
+/// n samples, t = 0.01*i, position (i,0,0)*0.1, trigger at @p trig.
+std::vector<Sample> makeDense(int n, int trig = -1) {
+    std::vector<Sample> demo;
+    for (int i = 0; i < n; ++i) {
+        Sample s;
+        s.t = 0.01 * i;
+        s.position = Eigen::Vector3d(0.1 * i, 0.0, 0.0);
+        s.gripper_trigger = (i == trig);
+        demo.push_back(s);
+    }
+    return demo;
+}
+
+std::vector<joint_states_csv_io::JointStateSample> makeDenseJoints(int n) {
+    std::vector<joint_states_csv_io::JointStateSample> js(n);
+    for (int i = 0; i < n; ++i) {
+        js[i].t = 0.01 * i;
+        for (std::size_t j = 0; j < 7; ++j) js[i].q[j] = 100.0 * i + j;
+    }
+    return js;
+}
+
+}  // namespace
+
+TEST(DemoParamsCleaning, SparseDuplicatesKeepFirstAndWarn) {
+    TempDir d;
+    writeText(d.file("weights.yaml"), "abc");
+    std::vector<Sample> demo = makeDense(50);
+    demo[10].t = demo[9].t;  // 3 duplicates of 50 = 6%
+    demo[20].t = demo[19].t;
+    demo[49].t = demo[48].t;  // duplicate of the last: the first of the group (i = 48) is kept
+    testing::internal::CaptureStderr();
+    const DemoParams p = buildFromDemo(demo, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt);
+    const std::string err = testing::internal::GetCapturedStderr();
+    EXPECT_NE(err.find("pose: discarded 3/50"), std::string::npos) << err;
+    EXPECT_NEAR(p.tau_s, 0.48, 1e-12);
+    EXPECT_NEAR(p.delta_g_demo_m.x(), 4.8, 1e-12);
+    expectVec(p.start_position_demo_frame_m, Eigen::Vector3d::Zero());
+}
+
+TEST(DemoParamsCleaning, BackwardTimestampsAreDropped) {
+    TempDir d;
+    writeText(d.file("weights.yaml"), "abc");
+    std::vector<Sample> demo = makeDense(50, 30);
+    demo[15].t = 0.05;  // inversion: dropped (t <= last kept 0.14)
+    demo[16].t = 0.14;  // equal to the last kept: dropped
+    testing::internal::CaptureStderr();
+    const DemoParams p = buildFromDemo(demo, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt);
+    const std::string err = testing::internal::GetCapturedStderr();
+    EXPECT_NE(err.find("pose: discarded 2/50"), std::string::npos) << err;
+    EXPECT_NEAR(p.tau_s, 0.49, 1e-12);
+    ASSERT_TRUE(p.t_contact_s.has_value());
+    EXPECT_NEAR(*p.t_contact_s, 0.30, 1e-12);  // contact logic runs on the cleaned series
+    EXPECT_NEAR(p.contact_to_end_offset_m.x(), 1.9, 1e-12);  // (49 - 30) * 0.1
+}
+
+TEST(DemoParamsCleaning, TooManyNonIncreasingThrows) {
+    TempDir d;
+    writeText(d.file("weights.yaml"), "abc");
+    // Exactly 20% discarded is accepted ...
+    std::vector<Sample> demo = makeDense(50);
+    for (int i = 1; i <= 10; ++i) demo[2 * i].t = demo[2 * i - 1].t;  // 10/50 = 20%
+    EXPECT_NO_THROW(buildFromDemo(demo, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt));
+    // ... one more is not, and the count is in the message.
+    demo[41].t = demo[40].t;  // 11/50 = 22%
+    try {
+        buildFromDemo(demo, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt);
+        FAIL() << "expected NonIncreasingTimestampsError";
+    } catch (const NonIncreasingTimestampsError& e) {
+        EXPECT_NE(std::string(e.what()).find("11/50"), std::string::npos) << e.what();
+    }
+}
+
+TEST(DemoParamsCleaning, PoseAndJointsAreCleanedIndependently) {
+    TempDir d;
+    writeText(d.file("weights.yaml"), "abc");
+    std::vector<Sample> demo = makeDense(50);
+    demo[10].t = demo[9].t;  // pose: 1/50 dropped (sample 10)
+    std::vector<joint_states_csv_io::JointStateSample> js = makeDenseJoints(60);
+    js[5].t = js[4].t;  // joints: 4/60 dropped (5, 6, 59 repeated; 30 backward)
+    js[6].t = js[4].t;
+    js[30].t = 0.0;
+    js[59].t = js[58].t;
+    testing::internal::CaptureStderr();
+    const DemoParams p = buildFromDemo(demo, js, makeFit(), d.file("weights.yaml"), std::nullopt);
+    const std::string err = testing::internal::GetCapturedStderr();
+    EXPECT_NE(err.find("pose: discarded 1/50"), std::string::npos) << err;
+    EXPECT_NE(err.find("joints: discarded 4/60"), std::string::npos) << err;
+    ASSERT_TRUE(p.start_joints_rad.has_value());
+    ASSERT_TRUE(p.end_joints_rad.has_value());
+    EXPECT_DOUBLE_EQ((*p.start_joints_rad)[0], 0.0);
+    EXPECT_DOUBLE_EQ((*p.end_joints_rad)[0], 5800.0);  // last kept = sample 58 (first of the 58/59 group)
+    EXPECT_NEAR(p.tau_s, 0.49, 1e-12);
+
+    // The joint series alone can exceed the threshold even when the pose series is clean.
+    for (int i = 1; i <= 20; ++i) js[i].t = 0.0;  // > 20% of 60
+    EXPECT_THROW(buildFromDemo(makeDense(50), js, makeFit(), d.file("weights.yaml"), std::nullopt),
+                 NonIncreasingTimestampsError);
 }
 
 // Integration with the production demo; skipped if the files are not reachable.
@@ -413,6 +519,7 @@ TEST(DemoParamsWriteForWeights, JointsFromDerivedCsvOrNull) {
         js[0].q[j] = 0.5 + j;
         js[1].q[j] = -0.5 - j;
     }
+    js[1].t = 1.0;  // strictly increasing (default t = 0 would be cleaned away)
     joint_states_csv_io::writeJointStatesCsv(d.file("d_joint_states.csv"), js);
     std::ostringstream log2;
     path = writeForWeights(d.file("d.csv"), demo, makeFit(), d.file("weights.yaml"), std::nullopt, log2, &out);
@@ -458,7 +565,8 @@ TEST(DemoParamsErrors, NonIncreasingTimestampsHaveTheirOwnType) {
     TempDir d;
     writeText(d.file("weights.yaml"), "abc");
     std::vector<Sample> repeated = makeDemo(-1);
-    repeated[3].t = repeated[2].t;
+    repeated[2].t = repeated[1].t;  // 2/5 = 40% > 20%
+    repeated[3].t = repeated[1].t;
 
     EXPECT_THROW(buildFromDemo(repeated, std::nullopt, makeFit(), d.file("weights.yaml"), std::nullopt),
                  NonIncreasingTimestampsError);

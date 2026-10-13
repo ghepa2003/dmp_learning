@@ -72,15 +72,22 @@ struct DemoParams {
     FitInfo fit;
 };
 
-/// Thrown by buildFromDemo()/writeForWeights() when the demo timestamps are not strictly
-/// increasing (the ProDMP fit silently drops such samples, so callers may want to treat this case
-/// differently from real errors). Derives from std::invalid_argument.
+/// Max fraction (per series: pose, joint states) of samples buildFromDemo() may discard for
+/// repeated/backward timestamps before giving up with NonIncreasingTimestampsError.
+inline constexpr double kMaxDiscardedTimestampFraction = 0.20;
+
+/// Thrown by buildFromDemo()/writeForWeights() when more than kMaxDiscardedTimestampFraction of a
+/// series has non-increasing timestamps (the ProDMP fit silently drops such samples, so callers may
+/// want to treat this case differently from real errors). Derives from std::invalid_argument.
 class NonIncreasingTimestampsError : public std::invalid_argument {
 public:
     using std::invalid_argument::invalid_argument;
 };
 
-/// Builds the parameters from a recorded demo (raw samples, in time order):
+/// Builds the parameters from a recorded demo (raw samples, in time order). Pose samples and joint
+/// states are first cleaned independently: only samples with t > last kept t survive (first of each
+/// duplicate group kept, inversions dropped); discard counts go to stderr. Everything below refers to
+/// the CLEANED series:
 ///  - tau_s = demo.back().t - demo.front().t (same definition as ProDMP::learnFromDemonstration);
 ///  - t_contact_s = t of the first sample with gripper_trigger minus demo.front().t, else nullopt;
 ///    contact_to_end_offset_m = final position - position at that sample; WITHOUT a trigger it is the
@@ -88,9 +95,8 @@ public:
 ///  - delta_g_demo_m = final - initial position; start_position_demo_frame_m = initial position;
 ///  - start/end joints = first/last row of @p joint_states, when given;
 ///  - weights_file = file name of @p weights_path, weights_sha256 = SHA-256 of that file's bytes.
-/// @throws NonIncreasingTimestampsError for non-increasing times; std::invalid_argument for fewer than
-///         2 samples or an empty
-///         joint_states vector; std::runtime_error if the weights file cannot be read.
+/// @throws NonIncreasingTimestampsError if > kMaxDiscardedTimestampFraction of either series is dropped;
+///         std::invalid_argument for fewer than 2 samples or an empty joint_states vector; std::runtime_error if the weights file cannot be read.
 DemoParams buildFromDemo(const std::vector<Sample>& demo,
                          const std::optional<std::vector<joint_states_csv_io::JointStateSample>>& joint_states,
                          const FitInfo& fit, const std::string& weights_path,
