@@ -51,6 +51,13 @@ demo_replay_sync_orchestrator:
     gripper_closed_position: 0.0
     # Duration [s] of the SPACE-triggered linear close ramp (slow approach, no bounce).
     gripper_close_ramp_duration_sec: 2.0
+    # Demo-mode buttons. "single_button" (default): ONE stylus button pressed 3 times =
+    # start, trigger + gripper close, stop (SPACE counts as a press of the same button;
+    # buttons[1] is ignored). "legacy": buttons[0] start, buttons[1] stop, SPACE trigger.
+    # NOTE: csv_master_pose_player_node emits start/stop on buttons[0]/[1]: use "legacy" with it.
+    # button_scheme: "single_button"
+    # button_index: 0
+    # debounce_s: 0.30
 
 dmp_gazebo_executor_node:
   ros__parameters:

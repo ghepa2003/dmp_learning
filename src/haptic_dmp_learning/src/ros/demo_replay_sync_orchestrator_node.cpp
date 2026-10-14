@@ -2,6 +2,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include "haptic_dmp_learning/core/anchored_target.hpp"
+#include "haptic_dmp_learning/core/button_sequencer.hpp"
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
 
 #include <sys/types.h>
@@ -115,6 +116,31 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
     buttons_synced_topic_ = this->declare_parameter<std::string>(
         "buttons_synced_topic", "/touch0/buttons_synced");
+    // Button scheme (demo mode). "single_button": ONE stylus button, three presses = start,
+    // trigger + gripper close, stop. "legacy": buttons[0] start, buttons[1] stop, SPACE trigger.
+    const std::string button_scheme = this->declare_parameter<std::string>(
+        "button_scheme", "single_button");
+    if (button_scheme == "single_button") {
+        single_button_ = true;
+    } else if (button_scheme == "legacy") {
+        single_button_ = false;
+    } else {
+        throw std::runtime_error(
+            "demo_replay_sync_orchestrator: 'button_scheme' must be 'legacy' or "
+            "'single_button', got '" + button_scheme + "'.");
+    }
+    button_index_ = static_cast<int>(this->declare_parameter<int>("button_index", 0));
+    if (button_index_ < 0) {
+        throw std::runtime_error(
+            "demo_replay_sync_orchestrator: 'button_index' must be >= 0.");
+    }
+    const double debounce_s = this->declare_parameter<double>("debounce_s", 0.30);
+    try {
+        sequencer_ = core::button_sequencer::ButtonSequencer(debounce_s);
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            "demo_replay_sync_orchestrator: invalid 'debounce_s': " + std::string(e.what()));
+    }
     use_csv_playback_ = this->declare_parameter<bool>("use_csv_playback", true);
     // Anchored recorder /target_pose (default off). Same checks as the recorder, so a bad value
     // fails here at start-up instead of inside the child launch.
@@ -228,7 +254,8 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
                 "  target               = %s @ (%.3f, %.3f, %.3f)  v=(%.3f, %.3f, %.3f)  w=(%.3f, %.3f, %.3f)\n"
                 "  target box size      = (%.3f, %.3f, %.3f) m   mass = %.3f kg\n"
                 "  clock_wait_timeout   = %.1f s (wall clock)\n"
-                "  buttons: %s -> %s",
+                "  buttons: %s -> %s\n"
+                "  button_scheme        = %s (button_index=%d, debounce_s=%.2f)",
                 (mode_ == Mode::kDemo ? "demo" : "replay"),
                 run_id_.c_str(),
                 (mode_ == Mode::kReplay ? "provided" : "generated"),
@@ -236,7 +263,9 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
                 tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_,
                 tsx_, tsy_, tsz_, tmass_,
                 clock_wait_timeout_sec_,
-                buttons_topic_.c_str(), buttons_synced_topic_.c_str());
+                buttons_topic_.c_str(), buttons_synced_topic_.c_str(),
+                single_button_ ? "single_button" : "legacy", button_index_,
+                sequencer_.debounceSeconds());
 
     // 5. Orchestration timer. Intentionally create_wall_timer / steady_clock:
     //    it must run BEFORE /clock is confirmed and it drives the wall-clock
@@ -275,6 +304,23 @@ void DemoReplaySyncOrchestratorNode::odomCallback(
 
 void DemoReplaySyncOrchestratorNode::buttonsCallback(
     const sensor_msgs::msg::Joy::SharedPtr msg) {
+    if (single_button_) {
+        // One button, rising edges only; every other entry (incl. buttons[1]) is ignored.
+        const auto idx = static_cast<std::size_t>(button_index_);
+        if (msg->buttons.size() <= idx) {
+            RCLCPP_WARN_ONCE(this->get_logger(),
+                             "Expected at least %zu entries in %s, got %zu",
+                             idx + 1, buttons_topic_.c_str(), msg->buttons.size());
+            return;
+        }
+        // The first message only seeds the previous state (as in the legacy path).
+        const bool rising = (msg->buttons[idx] != 0) && prev_buttons_.size() > idx &&
+                            prev_buttons_[idx] == 0;
+        prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
+        if (rising) handleButtonPress("stylus button");
+        return;
+    }
+
     if (msg->buttons.size() < 2) {
         RCLCPP_WARN_ONCE(this->get_logger(),
                          "Expected at least 2 entries in %s, got %zu",
@@ -290,29 +336,90 @@ void DemoReplaySyncOrchestratorNode::buttonsCallback(
     prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
 
     if (rising0 && !recording_ && phase_ == Phase::kWaitButtonStart) {
-        recording_ = true;
-        gripper_trigger_sent_ = false;
-        RCLCPP_INFO(this->get_logger(),
-                    "start button: spawning target and starting the %0.2f s sync window",
-                    sync_delay_sec_);
-        phase_ = Phase::kSpawnTarget;
-        phase_entered_ = std::chrono::steady_clock::now();
+        startRequested();
     } else if (rising1 && recording_) {
-        // Stop: republish immediately on the synced topic, no delay.
-        if (phase_ == Phase::kRunning || phase_ == Phase::kDone) {
-            publishSyncedButtons(0, 1);
+        stopRequested();
+    }
+}
+
+void DemoReplaySyncOrchestratorNode::startRequested() {
+    recording_ = true;
+    gripper_trigger_sent_ = false;
+    RCLCPP_INFO(this->get_logger(),
+                "start button: spawning target and starting the %0.2f s sync window",
+                sync_delay_sec_);
+    phase_ = Phase::kSpawnTarget;
+    phase_entered_ = std::chrono::steady_clock::now();
+}
+
+void DemoReplaySyncOrchestratorNode::stopRequested() {
+    // Stop: republish immediately on the synced topic, no delay.
+    if (phase_ == Phase::kRunning || phase_ == Phase::kDone) {
+        publishSyncedButtons(0, 1);
+        RCLCPP_INFO(this->get_logger(),
+                    "stop button: republished [0,1] on %s (immediate)",
+                    buttons_synced_topic_.c_str());
+    } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "stop button received before the synced start was emitted "
+                    "(phase not RUNNING); forwarding [0,1] anyway - the demo was "
+                    "aborted mid-sync.");
+        publishSyncedButtons(0, 1);
+    }
+    recording_ = false;
+    phase_ = Phase::kDone;
+}
+
+void DemoReplaySyncOrchestratorNode::logSequencerTransition(
+    const char* why, core::button_sequencer::State from,
+    core::button_sequencer::State to) const {
+    RCLCPP_INFO(this->get_logger(), "[t=%.3f s] button sequencer: %s -> %s (%s)",
+                secElapsed(node_start_), core::button_sequencer::toString(from),
+                core::button_sequencer::toString(to), why);
+}
+
+void DemoReplaySyncOrchestratorNode::handleButtonPress(const char* source) {
+    using core::button_sequencer::Action;
+    using core::button_sequencer::Outcome;
+    using core::button_sequencer::State;
+
+    // Not ready to start yet (clock check / recording stack launch still in progress): do not
+    // feed the sequencer, otherwise a press here would be consumed without starting anything.
+    if (sequencer_.state() == State::kIdle && phase_ != Phase::kWaitButtonStart) {
+        RCLCPP_INFO(this->get_logger(),
+                    "[t=%.3f s] %s ignored: orchestrator not ready for start yet",
+                    secElapsed(node_start_), source);
+        return;
+    }
+
+    const auto r = sequencer_.onPress(secElapsed(node_start_));
+    switch (r.outcome) {
+        case Outcome::kDebounced:
             RCLCPP_INFO(this->get_logger(),
-                        "stop button: republished [0,1] on %s (immediate)",
-                        buttons_synced_topic_.c_str());
-        } else {
-            RCLCPP_WARN(this->get_logger(),
-                        "stop button received before the synced start was emitted "
-                        "(phase not RUNNING); forwarding [0,1] anyway - the demo was "
-                        "aborted mid-sync.");
-            publishSyncedButtons(0, 1);
-        }
-        recording_ = false;
-        phase_ = Phase::kDone;
+                        "[t=%.3f s] %s ignored: debounce (< %.2f s from previous edge), state %s",
+                        secElapsed(node_start_), source, sequencer_.debounceSeconds(),
+                        core::button_sequencer::toString(r.before));
+            return;
+        case Outcome::kIgnoredStarting:
+            RCLCPP_INFO(this->get_logger(),
+                        "[t=%.3f s] %s: pressione ignorata: sync in corso (state STARTING)",
+                        secElapsed(node_start_), source);
+            return;
+        case Outcome::kIgnoredStopped:
+            RCLCPP_INFO(this->get_logger(),
+                        "[t=%.3f s] %s ignored: demo already STOPPED (restart the node)",
+                        secElapsed(node_start_), source);
+            return;
+        case Outcome::kAccepted:
+            break;
+    }
+
+    logSequencerTransition(source, r.before, r.after);
+    switch (r.action) {
+        case Action::kRequestStart: startRequested(); break;
+        case Action::kTrigger: triggerGraspClosure(source); break;
+        case Action::kStop: stopRequested(); break;
+        case Action::kNone: break;
     }
 }
 
@@ -423,6 +530,12 @@ void DemoReplaySyncOrchestratorNode::tick() {
                             buttons_synced_topic_.c_str());
                 phase_ = Phase::kRunning;
                 phase_entered_ = std::chrono::steady_clock::now();
+                if (single_button_) {
+                    const auto from = sequencer_.state();
+                    if (sequencer_.onStartEmitted()) {
+                        logSequencerTransition("synced start emitted", from, sequencer_.state());
+                    }
+                }
             }
             break;
 
@@ -606,27 +719,37 @@ void DemoReplaySyncOrchestratorNode::checkKeyboard() {
     if (ret > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
         char c = 0;
         if (read(STDIN_FILENO, &c, 1) == 1) {
-            if (c == ' ' && phase_ == Phase::kRunning && !gripper_trigger_sent_) {
-                // 1. Mark the instant of intent on the synced buttons topic.
-                publishGripperTrigger();
-                // 2. Lock out repeat presses immediately.
-                gripper_trigger_sent_ = true;
-                // 3. Close along a timed ramp instead of one step command (a
-                //    step slams the fingers shut and ejects the object). A
-                //    dedicated 20 ms wall timer (same period as keyboard_timer_)
-                //    walks core::gripper_ramp::interpolateGripperPosition from
-                //    open to closed, then cancels itself.
-                gripper_ramp_start_ = std::chrono::steady_clock::now();
-                gripper_ramp_timer_ = this->create_wall_timer(
-                    std::chrono::milliseconds(20),
-                    std::bind(&DemoReplaySyncOrchestratorNode::gripperRampTick, this));
-                RCLCPP_INFO(this->get_logger(),
-                            "SPACE pressed: starting %.1fs gripper close ramp and trigger "
-                            "Joy [0,0,1] on %s",
-                            gripper_close_ramp_duration_sec_, buttons_synced_topic_.c_str());
+            if (c == ' ') {
+                if (single_button_ && mode_ == Mode::kDemo) {
+                    // Same state machine as the stylus button: SPACE == one press.
+                    handleButtonPress("SPACE");
+                } else if (phase_ == Phase::kRunning && !gripper_trigger_sent_) {
+                    triggerGraspClosure("SPACE");
+                }
             }
         }
     }
+}
+
+void DemoReplaySyncOrchestratorNode::triggerGraspClosure(const char* source) {
+    // 1. Mark the instant of intent on the synced buttons topic (ONE message: the recorder
+    //    flags gripper_trigger on the level of buttons[2], one message = one CSV row).
+    publishGripperTrigger();
+    // 2. Lock out repeat presses immediately.
+    gripper_trigger_sent_ = true;
+    // 3. Close along a timed ramp instead of one step command (a
+    //    step slams the fingers shut and ejects the object). A
+    //    dedicated 20 ms wall timer (same period as keyboard_timer_)
+    //    walks core::gripper_ramp::interpolateGripperPosition from
+    //    open to closed, then cancels itself.
+    gripper_ramp_start_ = std::chrono::steady_clock::now();
+    gripper_ramp_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(20),
+        std::bind(&DemoReplaySyncOrchestratorNode::gripperRampTick, this));
+    RCLCPP_INFO(this->get_logger(),
+                "%s: starting %.1fs gripper close ramp and trigger "
+                "Joy [0,0,1] on %s",
+                source, gripper_close_ramp_duration_sec_, buttons_synced_topic_.c_str());
 }
 
 void DemoReplaySyncOrchestratorNode::gripperRampTick() {

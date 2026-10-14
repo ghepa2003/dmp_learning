@@ -10,6 +10,7 @@
 #include <termios.h>
 
 #include <rclcpp/rclcpp.hpp>
+#include "haptic_dmp_learning/core/button_sequencer.hpp"
 #include <sensor_msgs/msg/joy.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
@@ -31,8 +32,12 @@ namespace ros_wrapper {
  * `mode` = "demo":
  *   - launches the synchronised recording stack (demo_replay_sync.launch.py) with
  *     the generated run_id;
- *   - watches /touch0/buttons for the same rising-edge logic as
- *     haptic_dmp_wrapper_node (buttons[0] start, buttons[1] stop);
+ *   - watches /touch0/buttons. button_scheme="legacy": the same rising-edge
+ *     logic as haptic_dmp_wrapper_node (buttons[0] start, buttons[1] stop, SPACE
+ *     = trigger + gripper close). button_scheme="single_button" (default): ONE
+ *     button (button_index) pressed three times - start, trigger + gripper
+ *     close, stop - driven by core::button_sequencer; buttons[1] is ignored and
+ *     SPACE counts as a press of that same button (see handleButtonPress);
  *   - on start: spawn free_target_object, wait for its first odometry, wait until
  *     sim time reaches t0 + sync_delay_sec, then republish an equivalent start
  *     Joy on /touch0/buttons_synced;
@@ -83,6 +88,15 @@ private:
     std::string generateRunId() const;
     void publishSyncedButtons(int b0, int b1);
     void publishGripperTrigger();
+    // Shared by the legacy buttons[0] path and the single-button sequencer.
+    void startRequested();       // spawn target + sync window (recording_ = true)
+    void stopRequested();        // republish [0,1] on the synced topic, phase -> kDone
+    // Trigger Joy {0,0,1} + timed gripper close ramp (legacy SPACE and 2nd press).
+    void triggerGraspClosure(const char* source);
+    // One press (stylus edge or SPACE) of the single button, through the sequencer.
+    void handleButtonPress(const char* source);
+    void logSequencerTransition(const char* why, core::button_sequencer::State from,
+                                core::button_sequencer::State to) const;
     void checkKeyboard();
     void gripperRampTick();
     pid_t launchChild(const std::vector<std::string>& argv, const std::string& tag);
@@ -108,6 +122,9 @@ private:
     bool target_collar_collision_;    // forwarded to free_target_object (collar_collision)
     std::string buttons_topic_;
     std::string buttons_synced_topic_;
+    // "legacy" | "single_button" (see class doc). Only meaningful in demo mode.
+    bool single_button_ = true;
+    int button_index_ = 0;
     bool use_csv_playback_;
     // Anchored /target_pose of the recorder (demo mode); forwarded to demo_replay_sync.launch.py.
     bool anchor_enabled_ = false;
@@ -161,6 +178,7 @@ private:
     bool recording_ = false;
 
     bool gripper_trigger_sent_ = false;
+    core::button_sequencer::ButtonSequencer sequencer_;  // single_button scheme only
     bool termios_modified_ = false;
     struct termios orig_termios_{};
 

@@ -269,6 +269,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_gripper_ramp test/test_gripper_ramp.cpp)
   target_link_libraries(test_gripper_ramp ${PROJECT_NAME}_core)
 
+  # Single-button start/trigger/stop sequencer of the orchestrator (pure C++, no ROS).
+  ament_add_gtest(test_button_sequencer test/test_button_sequencer.cpp)
+  target_link_libraries(test_button_sequencer ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
   target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
 
