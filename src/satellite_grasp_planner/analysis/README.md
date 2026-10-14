@@ -1,74 +1,43 @@
 # orientation_law_compare
 
-Offline comparison of five orientation laws for the approach to the grasp (hold pose -> goal in time tau), run
-through the planner's own machinery (`JointPathSimulator` + `NullspaceBiasedResolution`, dt = 0.005 s, ProDMP
-position rollout from the FK start with the case's goal, as `checkKinematicFeasibility`). It changes nothing in the
-planner, executor, ProDMP, QuaternionDMP or controllers.
+Offline comparison of three orientation laws from the hold orientation to the planner goal in time tau. Pure
+orientation analysis (no joint simulation, no position rollout); it changes nothing in planner or executor.
 
-| law | orientation | angular twist fed to the simulator |
-|---|---|---|
-| A0 | SLERP, constant speed (`grasp_orientation::slerpAt`) | **zero** - faithful to the planner today |
-| A  | same as A0 | analytic, constant |
-| B  | SLERP with s(u) = 10u^3 - 15u^4 + 6u^5, u = t/tau | analytic: omega_const * ds/du |
-| C  | QuaternionDMP, forcing term zeroed (weights = 0) | `omega()` (world frame) |
-| D  | QuaternionDMP with the learned weights | `omega()` (world frame) |
+| law | definition |
+|---|---|
+| slerp | `q0 * (q0^-1 q1)^s`, s = t/tau (`grasp_orientation::slerpAt`, as the executor in planner_goal) |
+| minjerk | same geodesic, s(u) = 10u^3 - 15u^4 + 6u^5, u = t/tau |
+| qdmp | `QuaternionDMP` with the learned weights, run in the **demo frame**: Q = q_hold * q_demo(0)^-1 (the FrameAligner offset, left multiplication), rollout start = q_demo(0), goal = Q^-1 * q_goal, eta0 = 0, output = Q * q_rollout(t) |
 
-Linear twist is zero for all laws, as in the planner. The impedance controller does not read `~/target_twist`
-(diary Z28), so **A0 is the baseline faithful to the current planner**; A/B/C/D add a feedforward the real controller
-would not use, and their results are an upper bound of what a twist-aware controller could do.
+q_demo(0) is the `q0` stored in the `quaternion_dmp` section of the weights file.
 
-## Build (default OFF; existing builds unchanged)
+Contact-phase variants `nominal`, `phase_p20`, `phase_m20`: the goal is rotated about `--axis` by
+delta = +/-0.2 * |omega| * tau, i.e. `q_goal(theta + delta) = R_axis(delta) * q_goal(theta)`.
+
+## Build (default OFF)
 
     colcon build --packages-select satellite_grasp_planner --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_ANALYSIS_TOOLS=ON
 
 ## Run
 
-    source install/setup.bash
     ros2 run satellite_grasp_planner orientation_law_compare \
-        --weights <weights.yaml> [--qdmp-weights <weights.yaml>] \
-        --demo-params <weights_demo_params.yaml> --urdf <fer_flat_effort.urdf> --out <out_dir> [--demo-k kP270]
+        --weights <weights.yaml> [--qdmp-weights <weights.yaml>] --demo-params <weights_demo_params.yaml> \
+        --goal x,y,z,w --omega-deg-s <w> \
+        (--q-meas j1,...,j7 --urdf <fer_flat_effort.urdf> | --q-hold x,y,z,w) \
+        --out <dir> [--axis x,y,z] [--demo-csv <demo.csv>]
 
-- `--weights`: ProDMP position weights; tau is taken from here. Also the source of the QuaternionDMP unless
-  `--qdmp-weights` is given.
-- `--qdmp-weights`: yaml with the `quaternion_dmp` section used by laws C and D (basis centers/widths, gains, and for D
-  the weights). Default = `--weights`.
-- `--demo-params`: read for tau consistency (warning if different) and for the demo's grasp point
-  (`satellite_at_demo.grasp_point`); if absent or null, kP270 is assumed. `--demo-k` overrides it.
-- `--urdf`: `fer_flat_effort.urdf` (joint velocity limits are parsed from it).
-- `--out`: output directory (created).
+- `--weights`: ProDMP/QDMP yaml; `--qdmp-weights` (default = `--weights`): yaml with the `quaternion_dmp` section.
+- `--demo-params`: tau is `demo.tau_s`.
+- Hold orientation: FK of the TCP (`fer_hand_tcp`) at `--q-meas` (needs `--urdf`), or `--q-hold` directly.
+- `--goal`, `--q-hold`: quaternions in xyzw order. `--axis`: satellite spin axis in world (default 0,0,1).
+- `--demo-csv` (optional): recorded demo. Header deduced: time = t|time|time_s|timestamp|t_s; quaternion components
+  = q|quat_|q_|orientation_|ori_ + w,x,y,z. Without it the demo section is skipped (stated on stdout).
 
-D with the production QDMP weights and the stageA position weights:
+## Output
 
-    ros2 run satellite_grasp_planner orientation_law_compare \
-        --weights <stageA>/weights.yaml --qdmp-weights <production>/weights.yaml \
-        --demo-params <stageA>/weights_demo_params.yaml --urdf fer_flat_effort.urdf --out out_stageA
+stdout: header (tau, phase offset, goal, frame of the QDMP weights), optional recorded-demo section (swept angle,
+angle q(0)->q(end), duration, QDMP reproduction error max/RMS and residual at tau in the demo frame), then one table per
+variant: swept angle, max |omega|, max |alpha|, residual at tau, and SLERP-vs-QDMP angular difference (max, RMS).
+omega and alpha are finite differences of the 5 ms quaternion profile, same method for all laws.
 
-## Setup
-
-Satellite: CubeSatelliteModel defaults (side 0.150, collar 0.0725, wall 0.009, grasp radius 0.068, standoff 0.08), centre
-(0.75, 0, 0.77), axis +z, omega -2 deg/s, q_ref identity. Start: joints ready_q6pi
-[0, -0.7854, 0, -2.3562, 0, 3.1416, 0.7854], hold orientation from FK. Cases: k in {kP0,kP90,kP180,kP270} x theta in
-{-120,-60,0} deg x variants {nominal, omega +-20%, centre +-15 cm in x and y, axis tilted 18 deg about x / about y}
-= 108 cases x 5 laws. Goal pose = `graspPoseAt(k, theta)`, goal quaternion aligned to the hold hemisphere.
-
-Notes:
-- theta is the angle at contact (theta*) and is given directly, so the omega +-20% variants have **identical geometry**
-  to nominal and will give identical results (kept for completeness; omega does not enter the offline rollout).
-- A tilted axis rotates the whole satellite (face normal too), so the face stays lateral.
-- Feasibility uses the planner's criterion (max joint-limit violation < 1e-4 rad), reimplemented because
-  `checkKinematicFeasibility` builds its own trajectory. For A0 the real function is also called and the outcome
-  compared (column `planner_check`; a `MISMATCH` is also printed on stderr).
-- `peak_omega_cmd` is the commanded twist norm; joint speeds are finite differences of the simulated joint path;
-  `ang_at_pos3cm/1cm` use the simulated end effector; "never reached" is `nan`.
-- The QuaternionDMP in this repo has no `setInitialConditions`; the tool uses `setLearnedParameters(tau, q_hold, goal, ...,
-  eta0 = 0)` + `reset()`, which is equivalent (tau, q0, omega0 = 0).
-
-## Outputs
-
-`summary.csv` (one row per case x law), `summary_by_law.md` (median / worst per law, decision rule, D vs C), `traces/`
-(per-run time series). Results are not committed: the table is generated by the run.
-
-## Decision rule
-
-C or D adoptable if feasible in all cases, minimum margin > 0.3 rad and joint speed within the URDF limits. D preferred
-over C only if it improves at least one metric (median) over the cases with k different from the demo's (kP270).
+`<out>/summary.csv`, `<out>/profile_<variant>.csv` (t and x,y,z,w per law, 5 ms).

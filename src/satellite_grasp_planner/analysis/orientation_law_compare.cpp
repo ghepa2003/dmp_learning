@@ -1,24 +1,28 @@
-// Offline comparison of five orientation laws for the approach to the grasp (hold pose -> goal in time tau),
-// run through the planner's own kinematic-feasibility machinery (JointPathSimulator + NullspaceBiasedResolution,
-// dt = 0.005 s, same ProDMP position rollout as checkKinematicFeasibility). Nothing here changes planner or
-// executor behaviour. Build/run instructions: analysis/README.md.
+// Offline comparison of three orientation laws for the approach to the grasp (hold orientation -> planner goal in
+// time tau). Pure orientation analysis: no joint simulation, no position rollout. Nothing here changes planner or
+// executor behaviour. Build/run instructions: analysis/README.md (target: BUILD_ANALYSIS_TOOLS).
 //
-//   A0  SLERP, constant speed, angular twist = 0   (what the planner feeds the simulator today)
-//   A   SLERP, constant speed, analytic angular twist
-//   B   SLERP with s(u) = 10u^3 - 15u^4 + 6u^5, u = t/tau, analytic angular twist
-//   C   QuaternionDMP, zero forcing term (pure critically damped attractor), twist = omega()
-//   D   QuaternionDMP with the learned weights, twist = omega()
+//   SLERP     q(t) = q0 * (q0^-1 q1)^s,  s = t / tau   (grasp_orientation::slerpAt, as the executor in planner_goal)
+//   min-jerk  same geodesic, s(u) = 10u^3 - 15u^4 + 6u^5, u = t / tau
+//   QDMP      haptic_dmp_learning::core::QuaternionDMP (Ude 2014) with the learned weights, run in the DEMO frame and
+//             mapped to the hold frame as the FrameAligner does (ros_utils.hpp, align()):
+//               Q = q_hold * q_demo(0)^-1,  q_demo(0) = q0 stored in the weights file
+//               rollout: start = q_demo(0), goal_demo = Q^-1 * q_goal, eta0 = 0;  output = Q * q_rollout(t)
+//
+// Contact-phase variants: the goal is graspPoseAt(k, theta + delta); since graspPoseAt builds the orientation as
+// R_axis(theta) * B_k, q_goal(theta + delta) = R_axis(delta) * q_goal(theta) (left multiplication, world frame),
+// with delta = +/- 0.2 * |omega| * tau.
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <map>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -28,36 +32,40 @@
 #include <Eigen/Geometry>
 
 #include "franka_cartesian_control/core/robot_model.hpp"
-#include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/grasp_orientation.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
-#include "haptic_dmp_learning/core/prodmp.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
-#include "satellite_grasp_planner/core/joint_path_simulator.hpp"
-#include "satellite_grasp_planner/core/kinematic_feasibility.hpp"
 
 namespace hdl = haptic_dmp_learning::core;
 namespace go = haptic_dmp_learning::core::grasp_orientation;
-using satellite_grasp_planner::core::CartesianSample;
-using satellite_grasp_planner::core::JointPathSimulator;
-using satellite_grasp_planner::core::NullspaceBiasedResolution;
 using franka_cartesian_control::core::RobotModel;
 
 namespace {
 
-constexpr double kDt = 0.005;                // planner default (kinematic_feasibility.hpp)
-constexpr double kViolTol = 1e-4;            // planner default max_joint_violation_tol_rad
+constexpr double kDt = 0.005;  // profile / integration step [s]
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr double kMarginAdoptRad = 0.3;
+constexpr double kRad2Deg = 180.0 / kPi;
+constexpr double kPhaseFraction = 0.2;  // contact-phase offset = +/- 0.2 * |omega| * tau
 
-const std::array<const char*, 5> kLaws = {"A0", "A", "B", "C", "D"};
+const std::array<const char*, 3> kLaws = {"slerp", "minjerk", "qdmp"};
 
 struct Args {
-    std::string weights, qdmp_weights, demo_params, urdf, out, demo_k = "";
+    std::string weights, qdmp_weights, demo_params, urdf, out, demo_csv;
+    std::vector<double> q_meas, q_hold_xyzw, goal_xyzw;
+    Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();  // satellite spin axis (world)
+    double omega_deg_s = std::numeric_limits<double>::quiet_NaN();
 };
+
+std::vector<double> parseList(const std::string& s, size_t n, const std::string& what) {
+    std::vector<double> v;
+    std::stringstream ss(s);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) v.push_back(std::stod(tok));
+    if (v.size() != n) throw std::invalid_argument(what + ": expected " + std::to_string(n) + " comma-separated values");
+    return v;
+}
 
 Args parseArgs(int argc, char** argv) {
     Args a;
@@ -72,14 +80,26 @@ Args parseArgs(int argc, char** argv) {
         else if (k == "--demo-params") a.demo_params = val();
         else if (k == "--urdf") a.urdf = val();
         else if (k == "--out") a.out = val();
-        else if (k == "--demo-k") a.demo_k = val();
+        else if (k == "--demo-csv") a.demo_csv = val();
+        else if (k == "--q-meas") a.q_meas = parseList(val(), 7, "--q-meas");
+        else if (k == "--q-hold") a.q_hold_xyzw = parseList(val(), 4, "--q-hold");
+        else if (k == "--goal") a.goal_xyzw = parseList(val(), 4, "--goal");
+        else if (k == "--axis") {
+            const auto v = parseList(val(), 3, "--axis");
+            a.axis = Eigen::Vector3d(v[0], v[1], v[2]);
+        } else if (k == "--omega-deg-s") a.omega_deg_s = std::stod(val());
         else throw std::invalid_argument("unknown argument " + k);
     }
-    if (a.weights.empty() || a.demo_params.empty() || a.urdf.empty() || a.out.empty()) {
+    const bool hold_ok = !a.q_hold_xyzw.empty() || (!a.q_meas.empty() && !a.urdf.empty());
+    if (a.weights.empty() || a.demo_params.empty() || a.out.empty() || a.goal_xyzw.empty() || !hold_ok ||
+        !std::isfinite(a.omega_deg_s)) {
         throw std::invalid_argument(
             "usage: orientation_law_compare --weights <w.yaml> [--qdmp-weights <w.yaml>] --demo-params <p.yaml> "
-            "--urdf <fer_flat_effort.urdf> --out <dir> [--demo-k kP0|kP90|kP180|kP270]");
+            "--goal x,y,z,w --omega-deg-s <w> (--q-meas j1,..,j7 --urdf <fer_flat_effort.urdf> | --q-hold x,y,z,w) "
+            "--out <dir> [--axis x,y,z] [--demo-csv <demo.csv>]");
     }
+    if (!(a.axis.norm() > 1e-9)) throw std::invalid_argument("--axis has ~zero norm");
+    a.axis.normalize();
     if (a.qdmp_weights.empty()) a.qdmp_weights = a.weights;
     return a;
 }
@@ -92,63 +112,131 @@ std::string readFile(const std::string& path) {
     return ss.str();
 }
 
-// velocity="..." of <joint name="fer_jointN" ...> in the URDF (RobotModel does not expose velocity limits).
-std::array<double, 7> urdfVelocityLimits(const std::string& urdf) {
-    std::array<double, 7> v{};
-    for (int j = 1; j <= 7; ++j) {
-        const std::string tag = "<joint name=\"fer_joint" + std::to_string(j) + "\"";
-        const auto p = urdf.find(tag);
-        if (p == std::string::npos) throw std::runtime_error("URDF: joint fer_joint" + std::to_string(j) + " not found");
-        const auto e = urdf.find("</joint>", p);
-        const auto l = urdf.find("<limit", p);
-        if (l == std::string::npos || l > e) throw std::runtime_error("URDF: no <limit> for fer_joint" + std::to_string(j));
-        const auto a = urdf.find("velocity=\"", l);
-        if (a == std::string::npos) throw std::runtime_error("URDF: no velocity for fer_joint" + std::to_string(j));
-        v[j - 1] = std::stod(urdf.substr(a + 10));
-    }
-    return v;
+Eigen::Quaterniond quatFromXyzw(const std::vector<double>& v, const std::string& what) {
+    Eigen::Quaterniond q(v[3], v[0], v[1], v[2]);
+    const double n = q.norm();
+    if (!(std::isfinite(n) && n > 0.0)) throw std::invalid_argument(what + ": zero or non-finite norm");
+    if (std::fabs(n - 1.0) > 1e-3) std::cerr << "WARNING " << what << ": |q| = " << n << ", normalizing\n";
+    return q.normalized();
 }
-
-struct Case {
-    std::string name, variant;
-    hdl::GraspPointId k;
-    std::string k_name;
-    double theta_deg;
-    double omega_rad_s;
-    Eigen::Vector3d center, axis;
-    Eigen::Vector3d face_normal;
-};
-
-struct Metrics {
-    bool feasible = false;
-    double max_viol = 0.0;
-    double ang_at_3cm_deg = kNaN, ang_at_1cm_deg = kNaN;
-    double t_2deg_frac = kNaN;
-    double peak_omega = 0.0;
-    double peak_qdot = 0.0;
-    int peak_qdot_joint = -1;
-    double peak_qdot_ratio = 0.0;  // max_j |qdot_j| / vlim_j
-    double min_margin = std::numeric_limits<double>::infinity();
-    int min_margin_joint = -1;
-    double min_margin_t = 0.0;
-    double min_wtrans = std::numeric_limits<double>::infinity();
-    double pos_err_final_mm = 0.0, ori_err_final_deg = 0.0;
-    std::string planner_check = "";  // A0 only: agreement with checkKinematicFeasibility
-};
 
 std::string num(double v) {
     if (!std::isfinite(v)) return "nan";
     std::ostringstream s;
-    s << std::setprecision(8) << v;
+    s << std::setprecision(9) << v;
     return s.str();
 }
 
-double median(std::vector<double> v) {
-    v.erase(std::remove_if(v.begin(), v.end(), [](double x) { return !std::isfinite(x); }), v.end());
-    if (v.empty()) return kNaN;
-    std::sort(v.begin(), v.end());
-    const size_t n = v.size();
-    return n % 2 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+struct Profile {
+    std::vector<double> t;
+    std::vector<Eigen::Quaterniond> q;
+};
+
+std::string lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+std::vector<std::string> splitCsv(const std::string& line) {
+    std::vector<std::string> o;
+    std::stringstream ss(line);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        tok.erase(std::remove_if(tok.begin(), tok.end(), [](unsigned char c) { return std::isspace(c) || c == '\r'; }), tok.end());
+        o.push_back(tok);
+    }
+    return o;
+}
+
+// Orientation of a recorded demo. Column names are deduced from the header: time = t | time | time_s | timestamp;
+// quaternion components = {q,quat_,q_,orientation_,ori_} + {w,x,y,z} (case-insensitive). Quaternions are normalized
+// and made sign-continuous (dot with the previous sample >= 0).
+Profile loadDemoCsv(const std::string& path, std::string& cols_report) {
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("cannot open " + path);
+    std::string line;
+    if (!std::getline(f, line)) throw std::runtime_error("empty csv " + path);
+    const auto hdr = splitCsv(line);
+    auto find = [&](const std::vector<std::string>& names) -> int {
+        for (const auto& n : names)
+            for (size_t i = 0; i < hdr.size(); ++i)
+                if (lower(hdr[i]) == n) return static_cast<int>(i);
+        return -1;
+    };
+    const int ct = find({"t", "time", "time_s", "timestamp", "t_s"});
+    int cq[4];  // w, x, y, z
+    const char* comp[4] = {"w", "x", "y", "z"};
+    for (int c = 0; c < 4; ++c) {
+        std::vector<std::string> names;
+        for (const char* pre : {"q", "quat_", "q_", "orientation_", "ori_"}) names.push_back(std::string(pre) + comp[c]);
+        cq[c] = find(names);
+    }
+    if (ct < 0 || cq[0] < 0 || cq[1] < 0 || cq[2] < 0 || cq[3] < 0) {
+        std::string h;
+        for (const auto& c : hdr) h += c + " ";
+        throw std::runtime_error("--demo-csv: cannot deduce time/quaternion columns from header: " + h);
+    }
+    cols_report = "time='" + hdr[ct] + "', quaternion w,x,y,z='" + hdr[cq[0]] + "','" + hdr[cq[1]] + "','" + hdr[cq[2]] +
+                  "','" + hdr[cq[3]] + "'";
+    Profile p;
+    const size_t need = static_cast<size_t>(*std::max_element(cq, cq + 4) > ct ? *std::max_element(cq, cq + 4) : ct) + 1;
+    while (std::getline(f, line)) {
+        const auto v = splitCsv(line);
+        if (v.size() < need) continue;
+        Eigen::Quaterniond q(std::stod(v[cq[0]]), std::stod(v[cq[1]]), std::stod(v[cq[2]]), std::stod(v[cq[3]]));
+        if (!(q.norm() > 0.0) || !std::isfinite(q.norm())) continue;
+        q.normalize();
+        if (!p.q.empty() && q.coeffs().dot(p.q.back().coeffs()) < 0.0) q.coeffs() = -q.coeffs();
+        p.t.push_back(std::stod(v[ct]));
+        p.q.push_back(q);
+    }
+    if (p.t.size() < 2) throw std::runtime_error("--demo-csv: fewer than 2 valid rows in " + path);
+    return p;
+}
+
+// Demo orientation at time t (SLERP between the bracketing samples, clamped at the ends).
+Eigen::Quaterniond sampleProfile(const Profile& p, double t) {
+    if (t <= p.t.front()) return p.q.front();
+    if (t >= p.t.back()) return p.q.back();
+    const size_t i = static_cast<size_t>(std::upper_bound(p.t.begin(), p.t.end(), t) - p.t.begin());
+    const double span = p.t[i] - p.t[i - 1];
+    const double s = span > 0.0 ? (t - p.t[i - 1]) / span : 0.0;
+    return hdl::slerpShortestPath(p.q[i - 1], p.q[i], s);
+}
+
+// World-frame rotation vector of the shortest rotation taking a to b (b * a^-1).
+Eigen::Vector3d rotVec(const Eigen::Quaterniond& a, const Eigen::Quaterniond& b) {
+    Eigen::Quaterniond d = (b * a.conjugate()).normalized();
+    if (d.w() < 0.0) d.coeffs() = -d.coeffs();
+    const double vn = d.vec().norm();
+    if (vn < 1e-15) return Eigen::Vector3d::Zero();
+    return 2.0 * std::atan2(vn, d.w()) * d.vec() / vn;
+}
+
+struct Metrics {
+    double swept_deg = 0.0, omega_max = 0.0, alpha_max = 0.0, resid_deg = 0.0;
+    double diff_max_deg = std::numeric_limits<double>::quiet_NaN(), diff_rms_deg = std::numeric_limits<double>::quiet_NaN();
+};
+
+// Intervals shorter than kDt/2 (a possible final remainder when tau is not a multiple of dt) are left out of the
+// omega/alpha extrema (finite-difference noise) but counted in the swept angle.
+Metrics profileMetrics(const Profile& p, const Eigen::Quaterniond& q_goal) {
+    Metrics m;
+    std::vector<Eigen::Vector3d> w;
+    std::vector<double> tm;
+    for (size_t i = 1; i < p.t.size(); ++i) {
+        const double dt = p.t[i] - p.t[i - 1];
+        const Eigen::Vector3d r = rotVec(p.q[i - 1], p.q[i]);
+        m.swept_deg += r.norm() * kRad2Deg;
+        if (dt < 0.5 * kDt) continue;
+        w.push_back(r / dt);
+        tm.push_back(0.5 * (p.t[i] + p.t[i - 1]));
+        m.omega_max = std::max(m.omega_max, w.back().norm());
+    }
+    for (size_t i = 1; i < w.size(); ++i)
+        m.alpha_max = std::max(m.alpha_max, (w[i] - w[i - 1]).norm() / (tm[i] - tm[i - 1]));
+    m.resid_deg = go::quatAngleRad(p.q.back(), q_goal) * kRad2Deg;
+    return m;
 }
 
 }  // namespace
@@ -158,302 +246,172 @@ int main(int argc, char** argv) {
         const Args args = parseArgs(argc, argv);
 
         // ---- inputs -------------------------------------------------------------------------------------
-        hdl::QuaternionDMP qdmp_pos_file;  // QDMP found in --weights (if any)
-        bool has_q_pos = false;
-        const hdl::ProDMP prodmp_template = hdl::prodmp_io::loadProDmpFromYaml(args.weights, qdmp_pos_file, has_q_pos);
-        hdl::QuaternionDMP qdmp_learned;
+        const auto dp = hdl::demo_params::read(args.demo_params);
+        const double tau = dp.tau_s;
+        if (!(tau > 0.0)) throw std::runtime_error("tau_s of the demo params is not > 0");
+
+        hdl::QuaternionDMP qdmp_file;
         bool has_q = false;
-        if (args.qdmp_weights == args.weights) {
-            qdmp_learned = qdmp_pos_file;
-            has_q = has_q_pos;
-        } else {
-            (void)hdl::prodmp_io::loadProDmpFromYaml(args.qdmp_weights, qdmp_learned, has_q);
-        }
-        if (!has_q || !qdmp_learned.isLearned()) {
+        (void)hdl::prodmp_io::loadProDmpFromYaml(args.qdmp_weights, qdmp_file, has_q);
+        if (!has_q || !qdmp_file.isLearned()) {
             throw std::runtime_error("no learned quaternion_dmp section in " + args.qdmp_weights);
         }
-        const double tau = prodmp_template.tau();
-        if (!(tau > 0.0)) throw std::runtime_error("tau of the position weights is not > 0");
-
-        const auto dp = hdl::demo_params::read(args.demo_params);
-        hdl::GraspPointId demo_k = hdl::GraspPointId::kP270;
-        if (!args.demo_k.empty()) demo_k = hdl::demo_params::parseGraspPoint(args.demo_k);
-        else if (dp.satellite_at_demo) demo_k = dp.satellite_at_demo->grasp_point;
-        if (std::fabs(dp.tau_s - tau) > 1e-6) {
-            std::cerr << "WARNING: demo-params tau_s (" << dp.tau_s << ") != tau of the position weights (" << tau
-                      << "); using the weights' tau.\n";
+        if (std::fabs(qdmp_file.tau() - tau) > 1e-6) {
+            std::cerr << "WARNING: quaternion_dmp tau (" << qdmp_file.tau() << ") != demo-params tau_s (" << tau
+                      << "); using demo-params tau_s.\n";
         }
 
-        const std::string urdf = readFile(args.urdf);
-        const auto vlim = urdfVelocityLimits(urdf);
-        const std::vector<std::string> joint_names = {"fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
-                                                      "fer_joint5", "fer_joint6", "fer_joint7"};
-        auto robot = std::make_shared<RobotModel>(urdf, joint_names, "fer_hand_tcp");
-        const RobotModel::JointVector lo = robot->jointLowerLimits();
-        const RobotModel::JointVector hi = robot->jointUpperLimits();
+        Eigen::Quaterniond q_hold;
+        std::string hold_src;
+        if (!args.q_hold_xyzw.empty()) {
+            q_hold = quatFromXyzw(args.q_hold_xyzw, "--q-hold");
+            hold_src = "--q-hold";
+        } else {
+            const std::vector<std::string> joint_names = {"fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
+                                                          "fer_joint5", "fer_joint6", "fer_joint7"};
+            RobotModel robot(readFile(args.urdf), joint_names, "fer_hand_tcp");
+            RobotModel::JointVector q;
+            for (int j = 0; j < 7; ++j) q(j) = args.q_meas[j];
+            robot.update(q, RobotModel::JointVector::Zero());
+            q_hold = robot.eeOrientation().normalized();
+            hold_src = "FK(--q-meas)";
+        }
+        const Eigen::Quaterniond q_goal_nom = quatFromXyzw(args.goal_xyzw, "--goal");
 
-        RobotModel::JointVector q0;
-        q0 << 0.0, -0.7854, 0.0, -2.3562, 0.0, 3.1416, 0.7854;  // ready_q6pi
-        robot->update(q0, RobotModel::JointVector::Zero());
-        const Eigen::Vector3d p0 = robot->eePosition();
-        const Eigen::Quaterniond q_hold = robot->eeOrientation();  // hold orientation from FK
+        const double omega_rad_s = std::fabs(args.omega_deg_s) / kRad2Deg;
+        const double delta_rad = kPhaseFraction * omega_rad_s * tau;
 
-        // ---- cases --------------------------------------------------------------------------------------
-        const std::vector<std::pair<hdl::GraspPointId, std::string>> ks = {{hdl::GraspPointId::kP0, "kP0"},
-                                                                          {hdl::GraspPointId::kP90, "kP90"},
-                                                                          {hdl::GraspPointId::kP180, "kP180"},
-                                                                          {hdl::GraspPointId::kP270, "kP270"}};
-        const std::vector<double> thetas = {-120.0, -60.0, 0.0};
-        struct Variant { std::string name; double omega_scale; Eigen::Vector3d dc; Eigen::Matrix3d R; };
-        const double tilt = 18.0 * kPi / 180.0;
-        const Eigen::Matrix3d I3 = Eigen::Matrix3d::Identity();
-        const std::vector<Variant> variants = {
-            {"nominal", 1.0, Eigen::Vector3d::Zero(), I3},
-            {"omega_p20", 1.2, Eigen::Vector3d::Zero(), I3},
-            {"omega_m20", 0.8, Eigen::Vector3d::Zero(), I3},
-            {"cx_p15", 1.0, Eigen::Vector3d(0.15, 0, 0), I3},
-            {"cx_m15", 1.0, Eigen::Vector3d(-0.15, 0, 0), I3},
-            {"cy_p15", 1.0, Eigen::Vector3d(0, 0.15, 0), I3},
-            {"cy_m15", 1.0, Eigen::Vector3d(0, -0.15, 0), I3},
-            {"tilt_x18", 1.0, Eigen::Vector3d::Zero(), Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitX()).toRotationMatrix()},
-            {"tilt_y18", 1.0, Eigen::Vector3d::Zero(), Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitY()).toRotationMatrix()},
-        };
-        const double omega_nom = -2.0 * kPi / 180.0;
-        std::vector<Case> cases;
-        for (const auto& [k, kn] : ks)
-            for (double th : thetas)
-                for (const auto& v : variants) {
-                    Case c;
-                    c.k = k;
-                    c.k_name = kn;
-                    c.theta_deg = th;
-                    c.variant = v.name;
-                    c.omega_rad_s = omega_nom * v.omega_scale;
-                    c.center = Eigen::Vector3d(0.75, 0.0, 0.77) + v.dc;
-                    c.axis = v.R * Eigen::Vector3d::UnitZ();
-                    c.face_normal = v.R * Eigen::Vector3d::UnitX();  // tilt the whole satellite: face stays lateral
-                    std::ostringstream n;
-                    n << kn << "_th" << static_cast<int>(th) << "_" << v.name;
-                    c.name = n.str();
-                    cases.push_back(c);
-                }
+        struct Variant { std::string name; double sign; };
+        const std::vector<Variant> variants = {{"nominal", 0.0}, {"phase_p20", +1.0}, {"phase_m20", -1.0}};
 
-        // ---- outputs ------------------------------------------------------------------------------------
-        const std::string trace_dir = args.out + "/traces";
-        if (std::system(("mkdir -p '" + trace_dir + "'").c_str()) != 0) throw std::runtime_error("cannot create " + trace_dir);
+        std::filesystem::create_directories(args.out);
         std::ofstream sum(args.out + "/summary.csv");
         if (!sum) throw std::runtime_error("cannot write summary.csv in " + args.out);
-        sum << "case,k,theta_deg,variant,omega_rad_s,law,feasible,max_joint_violation_rad,ang_at_pos3cm_deg,"
-               "ang_at_pos1cm_deg,t_ang_below_2deg_frac_tau,peak_omega_cmd_rad_s,peak_joint_vel_rad_s,peak_joint_vel_joint,"
-               "peak_joint_vel_over_limit,min_limit_margin_rad,min_margin_joint,min_margin_t_s,min_w_trans,"
-               "pos_err_final_mm,ori_err_final_deg,planner_check\n";
+        sum << "variant,delta_deg,law,swept_deg,omega_max_rad_s,alpha_max_rad_s2,resid_at_tau_deg,diff_vs_slerp_max_deg,"
+               "diff_vs_slerp_rms_deg\n";
 
-        std::map<std::string, std::vector<std::pair<const Case*, Metrics>>> by_law;
-        const int n_steps = static_cast<int>(std::ceil(tau / kDt));
-        std::cout << "tau=" << tau << " s, dt=" << kDt << ", n_steps=" << n_steps << ", cases=" << cases.size()
-                  << ", runs=" << cases.size() * kLaws.size() << ", demo k=" << static_cast<int>(demo_k) << "\n";
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "tau=" << tau << " s (demo-params), dt=" << kDt << " s, |omega|=" << std::fabs(args.omega_deg_s)
+                  << " deg/s, phase offset=+/-" << delta_rad * kRad2Deg << " deg about axis [" << args.axis.transpose()
+                  << "]\nhold from " << hold_src << " xyzw=[" << q_hold.x() << ' ' << q_hold.y() << ' ' << q_hold.z() << ' '
+                  << q_hold.w() << "]  goal(nominal) xyzw=[" << q_goal_nom.x() << ' ' << q_goal_nom.y() << ' '
+                  << q_goal_nom.z() << ' ' << q_goal_nom.w() << "]\n";
 
-        for (const Case& c : cases) {
-            hdl::CubeSatelliteModel::Params sp;
-            sp.center_world = c.center;
-            sp.axis_world = c.axis;
-            sp.cube_side_m = 0.150;
-            sp.collar_radius_m = 0.0725;
-            sp.wall_thickness_m = 0.009;
-            sp.grasp_radius_m = 0.068;
-            sp.standoff_m = 0.08;
-            sp.face_normal_body = c.face_normal;
-            const hdl::CubeSatelliteModel model(sp);
-            const auto target = model.graspPoseAt(c.k, c.theta_deg * kPi / 180.0);
-            const Eigen::Vector3d p_goal = target.position_world;
-            const Eigen::Quaterniond q_goal = go::alignShortestPath(q_hold, target.orientation_nominal_world.normalized());
+        // time grid: i*dt up to tau, plus tau itself if it is not a multiple of dt
+        std::vector<double> grid;
+        for (int i = 0; i * kDt < tau - 1e-9; ++i) grid.push_back(i * kDt);
+        grid.push_back(tau);
 
-            // Position trajectory: ProDMP with the case's goal, started at the FK position (as the planner).
-            hdl::ProDMP prodmp = prodmp_template;
-            prodmp.setRelativeGoal(false);
-            prodmp.setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
-            prodmp.setGoal(p_goal);
-            std::vector<Eigen::Vector3d> pos(n_steps);
-            for (int i = 0; i < n_steps; ++i) pos[i] = prodmp.step(kDt);
+        // QDMP in the DEMO frame: weights, q0 and the forcing term live in the frame of the recorded demo. The hold
+        // frame is reached with the FrameAligner's orientation offset (ros_utils.hpp, align()):
+        //   Q = q_hold * q_demo(0)^-1, applied by LEFT multiplication, q_out = (Q * q_rollout).normalized().
+        const Eigen::Quaterniond q_demo0 = qdmp_file.q0().normalized();
+        const Eigen::Quaterniond Q = (q_hold * q_demo0.conjugate()).normalized();
+        auto runQdmp = [&](const Eigen::Quaterniond& start, const Eigen::Quaterniond& goal_demo) {
+            hdl::QuaternionDMP qd = qdmp_file;  // keeps alpha_x/alpha_z/beta_z/n_basis of the fit
+            qd.setLearnedParameters(tau, start, go::alignShortestPath(start, goal_demo), qdmp_file.centers(),
+                                    qdmp_file.widths(), qdmp_file.weights(), Eigen::Vector3d::Zero());
+            qd.reset();
+            std::vector<Eigen::Quaterniond> r;
+            r.reserve(grid.size());
+            for (size_t i = 0; i < grid.size(); ++i) r.push_back(i == 0 ? qd.orientation() : qd.step(grid[i] - grid[i - 1]));
+            return r;
+        };
+        std::cout << "QDMP weights: DEMO frame (q_demo(0) from weights file xyzw=[" << q_demo0.x() << ' ' << q_demo0.y() << ' '
+                  << q_demo0.z() << ' ' << q_demo0.w() << "]); output = Q * q_rollout, Q = q_hold * q_demo(0)^-1 (rotation "
+                  << go::quatAngleRad(Q, Eigen::Quaterniond::Identity()) * kRad2Deg << " deg); rollout goal = Q^-1 * goal, eta0 = 0\n";
 
-            const Eigen::Vector3d omega_const = go::slerpAngularVelocityWorld(q_hold, q_goal, tau);
-
-            for (const char* law : kLaws) {
-                const std::string L = law;
-                // ---- orientation + twist per law ----
-                std::vector<CartesianSample> traj(n_steps);
-                hdl::QuaternionDMP qd;
-                if (L == "C" || L == "D") {
-                    qd = qdmp_learned;  // keeps alpha_x/alpha_z/beta_z of the production fit
-                    std::array<Eigen::VectorXd, 3> w = qd.weights();
-                    if (L == "C") for (auto& wi : w) wi = Eigen::VectorXd::Zero(qd.nBasis());
-                    qd.setLearnedParameters(tau, q_hold, q_goal, qd.centers(), qd.widths(), w, Eigen::Vector3d::Zero());
-                    qd.reset();
-                }
-                for (int i = 0; i < n_steps; ++i) {
-                    const double t = (i + 1) * kDt;
-                    const double u = std::min(1.0, t / tau);
-                    CartesianSample& s = traj[i];
-                    s.position = pos[i];
-                    if (L == "A0" || L == "A") {
-                        s.orientation = go::slerpAt(q_hold, q_goal, t, tau);
-                        if (L == "A" && u < 1.0) s.angular_velocity = omega_const;
-                    } else if (L == "B") {
-                        const double sb = u * u * u * (10.0 - 15.0 * u + 6.0 * u * u);
-                        s.orientation = hdl::slerpShortestPath(q_hold, q_goal, sb);
-                        if (u < 1.0) s.angular_velocity = omega_const * (30.0 * u * u * (1.0 - u) * (1.0 - u));
-                    } else {
-                        s.orientation = qd.step(kDt);
-                        s.angular_velocity = qd.omega();
-                    }
-                }
-
-                // ---- simulate ----
-                NullspaceBiasedResolution::Params ns;
-                JointPathSimulator::Params sim_params;
-                sim_params.dt = kDt;
-                sim_params.strategy = std::make_shared<NullspaceBiasedResolution>(ns);
-                const JointPathSimulator sim(robot, sim_params);
-                const auto steps = sim.simulate(traj, q0);
-
-                Metrics m;
-                std::ofstream tr(trace_dir + "/" + c.name + "_" + L + ".csv");
-                tr << "t_s,pos_cmd_x,pos_cmd_y,pos_cmd_z,q_cmd_x,q_cmd_y,q_cmd_z,q_cmd_w,omega_cmd_x,omega_cmd_y,omega_cmd_z,"
-                      "ee_x,ee_y,ee_z,ee_qx,ee_qy,ee_qz,ee_qw,pos_dist_goal_m,ang_dist_goal_deg,q1,q2,q3,q4,q5,q6,q7,w_trans\n";
-                bool got3 = false, got1 = false, got2 = false;
-                for (size_t i = 0; i < steps.size(); ++i) {
-                    const double t = (i + 1) * kDt;
-                    robot->update(steps[i].q, RobotModel::JointVector::Zero());
-                    const Eigen::Vector3d ee = robot->eePosition();
-                    const Eigen::Quaterniond eq = robot->eeOrientation();
-                    const double pd = (ee - p_goal).norm();
-                    const double ad = go::quatAngleRad(eq, q_goal) * 180.0 / kPi;
-                    if (!got3 && pd < 0.03) { got3 = true; m.ang_at_3cm_deg = ad; }
-                    if (!got1 && pd < 0.01) { got1 = true; m.ang_at_1cm_deg = ad; }
-                    if (!got2 && ad < 2.0) { got2 = true; m.t_2deg_frac = t / tau; }
-                    m.peak_omega = std::max(m.peak_omega, traj[i].angular_velocity.norm());
-                    m.min_wtrans = std::min(m.min_wtrans, steps[i].w_trans);
-                    for (int j = 0; j < 7; ++j) {
-                        const double qj = steps[i].q(j);
-                        const double mg = std::min(qj - lo(j), hi(j) - qj);
-                        if (mg < m.min_margin) { m.min_margin = mg; m.min_margin_joint = j + 1; m.min_margin_t = i * kDt; }
-                        m.max_viol = std::max({m.max_viol, lo(j) - qj, qj - hi(j)});
-                        if (i + 1 < steps.size()) {
-                            const double qd_j = std::fabs(steps[i + 1].q(j) - qj) / kDt;
-                            if (qd_j > m.peak_qdot) { m.peak_qdot = qd_j; m.peak_qdot_joint = j + 1; }
-                            m.peak_qdot_ratio = std::max(m.peak_qdot_ratio, qd_j / vlim[j]);
-                        }
-                    }
-                    tr << num(t) << ',' << num(traj[i].position.x()) << ',' << num(traj[i].position.y()) << ','
-                       << num(traj[i].position.z()) << ',' << num(traj[i].orientation.x()) << ','
-                       << num(traj[i].orientation.y()) << ',' << num(traj[i].orientation.z()) << ','
-                       << num(traj[i].orientation.w()) << ',' << num(traj[i].angular_velocity.x()) << ','
-                       << num(traj[i].angular_velocity.y()) << ',' << num(traj[i].angular_velocity.z()) << ','
-                       << num(ee.x()) << ',' << num(ee.y()) << ',' << num(ee.z()) << ',' << num(eq.x()) << ','
-                       << num(eq.y()) << ',' << num(eq.z()) << ',' << num(eq.w()) << ',' << num(pd) << ',' << num(ad);
-                    for (int j = 0; j < 7; ++j) tr << ',' << num(steps[i].q(j));
-                    tr << ',' << num(steps[i].w_trans) << '\n';
-                    if (i + 1 == steps.size()) {
-                        m.pos_err_final_mm = pd * 1000.0;
-                        m.ori_err_final_deg = ad;
-                    }
-                }
-                m.feasible = !steps.empty() && m.max_viol < kViolTol;  // same criterion as checkKinematicFeasibility
-
-                if (L == "A0") {  // fidelity check against the real planner function
-                    const auto kin = satellite_grasp_planner::core::checkKinematicFeasibility(
-                        prodmp_template, p_goal, q_goal, robot, q0, kDt, kViolTol);
-                    const double dq_final = (kin.q_final - steps.back().q).norm();
-                    const bool same = (kin.feasible == m.feasible) && dq_final < 1e-9;
-                    m.planner_check = same ? "match" : ("MISMATCH(dq_final=" + num(dq_final) + ")");
-                    if (!same) std::cerr << "WARNING " << c.name << ": A0 differs from checkKinematicFeasibility: "
-                                         << m.planner_check << "\n";
-                }
-
-                sum << c.name << ',' << c.k_name << ',' << c.theta_deg << ',' << c.variant << ',' << num(c.omega_rad_s) << ','
-                    << L << ',' << (m.feasible ? "yes" : "no") << ',' << num(m.max_viol) << ',' << num(m.ang_at_3cm_deg) << ','
-                    << num(m.ang_at_1cm_deg) << ',' << num(m.t_2deg_frac) << ',' << num(m.peak_omega) << ','
-                    << num(m.peak_qdot) << ',' << m.peak_qdot_joint << ',' << num(m.peak_qdot_ratio) << ','
-                    << num(m.min_margin) << ',' << m.min_margin_joint << ',' << num(m.min_margin_t) << ','
-                    << num(m.min_wtrans) << ',' << num(m.pos_err_final_mm) << ',' << num(m.ori_err_final_deg) << ','
-                    << m.planner_check << '\n';
-                by_law[L].push_back({&c, m});
+        // ---- recorded demo (optional) ----
+        if (args.demo_csv.empty()) {
+            std::cout << "\n== recorded demo: SKIPPED (no --demo-csv given)\n";
+        } else {
+            std::string cols;
+            const Profile demo = loadDemoCsv(args.demo_csv, cols);
+            double swept = 0.0;
+            for (size_t i = 1; i < demo.q.size(); ++i) swept += go::quatAngleRad(demo.q[i - 1], demo.q[i]) * kRad2Deg;
+            const double dur = demo.t.back() - demo.t.front();
+            const Eigen::Quaterniond& d0 = demo.q.front();
+            const Eigen::Quaterniond& d1 = demo.q.back();
+            std::cout << "\n== recorded demo " << args.demo_csv << "\n  columns: " << cols << ", rows " << demo.t.size()
+                      << "\n  duration " << dur << " s (tau " << tau << " s), swept " << swept << " deg, angle q(0)->q(end) "
+                      << go::quatAngleRad(d0, d1) * kRad2Deg << " deg\n  angle(csv q(0), weights q0) "
+                      << go::quatAngleRad(d0, q_demo0) * kRad2Deg << " deg, angle(csv q(end), weights goal) "
+                      << go::quatAngleRad(d1, qdmp_file.goal()) * kRad2Deg << " deg\n";
+            const auto r = runQdmp(d0, d1);  // demo frame, start = q_demo(0), goal = q_demo(end), tau of the demo-params
+            double emax = 0.0, esq = 0.0;
+            for (size_t i = 0; i < grid.size(); ++i) {
+                const double e = go::quatAngleRad(r[i], sampleProfile(demo, demo.t.front() + grid[i])) * kRad2Deg;
+                emax = std::max(emax, e);
+                esq += e * e;
             }
-            std::cout << "done " << c.name << "\n";
+            std::cout << "  reproduction (QDMP, demo frame, start=q(0), goal=q(end)): max err " << emax << " deg, RMS "
+                      << std::sqrt(esq / grid.size()) << " deg, residual at tau " << go::quatAngleRad(r.back(), d1) * kRad2Deg
+                      << " deg\n";
         }
 
-        // ---- per-law summary (median / worst) and decision rule ----------------------------------------
-        std::ofstream md(args.out + "/summary_by_law.md");
-        md << "# Orientation laws: summary (" << cases.size() << " cases, tau=" << tau << " s)\n\n"
-           << "Median over cases / worst case. 'worst' = max, except margin and w_trans (min). NaN (never reached) is "
-              "excluded from medians and counted in `n_never`.\n\n"
-           << "| law | feasible | ang@3cm med/worst [deg] | ang@1cm med/worst [deg] | t(<2deg) med/worst [tau] | n_never(2deg) | "
-              "peak omega med/worst [rad/s] | peak qdot med/worst [rad/s] | qdot/limit worst | min margin med/worst [rad] | "
-              "min w_trans med/worst | pos err final med/worst [mm] | ori err final med/worst [deg] |\n"
-           << "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
-        struct Agg { bool all_feasible; double worst_margin, worst_ratio; };
-        std::map<std::string, Agg> agg;
-        auto col = [](const std::vector<std::pair<const Case*, Metrics>>& v, double Metrics::*f) {
-            std::vector<double> o;
-            for (const auto& e : v) o.push_back(e.second.*f);
-            return o;
-        };
-        auto worstMax = [](const std::vector<double>& v) {
-            double w = -std::numeric_limits<double>::infinity();
-            for (double x : v) if (std::isfinite(x)) w = std::max(w, x);
-            return std::isfinite(w) ? w : kNaN;
-        };
-        auto worstMin = [](const std::vector<double>& v) {
-            double w = std::numeric_limits<double>::infinity();
-            for (double x : v) if (std::isfinite(x)) w = std::min(w, x);
-            return std::isfinite(w) ? w : kNaN;
-        };
-        for (const char* law : kLaws) {
-            const auto& v = by_law[law];
-            int nfeas = 0, nnever = 0;
-            for (const auto& e : v) { nfeas += e.second.feasible; nnever += !std::isfinite(e.second.t_2deg_frac); }
-            auto a3 = col(v, &Metrics::ang_at_3cm_deg), a1 = col(v, &Metrics::ang_at_1cm_deg), t2 = col(v, &Metrics::t_2deg_frac),
-                 po = col(v, &Metrics::peak_omega), pq = col(v, &Metrics::peak_qdot), pr = col(v, &Metrics::peak_qdot_ratio),
-                 mm = col(v, &Metrics::min_margin), ww = col(v, &Metrics::min_wtrans), pe = col(v, &Metrics::pos_err_final_mm),
-                 oe = col(v, &Metrics::ori_err_final_deg);
-            md << "| " << law << " | " << nfeas << "/" << v.size() << " | " << num(median(a3)) << " / " << num(worstMax(a3))
-               << " | " << num(median(a1)) << " / " << num(worstMax(a1)) << " | " << num(median(t2)) << " / " << num(worstMax(t2))
-               << " | " << nnever << " | " << num(median(po)) << " / " << num(worstMax(po)) << " | " << num(median(pq)) << " / "
-               << num(worstMax(pq)) << " | " << num(worstMax(pr)) << " | " << num(median(mm)) << " / " << num(worstMin(mm))
-               << " | " << num(median(ww)) << " / " << num(worstMin(ww)) << " | " << num(median(pe)) << " / " << num(worstMax(pe))
-               << " | " << num(median(oe)) << " / " << num(worstMax(oe)) << " |\n";
-            agg[law] = {nfeas == static_cast<int>(v.size()), worstMin(mm), worstMax(pr)};
-        }
+        for (const Variant& v : variants) {
+            const double delta = v.sign * delta_rad;
+            // q_goal(theta + delta) = R_axis(delta) * q_goal(theta); realigned to the hold hemisphere
+            const Eigen::Quaterniond q_goal =
+                go::alignShortestPath(q_hold, (Eigen::Quaterniond(Eigen::AngleAxisd(delta, args.axis)) * q_goal_nom).normalized());
 
-        md << "\n## Decision rule\n\nC or D adoptable iff feasible in ALL cases, worst-case min margin > " << kMarginAdoptRad
-           << " rad and joint speed within the URDF limits (worst qdot/limit <= 1).\n\n";
-        for (const char* law : {"C", "D"}) {
-            const Agg& g = agg[law];
-            const bool ok = g.all_feasible && g.worst_margin > kMarginAdoptRad && g.worst_ratio <= 1.0;
-            md << "- " << law << ": all feasible=" << (g.all_feasible ? "yes" : "no") << ", worst margin=" << num(g.worst_margin)
-               << " rad, worst qdot/limit=" << num(g.worst_ratio) << " -> **" << (ok ? "ADOPTABLE" : "NOT adoptable") << "**\n";
+            std::array<Profile, 3> prof;
+            for (auto& p : prof) { p.t = grid; p.q.reserve(grid.size()); }
+            const auto qroll = runQdmp(q_demo0, Q.conjugate() * q_goal);
+            for (size_t i = 0; i < grid.size(); ++i) {
+                const double t = grid[i];
+                const double u = std::min(1.0, t / tau);
+                prof[0].q.push_back(go::slerpAt(q_hold, q_goal, t, tau));
+                prof[1].q.push_back(hdl::slerpShortestPath(q_hold, q_goal, u * u * u * (10.0 - 15.0 * u + 6.0 * u * u)));
+                prof[2].q.push_back((Q * qroll[i]).normalized());
+            }
+
+            std::array<Metrics, 3> met;
+            for (size_t l = 0; l < 3; ++l) met[l] = profileMetrics(prof[l], q_goal);
+            double dmax = 0.0, dsq = 0.0;
+            for (size_t i = 0; i < grid.size(); ++i) {
+                const double d = go::quatAngleRad(prof[0].q[i], prof[2].q[i]) * kRad2Deg;
+                dmax = std::max(dmax, d);
+                dsq += d * d;
+            }
+            met[2].diff_max_deg = dmax;
+            met[2].diff_rms_deg = std::sqrt(dsq / grid.size());
+
+            std::cout << "\n== " << v.name << "  (tau = " << tau << " s, phase offset = " << delta * kRad2Deg
+                      << " deg, goal xyzw=[" << q_goal.x() << ' ' << q_goal.y() << ' ' << q_goal.z() << ' ' << q_goal.w()
+                      << "], angle hold->goal = " << go::quatAngleRad(q_hold, q_goal) * kRad2Deg
+                      << " deg, QDMP weights in demo frame)\n"
+                      << std::left << std::setw(9) << "law" << std::right << std::setw(12) << "swept[deg]" << std::setw(14)
+                      << "|w|max[rad/s]" << std::setw(16) << "|a|max[rad/s2]" << std::setw(14) << "resid@tau[deg]" << '\n';
+            for (size_t l = 0; l < 3; ++l) {
+                std::cout << std::left << std::setw(9) << kLaws[l] << std::right << std::setw(12) << met[l].swept_deg
+                          << std::setw(14) << met[l].omega_max << std::setw(16) << met[l].alpha_max << std::setw(14)
+                          << met[l].resid_deg << '\n';
+                sum << v.name << ',' << num(delta * kRad2Deg) << ',' << kLaws[l] << ',' << num(met[l].swept_deg) << ','
+                    << num(met[l].omega_max) << ',' << num(met[l].alpha_max) << ',' << num(met[l].resid_deg) << ','
+                    << num(l == 2 ? met[l].diff_max_deg : std::numeric_limits<double>::quiet_NaN()) << ','
+                    << num(l == 2 ? met[l].diff_rms_deg : std::numeric_limits<double>::quiet_NaN()) << '\n';
+            }
+            std::cout << "SLERP vs QDMP angular difference over time: max " << met[2].diff_max_deg << " deg, RMS "
+                      << met[2].diff_rms_deg << " deg\n";
+
+            std::ofstream pf(args.out + "/profile_" + v.name + ".csv");
+            if (!pf) throw std::runtime_error("cannot write profile_" + v.name + ".csv in " + args.out);
+            pf << "t_s";
+            for (const char* law : kLaws) pf << ',' << law << "_x," << law << "_y," << law << "_z," << law << "_w";
+            pf << '\n';
+            for (size_t i = 0; i < grid.size(); ++i) {
+                pf << num(grid[i]);
+                for (size_t l = 0; l < 3; ++l) {
+                    // same hemisphere as the hold (q and -q are the same rotation)
+                    Eigen::Quaterniond q = prof[l].q[i];
+                    if (q.coeffs().dot(q_hold.coeffs()) < 0.0) q.coeffs() = -q.coeffs();
+                    pf << ',' << num(q.x()) << ',' << num(q.y()) << ',' << num(q.z()) << ',' << num(q.w());
+                }
+                pf << '\n';
+            }
         }
-        // D preferred over C only if it improves >=1 metric (median) over the cases with k != demo k.
-        auto subMedian = [&](const char* law, double Metrics::*f) {
-            std::vector<double> o;
-            for (const auto& e : by_law[law]) if (e.first->k != demo_k) o.push_back(e.second.*f);
-            return median(o);
-        };
-        struct M { const char* name; double Metrics::*f; bool lower_better; };
-        const std::vector<M> ms = {{"ang_at_pos3cm_deg", &Metrics::ang_at_3cm_deg, true}, {"ang_at_pos1cm_deg", &Metrics::ang_at_1cm_deg, true},
-                                   {"t_ang_below_2deg_frac", &Metrics::t_2deg_frac, true}, {"peak_omega", &Metrics::peak_omega, true},
-                                   {"peak_joint_vel", &Metrics::peak_qdot, true}, {"min_margin", &Metrics::min_margin, false},
-                                   {"min_w_trans", &Metrics::min_wtrans, false}, {"ori_err_final_deg", &Metrics::ori_err_final_deg, true}};
-        md << "\nD vs C on cases with k != demo k (median over those cases):\n\n| metric | C | D | D better |\n|---|---|---|---|\n";
-        int improved = 0;
-        for (const auto& mt : ms) {
-            const double c = subMedian("C", mt.f), d = subMedian("D", mt.f);
-            const bool better = std::isfinite(c) && std::isfinite(d) && (mt.lower_better ? d < c : d > c);
-            improved += better;
-            md << "| " << mt.name << " | " << num(c) << " | " << num(d) << " | " << (better ? "yes" : "no") << " |\n";
-        }
-        md << "\nD preferred over C: **" << (improved > 0 ? "YES" : "NO") << "** (" << improved << " metric(s) improved).\n";
-        std::cout << "wrote " << args.out << "/summary.csv, summary_by_law.md, traces/\n";
+        std::cout << "\nwrote " << args.out << "/summary.csv, profile_{nominal,phase_p20,phase_m20}.csv\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "orientation_law_compare: " << e.what() << "\n";
