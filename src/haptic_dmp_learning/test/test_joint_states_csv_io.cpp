@@ -114,3 +114,58 @@ TEST(JointStatesCsvIoTest, ReadRejectsBadFiles) {
     }
     EXPECT_THROW(readJointStatesCsv(no_rows), std::runtime_error);
 }
+
+TEST(JointStatesCsvIoTest, ExtractsFingersByNameAndRejectsPartial) {
+    const std::vector<std::string> names = {"fer_finger_joint2", "fer_joint1", "fer_finger_joint1"};
+    const std::vector<double> pos = {0.02, 1.0, 0.03};
+    std::array<double, kNumFingerJoints> w{};
+    ASSERT_TRUE(extractFingerPositions(names, pos, w));
+    EXPECT_DOUBLE_EQ(w[0], 0.03);
+    EXPECT_DOUBLE_EQ(w[1], 0.02);
+    EXPECT_FALSE(extractFingerPositions({"fer_finger_joint1"}, {0.03}, w));
+    EXPECT_FALSE(extractFingerPositions({}, {}, w));
+}
+
+TEST(JointStatesCsvIoTest, AcceptsMimicAliasForFinger2) {
+    const std::vector<std::string> names = {"fer_finger_joint1", "fer_finger_joint2_mimic"};
+    std::array<double, kNumFingerJoints> w{};
+    std::string used;
+    ASSERT_TRUE(extractFingerPositions(names, {0.03, 0.02}, w, &used));
+    EXPECT_DOUBLE_EQ(w[0], 0.03);
+    EXPECT_DOUBLE_EQ(w[1], 0.02);
+    EXPECT_EQ(used, "fer_finger_joint2_mimic");
+    // Exact name wins when both are present.
+    ASSERT_TRUE(extractFingerPositions({"fer_finger_joint2_mimic", "fer_finger_joint1", "fer_finger_joint2"},
+                                       {0.5, 0.03, 0.02}, w, &used));
+    EXPECT_DOUBLE_EQ(w[1], 0.02);
+    EXPECT_EQ(used, "fer_finger_joint2");
+}
+
+TEST(JointStatesCsvIoTest, NoFingersMessageAndFinger1Only) {
+    std::array<double, kNumFingerJoints> w{};
+    EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_joint2"}, {0.1, 0.2}, w));
+    EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_finger_joint1"}, {0.1, 0.03}, w));
+}
+
+TEST(JointStatesCsvIoTest, AppendsFingerColumnsOnlyWhenPresent) {
+    const std::string path = ::testing::TempDir() + "joint_states_io_fingers.csv";
+    std::vector<JointStateSample> s(2);
+    s[0].t = 0.0;
+    s[0].has_fingers = true;
+    s[0].fingers = {0.04, 0.04};
+    s[1].t = 0.5;  // no finger data: nan placeholders
+    writeJointStatesCsv(path, s);
+
+    std::ifstream f(path);
+    std::string line;
+    std::getline(f, line);
+    EXPECT_EQ(line,
+              "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7,"
+              "fer_finger_joint1,fer_finger_joint2");
+    std::getline(f, line);
+    EXPECT_EQ(line, "0,0,0,0,0,0,0,0,0.04,0.04");
+    std::getline(f, line);
+    EXPECT_EQ(line, "0.5,0,0,0,0,0,0,0,nan,nan");
+    // The by-name reader still works on the extended file.
+    EXPECT_EQ(readJointStatesCsv(path).size(), 2u);
+}

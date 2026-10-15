@@ -143,6 +143,7 @@ ament_target_dependencies(live_demo_recorder_node
   rclcpp
   geometry_msgs
   sensor_msgs
+  nav_msgs
   ament_index_cpp
 )
 

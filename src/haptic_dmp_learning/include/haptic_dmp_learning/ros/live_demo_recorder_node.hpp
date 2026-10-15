@@ -6,6 +6,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
@@ -37,15 +38,18 @@ private:
     void masterPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
     void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
+    void targetOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
     void startRecording();
     void stopRecordingAndLearn();
     void saveJointStates();
+    void saveTargetOdom();
 
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr master_pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr target_odom_sub_;  ///< null if record_target_odom=false
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
 
     // Core mathematical objects
@@ -62,6 +66,16 @@ private:
     // /joint_states buffered during the recording interval (same start/stop as the Cartesian demo)
     std::vector<core::joint_states_csv_io::JointStateSample> joint_state_samples_;
     std::size_t joint_states_skipped_ = 0;  ///< messages lacking one of fer_joint1..7
+    std::string finger2_name_used_;         ///< name that provided finger 2 (last message with both fingers)
+
+    // Target (free_target_object) odometry buffered during the recording interval, same time base as
+    // the joint states. One row per message: t, position, quaternion (w,x,y,z), linear and angular twist.
+    struct TargetOdomSample {
+        double t = 0.0;
+        double v[13] = {0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};  ///< x y z qw qx qy qz vx vy vz wx wy wz
+    };
+    std::vector<TargetOdomSample> target_odom_samples_;
+    std::size_t target_odom_time_fallbacks_ = 0;  ///< samples timed with now() instead of header.stamp
 
     // Quaternion double-cover continuity. The Geomagic Touch driver sometimes
     // reports a physically identical rotation as -q, a representation sign flip
@@ -89,6 +103,9 @@ private:
     std::string output_yaml_path_;
     std::string output_demo_csv_path_;
     std::string output_joint_states_csv_path_;
+    std::string output_target_odom_csv_path_;
+    bool record_target_odom_ = true;
+    std::string target_odom_topic_;
     int n_basis_;
     double alpha_x_, alpha_z_, beta_z_;
     std::string feature_flags_path_;

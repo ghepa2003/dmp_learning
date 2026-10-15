@@ -15,6 +15,36 @@ const std::array<std::string, kNumJoints>& jointNames() {
     return names;
 }
 
+const std::array<std::string, kNumFingerJoints>& fingerJointNames() {
+    static const std::array<std::string, kNumFingerJoints> names = {"fer_finger_joint1",
+                                                                    "fer_finger_joint2"};
+    return names;
+}
+
+bool extractFingerPositions(const std::vector<std::string>& names,
+                            const std::vector<double>& positions,
+                            std::array<double, kNumFingerJoints>& fingers_out,
+                            std::string* finger2_name_out) {
+    const auto& wanted = fingerJointNames();
+    const std::string finger2_alias = wanted[1] + "_mimic";
+    for (std::size_t j = 0; j < kNumFingerJoints; ++j) {
+        bool found = false;
+        const std::string* used = nullptr;
+        for (std::size_t i = 0; i < names.size() && i < positions.size(); ++i) {
+            const bool alias = (j == 1 && names[i] == finger2_alias);
+            if (names[i] == wanted[j] || (alias && !used)) {
+                fingers_out[j] = positions[i];
+                found = true;
+                used = &names[i];
+                if (!alias) break;
+            }
+        }
+        if (!found) return false;
+        if (j == 1 && finger2_name_out) *finger2_name_out = *used;
+    }
+    return true;
+}
+
 bool extractJointPositions(const std::vector<std::string>& names,
                            const std::vector<double>& positions,
                            std::array<double, kNumJoints>& q_out) {
@@ -61,12 +91,24 @@ void writeJointStatesCsv(const std::string& path, const std::vector<JointStateSa
     if (!f.is_open()) {
         throw std::runtime_error("writeJointStatesCsv: cannot open file for writing: " + path);
     }
+    bool any_fingers = false;
+    for (const auto& s : samples) any_fingers = any_fingers || s.has_fingers;
+
     f << "t";
     for (const auto& n : jointNames()) f << "," << n;
+    if (any_fingers) {
+        for (const auto& n : fingerJointNames()) f << "," << n;
+    }
     f << "\n";
     for (const auto& s : samples) {
         f << s.t;
         for (double q : s.q) f << "," << q;
+        if (any_fingers) {
+            for (double w : s.fingers) {
+                if (s.has_fingers) f << "," << w;
+                else f << ",nan";
+            }
+        }
         f << "\n";
     }
 }

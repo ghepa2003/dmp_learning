@@ -15,6 +15,11 @@ namespace joint_states_csv_io {
  * extract_joint_states_to_csv.py, so compute_w_trans reads it unchanged):
  *   t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7
  *
+ * Optional gripper columns, appended ONLY when at least one sample carries them:
+ *   ...,fer_joint7,fer_finger_joint1,fer_finger_joint2
+ * (samples without finger data in such a file are written as "nan"). All readers of this CSV
+ * select columns by header name, so the extra columns are ignored by them.
+ *
  * Pure I/O: no ROS. Joints are mapped BY NAME, never by array position.
  */
 
@@ -23,10 +28,26 @@ constexpr std::size_t kNumJoints = 7;
 /// "fer_joint1" .. "fer_joint7", in CSV column order.
 const std::array<std::string, kNumJoints>& jointNames();
 
+constexpr std::size_t kNumFingerJoints = 2;
+
+/// "fer_finger_joint1", "fer_finger_joint2", in CSV column order.
+const std::array<std::string, kNumFingerJoints>& fingerJointNames();
+
 struct JointStateSample {
     double t = 0.0;  ///< seconds since the start of the recording
     std::array<double, kNumJoints> q{};
+    bool has_fingers = false;  ///< true if @ref fingers holds measured values
+    std::array<double, kNumFingerJoints> fingers{};
 };
+
+/// Fills @p fingers_out with fer_finger_joint1/2 looked up by name. Same contract as
+/// extractJointPositions(): @return false if either finger joint is absent.
+/// "fer_finger_joint2_mimic" is accepted as an alias of "fer_finger_joint2" (the exact name wins);
+/// if @p finger2_name_out is non-null it receives the name actually used for finger 2.
+bool extractFingerPositions(const std::vector<std::string>& names,
+                            const std::vector<double>& positions,
+                            std::array<double, kNumFingerJoints>& fingers_out,
+                            std::string* finger2_name_out = nullptr);
 
 /// Fills @p q_out with the positions of fer_joint1..7 looked up by name in @p names.
 /// @return false (and leaves @p q_out unspecified) if any of the 7 joints is absent from

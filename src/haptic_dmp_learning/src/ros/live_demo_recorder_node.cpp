@@ -5,6 +5,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <stdexcept>
 
 namespace haptic_dmp_learning {
@@ -15,6 +17,19 @@ namespace {
 // stamp and record_start_time_ means the two are on different clocks (typically
 // a wall-clock hardware driver while recording under use_sim_time).
 constexpr double kMaxPlausibleDemoSeconds = 3600.0;
+
+// demo_raw_<TS>.csv -> demo_raw_<TS>_target_odom.csv (same rule as deriveJointStatesCsvPath:
+// a trailing "_raw.csv" or ".csv" is replaced by the suffix). An empty path stays empty.
+std::string deriveTargetOdomCsvPath(const std::string& demo_csv_path) {
+    if (demo_csv_path.empty()) return demo_csv_path;
+    auto ends_with = [&](const std::string& suffix) {
+        return demo_csv_path.size() >= suffix.size() &&
+               demo_csv_path.compare(demo_csv_path.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+    if (ends_with("_raw.csv")) return demo_csv_path.substr(0, demo_csv_path.size() - 8) + "_target_odom.csv";
+    if (ends_with(".csv")) return demo_csv_path.substr(0, demo_csv_path.size() - 4) + "_target_odom.csv";
+    return demo_csv_path + "_target_odom.csv";
+}
 }  // namespace
 
 LiveDemoRecorderNode::LiveDemoRecorderNode()
@@ -60,6 +75,12 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
     output_joint_states_csv_path_ = this->declare_parameter<std::string>(
         "output_joint_states_csv_path",
         core::joint_states_csv_io::deriveJointStatesCsvPath(output_demo_csv_path_));
+
+    // Target odometry CSV: same session path as the raw demo, suffix _target_odom. Topic default =
+    // the one demo_replay_sync_orchestrator_node waits its "first odometry" on ("/" + target_name + "/odometry").
+    record_target_odom_ = this->declare_parameter<bool>("record_target_odom", true);
+    target_odom_topic_ = this->declare_parameter<std::string>("target_odom_topic", "/free_target_object/odometry");
+    output_target_odom_csv_path_ = deriveTargetOdomCsvPath(output_demo_csv_path_);
 
     // 2b. Optional anchored /target_pose. An empty array means "not provided". Wrong length or a
     // non-unit quaternion is a start-up error naming the parameter; so is enabling the anchor
@@ -119,6 +140,15 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
         joint_states_topic_, rclcpp::SensorDataQoS(),
         std::bind(&LiveDemoRecorderNode::jointStateCallback, this, std::placeholders::_1));
 
+    // 6c. Target odometry (nav_msgs/Odometry, frame 'world', ~200 Hz from ros_gz_bridge). QoS(10) =
+    // reliable + volatile, depth 10: the same the orchestrator uses on this topic, compatible with the
+    // bridge's default publisher QoS (reliable, volatile, depth 10; free_target_object.launch.py sets no override).
+    if (record_target_odom_) {
+        target_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            target_odom_topic_, rclcpp::QoS(10),
+            std::bind(&LiveDemoRecorderNode::targetOdomCallback, this, std::placeholders::_1));
+    }
+
     // 7. Publisher for mirroring master poses to Gazebo controller
     target_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
         target_pose_topic_, rclcpp::QoS(10));
@@ -128,6 +158,12 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
                 "start/stop | DMP output: %s | Demo CSV: %s",
                 master_pose_topic_.c_str(), target_pose_topic_.c_str(), buttons_topic_.c_str(),
                 output_yaml_path_.c_str(), output_demo_csv_path_.c_str());
+    if (record_target_odom_) {
+        RCLCPP_INFO(this->get_logger(), "Target odometry recording ENABLED: %s -> %s (QoS: reliable, volatile, depth 10)",
+                    target_odom_topic_.c_str(), output_target_odom_csv_path_.c_str());
+    } else {
+        RCLCPP_INFO(this->get_logger(), "Target odometry recording DISABLED (record_target_odom=false).");
+    }
 }
 
 void LiveDemoRecorderNode::masterPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
@@ -248,6 +284,10 @@ void LiveDemoRecorderNode::jointStateCallback(const sensor_msgs::msg::JointState
         return;
     }
 
+    // Gripper fingers: optional, by name (absent with FRANKA_FINGERS=fixed).
+    sample.has_fingers = core::joint_states_csv_io::extractFingerPositions(
+        msg->name, msg->position, sample.fingers, &finger2_name_used_);
+
     // Same time base rule as masterPoseCallback: header.stamp when it shares the recording
     // clock, this->now() otherwise (unset or different clock).
     rclcpp::Time now;
@@ -260,6 +300,39 @@ void LiveDemoRecorderNode::jointStateCallback(const sensor_msgs::msg::JointState
     }
     sample.t = (now - record_start_time_).seconds();
     joint_state_samples_.push_back(sample);
+}
+
+void LiveDemoRecorderNode::targetOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    if (!recording_) return;
+
+    // Same time base rule as jointStateCallback: header.stamp when it shares the recording clock
+    // (the bridged odometry is stamped in Gazebo sim-time and this node runs with use_sim_time, so
+    // t is on the same axis as the joint states and the demo), this->now() otherwise.
+    rclcpp::Time now;
+    const rclcpp::Time stamp(msg->header.stamp, record_start_time_.get_clock_type());
+    if ((msg->header.stamp.sec != 0 || msg->header.stamp.nanosec != 0) &&
+        std::abs((stamp - record_start_time_).seconds()) < kMaxPlausibleDemoSeconds) {
+        now = stamp;
+    } else {
+        now = this->now();
+        ++target_odom_time_fallbacks_;
+    }
+
+    TargetOdomSample s;
+    s.t = (now - record_start_time_).seconds();
+    const auto& p = msg->pose.pose.position;
+    const auto& q = msg->pose.pose.orientation;
+    const auto& v = msg->twist.twist.linear;
+    const auto& w = msg->twist.twist.angular;
+    const double row[13] = {p.x, p.y, p.z, q.w, q.x, q.y, q.z, v.x, v.y, v.z, w.x, w.y, w.z};
+    for (int i = 0; i < 13; ++i) s.v[i] = row[i];
+    if (target_odom_samples_.empty()) {
+        RCLCPP_INFO(this->get_logger(),
+                    "Target odometry: first sample received on %s at t=%.4f s (frame_id='%s'), "
+                    "pose x=%.4f y=%.4f z=%.4f m (compare with the spawn pose to tell whether it is world-absolute).",
+                    target_odom_topic_.c_str(), s.t, msg->header.frame_id.c_str(), p.x, p.y, p.z);
+    }
+    target_odom_samples_.push_back(s);  // no filtering: equal t are kept, analysis is downstream
 }
 
 void LiveDemoRecorderNode::buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg) {
@@ -296,6 +369,9 @@ void LiveDemoRecorderNode::startRecording() {
     recorder_.clear();
     joint_state_samples_.clear();
     joint_states_skipped_ = 0;
+    finger2_name_used_.clear();
+    target_odom_samples_.clear();
+    target_odom_time_fallbacks_ = 0;
     recording_ = true;
     gripper_trigger_pending_ = false;
     has_last_orientation_ = false;
@@ -304,6 +380,10 @@ void LiveDemoRecorderNode::startRecording() {
     anchor_state_ = core::anchored_target::State();
     record_start_time_ = this->now();
     RCLCPP_INFO(this->get_logger(), "Recording started.");
+    if (record_target_odom_) {
+        RCLCPP_INFO(this->get_logger(), "Target odometry recording ACTIVE on %s (QoS: reliable, volatile, depth 10).",
+                    target_odom_topic_.c_str());
+    }
 }
 
 void LiveDemoRecorderNode::saveJointStates() {
@@ -323,10 +403,58 @@ void LiveDemoRecorderNode::saveJointStates() {
     try {
         core::joint_states_csv_io::writeJointStatesCsv(output_joint_states_csv_path_,
                                                        joint_state_samples_);
-        RCLCPP_INFO(this->get_logger(), "Joint states (%zu samples) saved to %s",
-                    joint_state_samples_.size(), output_joint_states_csv_path_.c_str());
+        std::size_t n_fingers = 0;
+        for (const auto& s : joint_state_samples_) n_fingers += s.has_fingers ? 1 : 0;
+        RCLCPP_INFO(this->get_logger(), "Joint states (%zu samples, %zu with finger joints) saved to %s",
+                    joint_state_samples_.size(), n_fingers, output_joint_states_csv_path_.c_str());
+        if (n_fingers == 0) {
+            RCLCPP_WARN(this->get_logger(),
+                        "Finger summary: 0 of %zu rows have both finger joints - width not recorded.",
+                        joint_state_samples_.size());
+        } else {
+            RCLCPP_INFO(this->get_logger(),
+                        "Finger summary: %zu rows total, %zu with both fingers, finger 2 name: %s",
+                        joint_state_samples_.size(), n_fingers, finger2_name_used_.c_str());
+        }
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Saving joint states failed: %s", e.what());
+    }
+}
+
+void LiveDemoRecorderNode::saveTargetOdom() {
+    if (!record_target_odom_ || output_target_odom_csv_path_.empty()) return;
+    if (target_odom_samples_.empty()) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Target odometry: NO message received on %s during the recording (0 samples) - "
+                    "verify that free_target_object is spawned and its odometry bridge is running. "
+                    "Target-odometry CSV NOT written.",
+                    target_odom_topic_.c_str());
+        return;
+    }
+    RCLCPP_INFO(this->get_logger(), "Target odometry: %zu of %zu samples timed with now() (header.stamp unset or on another clock).",
+                target_odom_time_fallbacks_, target_odom_samples_.size());
+    if (target_odom_time_fallbacks_ > 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Target odometry: %zu of %zu samples used the now() fallback instead of header.stamp - their t is "
+                    "the callback arrival time, NOT the simulation stamp, so the series may not align with the joint states.",
+                    target_odom_time_fallbacks_, target_odom_samples_.size());
+    }
+    try {
+        std::ofstream f(output_target_odom_csv_path_);
+        if (!f.is_open()) {
+            throw std::runtime_error("cannot open file for writing: " + output_target_odom_csv_path_);
+        }
+        f << std::setprecision(9);
+        f << "t,x,y,z,qw,qx,qy,qz,vx,vy,vz,wx,wy,wz\n";
+        for (const auto& s : target_odom_samples_) {
+            f << s.t;
+            for (double x : s.v) f << "," << x;
+            f << "\n";
+        }
+        RCLCPP_INFO(this->get_logger(), "Target odometry (%zu samples) saved to %s",
+                    target_odom_samples_.size(), output_target_odom_csv_path_.c_str());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Saving target odometry failed: %s", e.what());
     }
 }
 
@@ -357,6 +485,7 @@ void LiveDemoRecorderNode::stopRecordingAndLearn() {
     }
 
     saveJointStates();
+    saveTargetOdom();
 
     // Fit DMP models
     try {
