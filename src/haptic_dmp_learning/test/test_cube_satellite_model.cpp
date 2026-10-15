@@ -310,3 +310,31 @@ TEST(CubeSatelliteModelRealGeometry, UnsetGraspRadiusEqualsCollarRadius) {
     }
 }
 
+
+// grasp_depth_m: default 0 leaves every pose unchanged; a depth moves the contact point along
+// -face_normal_body (into the collar) by exactly that amount, orientation untouched.
+TEST(CubeSatelliteModelGraspDepth, DefaultZeroUnchangedAndDepthShiftsAlongCollarAxis) {
+    const CubeSatelliteModel::Params base = generalParams();
+    CubeSatelliteModel::Params deep = base;
+    deep.grasp_depth_m = 0.0125;
+    const CubeSatelliteModel m0(base);
+    const CubeSatelliteModel m1(deep);
+    EXPECT_EQ(base.grasp_depth_m, 0.0);
+    for (const auto k : kAllPoints) {
+        for (const double theta : {0.0, 0.7, -2.9}) {
+            const GraspTargetPose a = m0.graspPoseAt(k, theta);
+            const GraspTargetPose b = m1.graspPoseAt(k, theta);
+            const Eigen::Vector3d n = m0.faceNormalWorld(theta);
+            expectVecNear(b.position_world, a.position_world - 0.0125 * n, 1e-12);
+            EXPECT_LT(a.orientation_nominal_world.angularDistance(b.orientation_nominal_world), 1e-12);
+        }
+    }
+}
+
+TEST(CubeSatelliteModelGraspDepth, RejectsDepthOutsideZeroToStandoff) {
+    CubeSatelliteModel::Params p = generalParams();
+    p.grasp_depth_m = -0.001;
+    EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
+    p.grasp_depth_m = p.standoff_m + 0.001;
+    EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
+}

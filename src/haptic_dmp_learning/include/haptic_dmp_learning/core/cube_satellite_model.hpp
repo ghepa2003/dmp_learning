@@ -40,11 +40,15 @@ public:
         /// graspPoseAt(). Unset (default) = collar_radius_m, which replicates the previous behaviour
         /// where one radius served both purposes; collar_radius_m stays the outer radius of the cylinder.
         std::optional<double> grasp_radius_m;
+        /// How far INSIDE the collar (toward the cube, along -face_normal_body) the grasp point sits, measured
+        /// from the rim at x = cube_side_m/2 + standoff_m: x_c = rim - grasp_depth_m. 0 (default) = on the rim,
+        /// the previous behaviour. Used ONLY by graspPoseAt(), the single place the contact point is defined.
+        double grasp_depth_m = 0.0;
     };
 
     /// Normalizes axis_world / face_normal_body. Throws std::invalid_argument if either has
     /// ~zero norm, if the face is not lateral (|axis . n| > kLateralTolerance), or if
-    /// wall_thickness_m <= 0 or >= collar_radius_m.
+    /// wall_thickness_m <= 0 or >= collar_radius_m, or if grasp_depth_m is not in [0, standoff_m].
     explicit CubeSatelliteModel(Params params);
 
     GraspTargetPose graspPoseAt(GraspPointId k, double theta_rad) const;

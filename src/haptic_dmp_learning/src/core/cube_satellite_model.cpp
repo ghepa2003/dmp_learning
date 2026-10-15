@@ -27,6 +27,9 @@ CubeSatelliteModel::CubeSatelliteModel(Params params) : params_(std::move(params
     if (!(params_.wall_thickness_m > 0.0)) {
         throw std::invalid_argument("CubeSatelliteModel: wall_thickness_m must be > 0.");
     }
+    if (!(params_.grasp_depth_m >= 0.0 && params_.grasp_depth_m <= params_.standoff_m)) {
+        throw std::invalid_argument("CubeSatelliteModel: grasp_depth_m must be in [0, standoff_m].");
+    }
     if (!(params_.wall_thickness_m < params_.collar_radius_m)) {
         throw std::invalid_argument(
             "CubeSatelliteModel: wall_thickness_m must be < collar_radius_m.");
@@ -52,7 +55,7 @@ GraspTargetPose CubeSatelliteModel::graspPoseAt(GraspPointId k, double theta_rad
     const Eigen::Matrix3d R = rotation(theta_rad);
     const Eigen::Vector3d r_k = radialDirectionBody(k);
     const Eigen::Vector3d p_body =
-        (params_.cube_side_m / 2.0 + params_.standoff_m) * params_.face_normal_body +
+        (params_.cube_side_m / 2.0 + params_.standoff_m - params_.grasp_depth_m) * params_.face_normal_body +
         params_.grasp_radius_m.value_or(params_.collar_radius_m) * r_k;
 
     const Eigen::Vector3d z_tcp = -(R * params_.face_normal_body);

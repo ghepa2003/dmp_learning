@@ -4,6 +4,7 @@
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
 #include "haptic_dmp_learning/core/demo_csv_io.hpp"
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
+#include "haptic_dmp_learning/core/pose_rotation.hpp"
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/ros/grasp_command_input.hpp"
 
@@ -130,6 +131,18 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     gripper_closed_position_ = this->declare_parameter<double>("gripper_closed_position", 0.0);
     gripper_close_ramp_duration_sec_ =
         this->declare_parameter<double>("gripper_close_ramp_duration_sec", 2.0);
+    // Continuous-mode gripper command (open at activation, close ramp at AT_END). Default true only for
+    // continuous + grasp_command; every other mode is unchanged.
+    gripper_control_ = this->declare_parameter<bool>(
+        "gripper_control",
+        core::gripper_ramp::defaultGripperControl(satellite_rotation_mode_, grasp_goal_source_));
+    gripper_squeeze_position_ =
+        this->declare_parameter<double>("gripper_squeeze_position", gripper_closed_position_);
+    post_grasp_hold_s_ = this->declare_parameter<double>("post_grasp_hold_s", 120.0);
+    // Co-rotation lasts post_grasp_follow_s after AT_END, then the pose is frozen (<= 0: follow for the whole hold).
+    post_grasp_follow_s_ = this->declare_parameter<double>("post_grasp_follow_s", 3.0);
+    // After AT_END the held target co-rotates with the satellite (default: same as gripper_control).
+    post_grasp_follow_ = this->declare_parameter<bool>("post_grasp_follow", gripper_control_);
 
     dt_ = 1.0 / control_rate_hz_;
 
@@ -303,6 +316,16 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     }
     if (continuous_) {
         setupContinuous();
+        if (post_grasp_follow_ && std::fabs(satellite_rotation_axis_.normalized().dot(Eigen::Vector3d::UnitZ()) - 1.0) > 1e-9) {
+            throw std::invalid_argument(
+                "post_grasp_follow=true requires satellite_rotation_axis == +z (core::rotatePoseAboutZ)");
+        }
+        if (gripper_control_) {
+            gripperOpenTick();  // first message right away, then at 10 Hz
+            gripper_open_timer_ = rclcpp::create_timer(
+                this, this->get_clock(), rclcpp::Duration::from_seconds(0.1),
+                std::bind(&ProDmpGazeboExecutorNode::gripperOpenTick, this));
+        }
     }
 
     RCLCPP_INFO(this->get_logger(),
@@ -880,6 +903,10 @@ void ProDmpGazeboExecutorNode::stepCallback() {
 
     pose_pub_->publish(msg);
     twist_pub_->publish(twist_msg);
+
+    if (at_end && rollout_clock_ && gripper_control_) {
+        startPostGraspHold(msg);
+    }
 
     if (finished_ && step_timer_) {
         step_timer_->cancel();
@@ -1571,6 +1598,8 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
         R_end = Eigen::AngleAxisd(theta_end, c.axis_unit).toRotationMatrix();
     }
     dtheta_at_end_rad_ = core::wrapPi(theta_end - c.theta_int_rad);
+    theta_at_end_ = theta_end;
+    follow_t_end_ = now_s;
     const Eigen::Vector3d p_handle = c.center + R_end * (p0_ - c.center);
     Eigen::Vector3d ee;
     const bool ee_ok = lookupEeNonBlocking(ee);
@@ -1610,6 +1639,146 @@ void ProDmpGazeboExecutorNode::finishContinuousRollout(const Eigen::Vector3d& co
         logOrientationVsCommanded("at_end (commanded = goal)", q_slerp_goal_);
     }
     cstate_ = ContinuousState::kFinished;
+    if (gripper_control_) {
+        startGripperClose();
+    }
+}
+
+void ProDmpGazeboExecutorNode::gripperOpenTick() {
+    // The CSV-triggered close (gripper_trigger_t_ >= 0) owns the gripper once its ramp starts.
+    if (gripper_ramp_active_ || gripper_trigger_sent_ || cstate_ == ContinuousState::kFinished) {
+        if (gripper_open_timer_) {
+            gripper_open_timer_->cancel();
+            gripper_open_timer_.reset();
+        }
+        return;
+    }
+    std_msgs::msg::Float64 cmd;
+    cmd.data = gripper_open_position_;
+    gripper_pub_->publish(cmd);
+    if (!gripper_open_logged_) {
+        gripper_open_logged_ = true;
+        RCLCPP_INFO(this->get_logger(), "gripper: OPEN (cmd=%.3f m)", gripper_open_position_);
+    }
+}
+
+void ProDmpGazeboExecutorNode::startGripperClose() {
+    if (gripper_open_timer_) {
+        gripper_open_timer_->cancel();
+        gripper_open_timer_.reset();
+    }
+    if (gripper_trigger_t_ >= 0.0) {
+        RCLCPP_INFO(this->get_logger(),
+                    "gripper: AT_END close skipped (CSV gripper_trigger path owns the close).");
+        return;
+    }
+    gripper_close_t0_ = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "gripper: CLOSE start t=%.4f", gripper_close_t0_);
+    gripper_close_timer_ = rclcpp::create_timer(
+        this, this->get_clock(), rclcpp::Duration::from_seconds(0.02),
+        std::bind(&ProDmpGazeboExecutorNode::gripperCloseTick, this));
+}
+
+void ProDmpGazeboExecutorNode::gripperCloseTick() {
+    const double now_s = this->now().seconds();
+    const double elapsed = now_s - gripper_close_t0_;
+    const bool done = elapsed >= gripper_close_ramp_duration_sec_;
+    std_msgs::msg::Float64 cmd;
+    // Same as the orchestrator: publish the exact closed value on the final tick.
+    cmd.data = done ? gripper_closed_position_
+                    : core::gripper_ramp::interpolateGripperPosition(
+                          elapsed, gripper_close_ramp_duration_sec_,
+                          gripper_open_position_, gripper_closed_position_);
+    gripper_pub_->publish(cmd);
+    if (done) {
+        if (gripper_squeeze_position_ != gripper_closed_position_) {
+            cmd.data = core::gripper_ramp::gripperCommand(
+                elapsed, gripper_close_ramp_duration_sec_, gripper_open_position_,
+                gripper_closed_position_, gripper_squeeze_position_);
+            gripper_pub_->publish(cmd);
+            gripper_squeeze_active_ = true;
+        }
+        gripper_close_timer_->cancel();
+        gripper_close_timer_.reset();
+        gripper_close_complete_pub_->publish(std_msgs::msg::Empty());
+        RCLCPP_INFO(this->get_logger(), "gripper: CLOSE done t=%.4f (cmd=%.3f m, held)", now_s,
+                    gripper_closed_position_);
+        if (gripper_squeeze_active_) {
+            RCLCPP_INFO(this->get_logger(), "gripper: SQUEEZE cmd=%.4f m", gripper_squeeze_position_);
+        }
+    }
+}
+
+void ProDmpGazeboExecutorNode::startPostGraspHold(const geometry_msgs::msg::PoseStamped& final_pose) {
+    if (!(post_grasp_hold_s_ > 0.0)) return;
+    post_hold_pose_ = final_pose;
+    post_hold_t0_ = this->now().seconds();
+    follow_last_log_ = post_hold_t0_;
+    follow_dtheta_frozen_ = 0.0;
+    follow_ended_logged_ = false;
+    RCLCPP_INFO(this->get_logger(),
+                "post-grasp hold: republishing the pose at 10 Hz for %.1f s (%s, follow_s=%.2f).",
+                post_grasp_hold_s_, post_grasp_follow_ ? "co-rotating with the satellite, then frozen" : "static",
+                post_grasp_follow_s_);
+    post_hold_timer_ = rclcpp::create_timer(
+        this, this->get_clock(), rclcpp::Duration::from_seconds(0.1),
+        std::bind(&ProDmpGazeboExecutorNode::postGraspHoldTick, this));
+}
+
+void ProDmpGazeboExecutorNode::postGraspHoldTick() {
+    if (this->now().seconds() - post_hold_t0_ > post_grasp_hold_s_) {
+        post_hold_timer_->cancel();
+        post_hold_timer_.reset();
+        RCLCPP_INFO(this->get_logger(), "post-grasp hold finished.");
+        return;
+    }
+    geometry_msgs::msg::PoseStamped out = post_hold_pose_;
+    out.header.stamp = this->now();
+    if (gripper_squeeze_active_) {
+        std_msgs::msg::Float64 g;
+        g.data = gripper_squeeze_position_;
+        gripper_pub_->publish(g);
+    }
+    if (post_grasp_follow_) {
+        const double now_s = out.header.stamp.sec + out.header.stamp.nanosec * 1e-9;
+        const double t_since_end = now_s - post_hold_t0_;
+        const double dtheta = core::effectiveFollowDtheta(t_since_end, post_grasp_follow_s_,
+                                                          followDtheta(now_s), follow_dtheta_frozen_);
+        if (!(post_grasp_follow_s_ > 0.0) || t_since_end <= post_grasp_follow_s_) {
+            follow_dtheta_frozen_ = dtheta;
+        } else if (!follow_ended_logged_) {
+            follow_ended_logged_ = true;
+            RCLCPP_INFO(this->get_logger(), "follow: ended, dtheta=%.4f deg", core::radToDeg(dtheta));
+            RCLCPP_INFO(this->get_logger(), "hold: static until t=%.2f", post_hold_t0_ + post_grasp_hold_s_);
+        }
+        core::RotatablePose p;
+        p.position = Eigen::Vector3d(post_hold_pose_.pose.position.x, post_hold_pose_.pose.position.y,
+                                     post_hold_pose_.pose.position.z);
+        const auto& o = post_hold_pose_.pose.orientation;
+        p.orientation = Eigen::Quaterniond(o.w, o.x, o.y, o.z);
+        const core::RotatablePose r = core::rotatePoseAboutZ(cc_->center, p, dtheta);
+        out.pose.position.x = r.position.x();
+        out.pose.position.y = r.position.y();
+        out.pose.position.z = r.position.z();
+        out.pose.orientation.w = r.orientation.w();
+        out.pose.orientation.x = r.orientation.x();
+        out.pose.orientation.y = r.orientation.y();
+        out.pose.orientation.z = r.orientation.z();
+        if (!follow_ended_logged_ && now_s - follow_last_log_ >= 2.0) {
+            follow_last_log_ = now_s;
+            RCLCPP_INFO(this->get_logger(), "follow: dtheta=%.4f deg", core::radToDeg(dtheta));
+        }
+    }
+    pose_pub_->publish(out);
+}
+
+double ProDmpGazeboExecutorNode::followDtheta(double now_s) const {
+    // Same phase source as the trigger. A measured sample older than 0.5 s (odometry lost) -> omega fallback.
+    constexpr double kMaxSampleAgeS = 0.5;
+    if (have_phase_ && now_s - phase_stamp_s_ <= kMaxSampleAgeS) {
+        return core::wrapPi(theta_sat_ - theta_at_end_);
+    }
+    return cc_->omega_rad_s * (now_s - follow_t_end_);
 }
 
 void ProDmpGazeboExecutorNode::publishContinuousStatus() {

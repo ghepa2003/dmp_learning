@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace haptic_dmp_learning {
 namespace core {
 namespace gripper_ramp {
@@ -48,6 +50,35 @@ inline double interpolateGripperPosition(double elapsed_since_start,
     }
     const double frac = elapsed_since_start / ramp_duration_sec;  // in (0, 1)
     return open_position + frac * (closed_position - open_position);
+}
+
+/**
+ * @brief Gripper command at @p elapsed_since_start: open before the ramp, ramp during it, squeeze after it.
+ *
+ * With squeeze_position == closed_position this is identical to interpolateGripperPosition().
+ * The command steps from closed_position (end of the ramp) to squeeze_position when the ramp is done
+ * (elapsed >= ramp_duration_sec, or ramp_duration_sec <= 0 and elapsed > 0).
+ */
+inline double gripperCommand(double elapsed_since_start, double ramp_duration_sec,
+                             double open_position, double closed_position, double squeeze_position) {
+    if (elapsed_since_start > 0.0 &&
+        (!(ramp_duration_sec > 0.0) || elapsed_since_start >= ramp_duration_sec)) {
+        return squeeze_position;
+    }
+    return interpolateGripperPosition(elapsed_since_start, ramp_duration_sec, open_position,
+                                      closed_position);
+}
+
+/**
+ * @brief Default of prodmp_gazebo_executor_node's `gripper_control` parameter.
+ *
+ * True only for the continuous satellite replay driven by a GraspCommand
+ * (satellite_rotation_mode == "continuous" AND grasp_goal_source ==
+ * "grasp_command"); false in every other mode, so those stay unchanged.
+ */
+inline bool defaultGripperControl(const std::string& satellite_rotation_mode,
+                                  const std::string& grasp_goal_source) {
+    return satellite_rotation_mode == "continuous" && grasp_goal_source == "grasp_command";
 }
 
 }  // namespace gripper_ramp

@@ -110,6 +110,18 @@ private:
     void startContinuousRollout(double theta_at_trigger_rad);
     void finishContinuousRollout(const Eigen::Vector3d& commanded_after);
     void publishContinuousStatus();
+
+    // ---- continuous-mode gripper (gripper_control) ----
+    /// Publishes gripper_open_position_ (step) at 10 Hz until AT_END / the CSV ramp starts.
+    void gripperOpenTick();
+    /// AT_END: starts the close ramp (core::gripper_ramp), 20 ms ticks, unless the CSV path owns the close.
+    void startGripperClose();
+    void gripperCloseTick();
+    /// AT_END: republishes @p final_pose at 10 Hz for post_grasp_hold_s, no other motion.
+    void startPostGraspHold(const geometry_msgs::msg::PoseStamped& final_pose);
+    void postGraspHoldTick();
+    /// Rotation of the satellite since AT_END [rad]: measured phase if a sample is fresh, else omega*(t - t_at_end).
+    double followDtheta(double now_s) const;
     /// Single non-blocking TF lookup world_frame_ -> ee_frame_; false if unavailable.
     bool lookupEeNonBlocking(Eigen::Vector3d& ee);
     /// Same lookup, position AND orientation (TF quaternion, x y z w as stored by tf2).
@@ -386,6 +398,27 @@ private:
     double gripper_open_position_;
     double gripper_closed_position_;
     double gripper_close_ramp_duration_sec_;
+    double gripper_squeeze_position_ = 0.0;   ///< command after the close ramp (default = gripper_closed_position_)
+    bool gripper_squeeze_active_ = false;     ///< set when the close ramp is done and squeeze != closed
+
+    // gripper_control (continuous mode, see core::gripper_ramp::defaultGripperControl).
+    bool gripper_control_ = false;
+    double post_grasp_hold_s_ = 120.0;
+    double post_grasp_follow_s_ = 3.0;        ///< co-rotation lasts this long after AT_END, then frozen (<=0: whole hold)
+    bool gripper_open_logged_ = false;
+    rclcpp::TimerBase::SharedPtr gripper_open_timer_;
+    rclcpp::TimerBase::SharedPtr gripper_close_timer_;
+    double gripper_close_t0_ = 0.0;
+    rclcpp::TimerBase::SharedPtr post_hold_timer_;
+    geometry_msgs::msg::PoseStamped post_hold_pose_;
+    double post_hold_t0_ = 0.0;
+    // post_grasp_follow: the held target co-rotates with the satellite (see core/pose_rotation.hpp).
+    bool post_grasp_follow_ = false;
+    double theta_at_end_ = 0.0;      ///< satellite phase at AT_END [rad] (measured or model, as at the trigger)
+    double follow_dtheta_frozen_ = 0.0;  ///< last co-rotation angle while following [rad]
+    bool follow_ended_logged_ = false;
+    double follow_t_end_ = 0.0;      ///< node clock at AT_END [s]
+    double follow_last_log_ = 0.0;
 };
 
 }  // namespace ros_wrapper

@@ -40,6 +40,7 @@ grasp_planner_node:
     # Radius of the grasp points on the rim (mid-wall). Optional: if omitted it defaults to collar_radius_m,
     # which replicates the behaviour from before this parameter existed.
     cube_geometry.grasp_radius_m: 0.068
+    # cube_geometry.grasp_depth_m: 0.0   # contact point x_c = rim - depth (rim = side/2 + standoff); default 0 = on the rim
     cube_geometry.face_normal_body: [1.0, 0.0, 0.0]
     cube_geometry.wall_thickness_m: 0.009
     omega_consistency_tol_deg_per_s: 0.1

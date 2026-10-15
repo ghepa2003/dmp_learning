@@ -2,6 +2,8 @@
 
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
 
+using haptic_dmp_learning::core::gripper_ramp::defaultGripperControl;
+using haptic_dmp_learning::core::gripper_ramp::gripperCommand;
 using haptic_dmp_learning::core::gripper_ramp::interpolateGripperPosition;
 
 namespace {
@@ -53,4 +55,50 @@ TEST(GripperRamp, WorksWhenClosedIsGreaterThanOpen) {
     EXPECT_DOUBLE_EQ(interpolateGripperPosition(3.0 * kDuration, kDuration, open, closed), closed);
     EXPECT_NEAR(interpolateGripperPosition(kDuration / 2.0, kDuration, open, closed),
                 (open + closed) / 2.0, 1e-12);
+}
+
+// Monotonic non-increasing open -> closed (and non-decreasing in the reversed
+// direction), always within the [closed, open] range, across and past the ramp.
+TEST(GripperRamp, MonotoneAndBounded) {
+    double prev = interpolateGripperPosition(-1.0, kDuration, kOpen, kClosed);
+    for (int i = 0; i <= 300; ++i) {
+        const double t = i * 0.01;  // 0 .. 3 s, past the 2 s duration
+        const double v = interpolateGripperPosition(t, kDuration, kOpen, kClosed);
+        EXPECT_LE(v, prev) << "t=" << t;
+        EXPECT_LE(v, kOpen);
+        EXPECT_GE(v, kClosed);
+        prev = v;
+    }
+    double prev_r = interpolateGripperPosition(-1.0, kDuration, kClosed, kOpen);
+    for (int i = 0; i <= 300; ++i) {
+        const double v = interpolateGripperPosition(i * 0.01, kDuration, kClosed, kOpen);
+        EXPECT_GE(v, prev_r);
+        prev_r = v;
+    }
+}
+
+// gripper_control default: only continuous + grasp_command.
+TEST(GripperRamp, DefaultGripperControlByMode) {
+    EXPECT_TRUE(defaultGripperControl("continuous", "grasp_command"));
+    EXPECT_FALSE(defaultGripperControl("continuous", "parameters"));
+    EXPECT_FALSE(defaultGripperControl("frozen", "grasp_command"));
+    EXPECT_FALSE(defaultGripperControl("frozen", "parameters"));
+    EXPECT_FALSE(defaultGripperControl("", ""));
+}
+
+// gripperCommand: before / during / after the ramp, with and without squeeze.
+TEST(GripperCommand, WithoutSqueezeEqualsInterpolation) {
+    for (double e : {-1.0, 0.0, 0.5, 1.0, 2.0, 5.0}) {
+        EXPECT_DOUBLE_EQ(gripperCommand(e, kDuration, kOpen, kClosed, kClosed),
+                         interpolateGripperPosition(e, kDuration, kOpen, kClosed));
+    }
+}
+TEST(GripperCommand, WithSqueezeStepsAfterRamp) {
+    constexpr double kSqueeze = -0.05;
+    EXPECT_DOUBLE_EQ(gripperCommand(-1.0, kDuration, kOpen, kClosed, kSqueeze), kOpen);
+    EXPECT_DOUBLE_EQ(gripperCommand(0.0, kDuration, kOpen, kClosed, kSqueeze), kOpen);
+    EXPECT_NEAR(gripperCommand(kDuration / 2, kDuration, kOpen, kClosed, kSqueeze), 0.5 * (kOpen + kClosed), 1e-12);
+    EXPECT_DOUBLE_EQ(gripperCommand(kDuration, kDuration, kOpen, kClosed, kSqueeze), kSqueeze);
+    EXPECT_DOUBLE_EQ(gripperCommand(10.0, kDuration, kOpen, kClosed, kSqueeze), kSqueeze);
+    EXPECT_DOUBLE_EQ(gripperCommand(1.0, 0.0, kOpen, kClosed, kSqueeze), kSqueeze);  // degenerate ramp
 }

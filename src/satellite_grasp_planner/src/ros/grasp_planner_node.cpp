@@ -113,6 +113,8 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     };
     // Optional: unset => grasp points at collar_radius_m (CubeSatelliteModel::Params default).
     cube_geometry_.grasp_radius_m = opt_double("cube_geometry.grasp_radius_m");
+    // Depth of the contact point inside the collar from the rim [m]; default 0 = on the rim.
+    cube_geometry_.grasp_depth_m = this->declare_parameter<double>("cube_geometry.grasp_depth_m", 0.0);
 
     // Optional start configuration: 7 values in fer_joint1..7 order. Empty (default) = readyPose (previous
     // behaviour). Validated here, at startup, against the joint limits of the URDF at urdf_path.
@@ -227,7 +229,12 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                     s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                     s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
 
-        const rclcpp::Time now = this->get_clock()->now();
+        rclcpp::Time now = this->get_clock()->now();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (now.seconds() < snapshot.t_s && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            now = this->get_clock()->now();
+        }
         if (now.seconds() < snapshot.t_s) {
             std::ostringstream m;
             m << "node clock read " << now.seconds() << " s < snapshot.t_s " << snapshot.t_s

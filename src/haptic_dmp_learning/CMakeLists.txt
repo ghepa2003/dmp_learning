@@ -303,6 +303,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_cube_satellite_model test/test_cube_satellite_model.cpp)
   target_link_libraries(test_cube_satellite_model ${PROJECT_NAME}_core)
 
+  # Pure pose rotation about z through a centre (no ROS).
+  ament_add_gtest(test_pose_rotation test/test_pose_rotation.cpp)
+  target_link_libraries(test_pose_rotation ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_tcp_roll test/test_tcp_roll.cpp)
   target_link_libraries(test_tcp_roll ${PROJECT_NAME}_core)
 
