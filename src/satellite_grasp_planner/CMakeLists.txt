@@ -136,6 +136,19 @@ if(BUILD_ANALYSIS_TOOLS)
   install(TARGETS orientation_law_compare
     RUNTIME DESTINATION lib/${PROJECT_NAME}
   )
+
+  add_executable(orientation_path_check analysis/orientation_path_check.cpp)
+  target_link_libraries(orientation_path_check
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(orientation_path_check
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  install(TARGETS orientation_path_check
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
 endif()
 
 if(BUILD_TESTING)

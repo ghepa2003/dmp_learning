@@ -37,19 +37,16 @@
 #include "haptic_dmp_learning/core/math_utils.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
 #include "haptic_dmp_learning/core/quaternion_dmp.hpp"
+#include "orientation_laws.hpp"
 
 namespace hdl = haptic_dmp_learning::core;
 namespace go = haptic_dmp_learning::core::grasp_orientation;
+using namespace orientation_laws;
 using franka_cartesian_control::core::RobotModel;
 
 namespace {
 
 constexpr double kDt = 0.005;  // profile / integration step [s]
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kRad2Deg = 180.0 / kPi;
-constexpr double kPhaseFraction = 0.2;  // contact-phase offset = +/- 0.2 * |omega| * tau
-
-const std::array<const char*, 3> kLaws = {"slerp", "minjerk", "qdmp"};
 
 struct Args {
     std::string weights, qdmp_weights, demo_params, urdf, out, demo_csv;
@@ -57,15 +54,6 @@ struct Args {
     Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();  // satellite spin axis (world)
     double omega_deg_s = std::numeric_limits<double>::quiet_NaN();
 };
-
-std::vector<double> parseList(const std::string& s, size_t n, const std::string& what) {
-    std::vector<double> v;
-    std::stringstream ss(s);
-    std::string tok;
-    while (std::getline(ss, tok, ',')) v.push_back(std::stod(tok));
-    if (v.size() != n) throw std::invalid_argument(what + ": expected " + std::to_string(n) + " comma-separated values");
-    return v;
-}
 
 Args parseArgs(int argc, char** argv) {
     Args a;
@@ -102,29 +90,6 @@ Args parseArgs(int argc, char** argv) {
     a.axis.normalize();
     if (a.qdmp_weights.empty()) a.qdmp_weights = a.weights;
     return a;
-}
-
-std::string readFile(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) throw std::runtime_error("cannot open " + path);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-Eigen::Quaterniond quatFromXyzw(const std::vector<double>& v, const std::string& what) {
-    Eigen::Quaterniond q(v[3], v[0], v[1], v[2]);
-    const double n = q.norm();
-    if (!(std::isfinite(n) && n > 0.0)) throw std::invalid_argument(what + ": zero or non-finite norm");
-    if (std::fabs(n - 1.0) > 1e-3) std::cerr << "WARNING " << what << ": |q| = " << n << ", normalizing\n";
-    return q.normalized();
-}
-
-std::string num(double v) {
-    if (!std::isfinite(v)) return "nan";
-    std::ostringstream s;
-    s << std::setprecision(9) << v;
-    return s.str();
 }
 
 struct Profile {
@@ -214,13 +179,13 @@ Eigen::Vector3d rotVec(const Eigen::Quaterniond& a, const Eigen::Quaterniond& b)
 }
 
 struct Metrics {
-    double swept_deg = 0.0, omega_max = 0.0, alpha_max = 0.0, resid_deg = 0.0;
+    double swept_deg = 0.0, omega_max = 0.0, alpha_max = 0.0, resid_deg = 0.0, max_angle_hold_deg = 0.0;
     double diff_max_deg = std::numeric_limits<double>::quiet_NaN(), diff_rms_deg = std::numeric_limits<double>::quiet_NaN();
 };
 
 // Intervals shorter than kDt/2 (a possible final remainder when tau is not a multiple of dt) are left out of the
 // omega/alpha extrema (finite-difference noise) but counted in the swept angle.
-Metrics profileMetrics(const Profile& p, const Eigen::Quaterniond& q_goal) {
+Metrics profileMetrics(const Profile& p, const Eigen::Quaterniond& q_goal, const Eigen::Quaterniond& q_hold) {
     Metrics m;
     std::vector<Eigen::Vector3d> w;
     std::vector<double> tm;
@@ -236,6 +201,7 @@ Metrics profileMetrics(const Profile& p, const Eigen::Quaterniond& q_goal) {
     for (size_t i = 1; i < w.size(); ++i)
         m.alpha_max = std::max(m.alpha_max, (w[i] - w[i - 1]).norm() / (tm[i] - tm[i - 1]));
     m.resid_deg = go::quatAngleRad(p.q.back(), q_goal) * kRad2Deg;
+    for (const auto& q : p.q) m.max_angle_hold_deg = std::max(m.max_angle_hold_deg, go::quatAngleRad(q, q_hold) * kRad2Deg);
     return m;
 }
 
@@ -281,13 +247,12 @@ int main(int argc, char** argv) {
         const double omega_rad_s = std::fabs(args.omega_deg_s) / kRad2Deg;
         const double delta_rad = kPhaseFraction * omega_rad_s * tau;
 
-        struct Variant { std::string name; double sign; };
-        const std::vector<Variant> variants = {{"nominal", 0.0}, {"phase_p20", +1.0}, {"phase_m20", -1.0}};
+        const std::vector<Variant> variants_ = variants();
 
         std::filesystem::create_directories(args.out);
         std::ofstream sum(args.out + "/summary.csv");
         if (!sum) throw std::runtime_error("cannot write summary.csv in " + args.out);
-        sum << "variant,delta_deg,law,swept_deg,omega_max_rad_s,alpha_max_rad_s2,resid_at_tau_deg,diff_vs_slerp_max_deg,"
+        sum << "variant,delta_deg,law,swept_deg,omega_max_rad_s,alpha_max_rad_s2,resid_at_tau_deg,max_angle_from_hold_deg,diff_vs_slerp_max_deg,"
                "diff_vs_slerp_rms_deg\n";
 
         std::cout << std::fixed << std::setprecision(4);
@@ -306,16 +271,9 @@ int main(int argc, char** argv) {
         // frame is reached with the FrameAligner's orientation offset (ros_utils.hpp, align()):
         //   Q = q_hold * q_demo(0)^-1, applied by LEFT multiplication, q_out = (Q * q_rollout).normalized().
         const Eigen::Quaterniond q_demo0 = qdmp_file.q0().normalized();
-        const Eigen::Quaterniond Q = (q_hold * q_demo0.conjugate()).normalized();
-        auto runQdmp = [&](const Eigen::Quaterniond& start, const Eigen::Quaterniond& goal_demo) {
-            hdl::QuaternionDMP qd = qdmp_file;  // keeps alpha_x/alpha_z/beta_z/n_basis of the fit
-            qd.setLearnedParameters(tau, start, go::alignShortestPath(start, goal_demo), qdmp_file.centers(),
-                                    qdmp_file.widths(), qdmp_file.weights(), Eigen::Vector3d::Zero());
-            qd.reset();
-            std::vector<Eigen::Quaterniond> r;
-            r.reserve(grid.size());
-            for (size_t i = 0; i < grid.size(); ++i) r.push_back(i == 0 ? qd.orientation() : qd.step(grid[i] - grid[i - 1]));
-            return r;
+        const Eigen::Quaterniond Q = qdmpFrameOffset(q_hold, q_demo0);
+        auto runQdmp = [&](const Eigen::Quaterniond& start, const Eigen::Quaterniond& goal_demo, const Eigen::Vector3d& eta0) {
+            return orientation_laws::runQdmp(qdmp_file, tau, grid, start, goal_demo, eta0);
         };
         std::cout << "QDMP weights: DEMO frame (q_demo(0) from weights file xyzw=[" << q_demo0.x() << ' ' << q_demo0.y() << ' '
                   << q_demo0.z() << ' ' << q_demo0.w() << "]); output = Q * q_rollout, Q = q_hold * q_demo(0)^-1 (rotation "
@@ -337,37 +295,33 @@ int main(int argc, char** argv) {
                       << go::quatAngleRad(d0, d1) * kRad2Deg << " deg\n  angle(csv q(0), weights q0) "
                       << go::quatAngleRad(d0, q_demo0) * kRad2Deg << " deg, angle(csv q(end), weights goal) "
                       << go::quatAngleRad(d1, qdmp_file.goal()) * kRad2Deg << " deg\n";
-            const auto r = runQdmp(d0, d1);  // demo frame, start = q_demo(0), goal = q_demo(end), tau of the demo-params
+            // Reproduction control: the file's own eta0 (initial angular-velocity offset of the fit), NOT zero.
+            const Eigen::Vector3d eta0_file = qdmp_file.eta0();
+            const auto r = runQdmp(d0, d1, eta0_file);  // demo frame, start = csv q(0), goal = csv q(end), tau of the demo-params
             double emax = 0.0, esq = 0.0;
             for (size_t i = 0; i < grid.size(); ++i) {
                 const double e = go::quatAngleRad(r[i], sampleProfile(demo, demo.t.front() + grid[i])) * kRad2Deg;
                 emax = std::max(emax, e);
                 esq += e * e;
             }
+            std::cout << "  reproduction control: eta0 = FROM THE WEIGHTS FILE (|eta0| = " << eta0_file.norm()
+                      << " rad/s); grasp rollouts below: eta0 = 0 (start from rest)\n";
             std::cout << "  reproduction (QDMP, demo frame, start=q(0), goal=q(end)): max err " << emax << " deg, RMS "
                       << std::sqrt(esq / grid.size()) << " deg, residual at tau " << go::quatAngleRad(r.back(), d1) * kRad2Deg
                       << " deg\n";
         }
 
-        for (const Variant& v : variants) {
+        for (const Variant& v : variants_) {
             const double delta = v.sign * delta_rad;
             // q_goal(theta + delta) = R_axis(delta) * q_goal(theta); realigned to the hold hemisphere
-            const Eigen::Quaterniond q_goal =
-                go::alignShortestPath(q_hold, (Eigen::Quaterniond(Eigen::AngleAxisd(delta, args.axis)) * q_goal_nom).normalized());
+            const Eigen::Quaterniond q_goal = variantGoal(q_hold, q_goal_nom, args.axis, delta);
 
             std::array<Profile, 3> prof;
-            for (auto& p : prof) { p.t = grid; p.q.reserve(grid.size()); }
-            const auto qroll = runQdmp(q_demo0, Q.conjugate() * q_goal);
-            for (size_t i = 0; i < grid.size(); ++i) {
-                const double t = grid[i];
-                const double u = std::min(1.0, t / tau);
-                prof[0].q.push_back(go::slerpAt(q_hold, q_goal, t, tau));
-                prof[1].q.push_back(hdl::slerpShortestPath(q_hold, q_goal, u * u * u * (10.0 - 15.0 * u + 6.0 * u * u)));
-                prof[2].q.push_back((Q * qroll[i]).normalized());
-            }
+            const auto laws = buildLawProfiles(grid, tau, q_hold, q_goal, qdmp_file, Q, q_demo0);
+            for (size_t l = 0; l < 3; ++l) { prof[l].t = grid; prof[l].q = laws[l]; }
 
             std::array<Metrics, 3> met;
-            for (size_t l = 0; l < 3; ++l) met[l] = profileMetrics(prof[l], q_goal);
+            for (size_t l = 0; l < 3; ++l) met[l] = profileMetrics(prof[l], q_goal, q_hold);
             double dmax = 0.0, dsq = 0.0;
             for (size_t i = 0; i < grid.size(); ++i) {
                 const double d = go::quatAngleRad(prof[0].q[i], prof[2].q[i]) * kRad2Deg;
@@ -382,13 +336,13 @@ int main(int argc, char** argv) {
                       << "], angle hold->goal = " << go::quatAngleRad(q_hold, q_goal) * kRad2Deg
                       << " deg, QDMP weights in demo frame)\n"
                       << std::left << std::setw(9) << "law" << std::right << std::setw(12) << "swept[deg]" << std::setw(14)
-                      << "|w|max[rad/s]" << std::setw(16) << "|a|max[rad/s2]" << std::setw(14) << "resid@tau[deg]" << '\n';
+                      << "|w|max[rad/s]" << std::setw(16) << "|a|max[rad/s2]" << std::setw(14) << "resid@tau[deg]" << std::setw(16) << "maxang_hold[deg]" << '\n';
             for (size_t l = 0; l < 3; ++l) {
                 std::cout << std::left << std::setw(9) << kLaws[l] << std::right << std::setw(12) << met[l].swept_deg
                           << std::setw(14) << met[l].omega_max << std::setw(16) << met[l].alpha_max << std::setw(14)
-                          << met[l].resid_deg << '\n';
+                          << met[l].resid_deg << std::setw(16) << met[l].max_angle_hold_deg << '\n';
                 sum << v.name << ',' << num(delta * kRad2Deg) << ',' << kLaws[l] << ',' << num(met[l].swept_deg) << ','
-                    << num(met[l].omega_max) << ',' << num(met[l].alpha_max) << ',' << num(met[l].resid_deg) << ','
+                    << num(met[l].omega_max) << ',' << num(met[l].alpha_max) << ',' << num(met[l].resid_deg) << ',' << num(met[l].max_angle_hold_deg) << ','
                     << num(l == 2 ? met[l].diff_max_deg : std::numeric_limits<double>::quiet_NaN()) << ','
                     << num(l == 2 ? met[l].diff_rms_deg : std::numeric_limits<double>::quiet_NaN()) << '\n';
             }
