@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
@@ -41,6 +42,9 @@ struct FeasibilityResult {
  * simulated with JointPathSimulator (NullspaceBiasedResolution) and checked against the joint limits
  * of @p robot_model. It knows nothing about grasp points, phase or roll: the caller supplies the pose.
  *
+ * @param q_ref Nullspace posture target of the simulated controller. Default (nullopt) = @p q0, i.e. the behaviour
+ *              before this argument existed (bit-identical). Set it to decouple the seed from the target (the real
+ *              impedance controller holds the nullspace target at its activation pose, not at the planner's q_start).
  * @param prodmp_template Learned ProDMP; NOT modified (a local copy is rolled out, since step() mutates).
  * @param robot_model Shared (not const) because JointPathSimulator holds a shared_ptr and update() mutates
  *                    the model's cached FK/Jacobian; its cached state is left at the final configuration.
@@ -62,7 +66,8 @@ FeasibilityResult checkKinematicFeasibility(
     const franka_cartesian_control::core::RobotModel::JointVector& q0 =
         franka_cartesian_control::core::RobotModel::readyPose(),
     double dt = 0.005,
-    double max_joint_violation_tol_rad = 1e-4);
+    double max_joint_violation_tol_rad = 1e-4,
+    const std::optional<franka_cartesian_control::core::RobotModel::JointVector>& q_ref = std::nullopt);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

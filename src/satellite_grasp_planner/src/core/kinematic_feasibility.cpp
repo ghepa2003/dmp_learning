@@ -19,7 +19,8 @@ FeasibilityResult checkKinematicFeasibility(
     const std::shared_ptr<RobotModel>& robot_model,
     const RobotModel::JointVector& q0,
     double dt,
-    double max_joint_violation_tol_rad) {
+    double max_joint_violation_tol_rad,
+    const std::optional<RobotModel::JointVector>& q_ref) {
     if (!robot_model) {
         throw std::invalid_argument("checkKinematicFeasibility: robot_model is null.");
     }
@@ -56,7 +57,7 @@ FeasibilityResult checkKinematicFeasibility(
     sim_params.dt = dt;
     sim_params.strategy = std::make_shared<NullspaceBiasedResolution>(ns_params);
     const JointPathSimulator sim(robot_model, sim_params);
-    const auto steps = sim.simulate(trajectory, q0);
+    const auto steps = sim.simulate(trajectory, q0, q_ref.value_or(q0));
 
     FeasibilityResult res;
     if (steps.empty()) {

@@ -1,0 +1,63 @@
+# Criteri di successo di una presa S1, calcolati da tools/s1_report.py (t = AT_END dell'executor,
+# tempo simulato /clock). Ogni criterio: min / max inclusivi, lt = massimo escluso; bool = valore atteso.
+# Grandezze in mm. Un criterio con valore non finito (NaN) NON e' soddisfatto.
+#
+# Soglie fissate il 15/10/2026 DOPO aver visto campaign_c e visual_sq2. Valori osservati allora:
+# f_sum plateau 9.64 mm, min_f plateau 4.68 mm, slittamento tang/axial 0.056/0.093 mm in +3..+8 s,
+# pad a cavallo in tutti gli istanti.
+#
+# Criterio 11 (min_joint_margin_deg): aggiunto il 19/10/2026 dopo aver visto il run scaleA_A8;
+# i criteri 1-10 sono del 15/10/2026; criterio post hoc.
+#
+# Solo riportati, SENZA soglia: tcp_cube_var_close_3_8s e 3_15s, wz_cube_mean_4_8s, yaw_slope_6_12s.
+# (min_f_5s e tcp_cube_var_3_8s non sono piu' criteri; le colonne restano nel CSV.)
+# Se il bag finisce prima di +20 s i criteri sul plateau sono NaN => il run non e' un successo.
+
+# media di f1 + f2 in [+10, +20] s
+f_sum_plateau_10_20s:
+  min: 8.0
+  max: 11.0
+
+# min(media f1, media f2) in [+10, +20] s: entrambe le dita in contatto
+min_f_plateau_10_20s:
+  min: 1.0
+
+# max(componente tangenziale, componente assiale) di |TCP_cubo(t) - TCP_cubo(+3 s)|, t in [+3, +15] s
+# Soglia 0.5 mm (era 1.0): valori osservati per prese buone <= 0.1 mm, per le cattive >= 1.15 mm;
+# la classificazione non cambia per soglie tra 0.2 e 1.1 mm.
+slip_tang_axial_3_15s:
+  max: 0.5
+
+# i pad stanno ai lati della parete del collare (uno dentro, uno fuori) a +2, +5 e +15 s
+pad_straddle_2s: true
+pad_straddle_5s: true
+pad_straddle_15s: true
+
+# spostamento massimo del centro del cubo rispetto alla prima odometria, prima di AT_END
+cube_disp_pre_end_mm:
+  lt: 0.3
+
+# --- criteri sul fondo della finestra registrata (rel AT_END, vedi s1_report.py)
+# Se la finestra registrata dopo AT_END e' piu' corta di min_window_after_at_end_s (s, parametro:
+# non e' un criterio; sovrascrivibile con --min-window-s) i tre criteri sotto sono NaN e il run NON
+# e' un successo ("finestra registrata troppo corta" nel report.txt).
+min_window_after_at_end_s: 40
+
+# media di f1 + f2 negli ultimi 10 s della finestra
+gap_end_mean_last10s:
+  min: 8.0
+  max: 11.0
+
+# i pad stanno ai lati della parete del collare sull'ultimo campione
+pad_straddle_end: true
+
+# come slip_tang_axial_3_15s ma da +3 s a fine finestra
+slip_tang_axial_3_end:
+  max: 0.5
+
+# --- criterio 11 (deg): margine di giunto minimo misurato, min sui 7 giunti di min(q - inf, sup - q)
+# (limiti del URDF), finestra [TRIGGER, AT_END + follow_s].
+# aggiunto il 19/10/2026 dopo aver visto il run scaleA_A8; i criteri 1-10 sono del 15/10/2026; criterio post hoc
+# (scaleA_A8 passava i 10 criteri con il giunto 6 a margine 0.00 deg a +3.0 s da AT_END, 3.08 al contatto).
+min_joint_margin_deg:
+  min: 10

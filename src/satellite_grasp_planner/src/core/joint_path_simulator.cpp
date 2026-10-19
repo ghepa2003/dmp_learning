@@ -113,6 +113,12 @@ JointPathSimulator::JointPathSimulator(std::shared_ptr<RobotModel> robot_model,
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0) const {
+    return simulate(trajectory, q0, q0);
+}
+
+std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
+    const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
+    const RobotModel::JointVector& q_ref) const {
     std::vector<Step> steps;
     steps.reserve(trajectory.size());
     if (trajectory.empty()) {
@@ -133,7 +139,7 @@ std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
 
         // 2. Delegate redundancy resolution to the configured strategy.
         const CartesianSample& target = trajectory[i];
-        auto dq_cmd = params_.strategy->computeJointVelocity(*robot_model_, target, q, q0);
+        auto dq_cmd = params_.strategy->computeJointVelocity(*robot_model_, target, q, q_ref);
 
         // 3. Explicit-Euler forward integration of the joint path.
         q += dq_cmd * params_.dt;

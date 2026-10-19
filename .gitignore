@@ -31,6 +31,8 @@ pinocchio_test/
 !/tools/**/*.md
 !/tools/**/CMakeLists.txt
 !/tools/COLCON_IGNORE
+!/tools/s1_*.py
+!/tools/s1_success.yaml
 !/tools/backup_1007_files/*.patch
 !/tools/backup_1007_files/*.txt
 /tools/**/__pycache__/

@@ -157,6 +157,14 @@ public:
     std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory,
                                 const RobotModel::JointVector& q0) const;
 
+    /**
+     * @brief Same as simulate(trajectory, q0) but with the seed of the Euler integration (@p q_seed) decoupled from the
+     *        nullspace posture target passed to the strategy (@p q_ref). simulate(trajectory, q0) is exactly
+     *        simulate(trajectory, q0, q0) (same operations, bit-identical).
+     */
+    std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
+                               const RobotModel::JointVector& q_ref) const;
+
     const Params& params() const { return params_; }
 
 private:

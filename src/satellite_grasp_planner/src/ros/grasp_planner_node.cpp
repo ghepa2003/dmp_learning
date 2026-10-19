@@ -1,6 +1,8 @@
 #include "satellite_grasp_planner/ros/grasp_planner_node.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -157,6 +159,26 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.force_theta_deg = dbl("s1.force_theta_deg", p.force_theta_deg);
         p.force_psi_deg = dbl("s1.force_psi_deg", p.force_psi_deg);
         p.force_ignore_constraints = bol("s1.force_ignore_constraints", p.force_ignore_constraints);
+        const int64_t force_flip = this->declare_parameter<int64_t>("s1.force_flip", p.force_flip);
+        if (force_flip < -1 || force_flip > 1) {
+            throw std::invalid_argument("parameter s1.force_flip out of range (must be -1, 0 or 1)");
+        }
+        p.force_flip = static_cast<int>(force_flip);
+        // Wrist-branch rule ("margin" | "rotation"), validated by validateS3Params below: unknown value = startup error.
+        p.branch_rule = this->declare_parameter<std::string>("s1.branch_rule", p.branch_rule);
+        // Mode v2 (see S3Params::mode). "legacy" (default) ignores every parameter below. Validated by validateS3Params.
+        p.mode = this->declare_parameter<std::string>("s1.mode", p.mode);
+        p.max_start_goal_deg = dbl("s1.max_start_goal_deg", p.max_start_goal_deg);
+        const int64_t finalists_n = this->declare_parameter<int64_t>("s1.finalists_n", p.finalists_n);
+        if (finalists_n < 1 || finalists_n > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument("parameter s1.finalists_n out of range (must be >= 1)");
+        }
+        p.finalists_n = static_cast<int>(finalists_n);
+        p.rollout_q_ref = this->declare_parameter<std::vector<double>>("s1.rollout_q_ref", p.rollout_q_ref);
+        p.use_w = bol("s1.use_w", p.use_w);
+        p.kappa_w_mm = dbl("s1.kappa_w", p.kappa_w_mm);
+        p.kappa_t_mm_s = dbl("s1.kappa_t", p.kappa_t_mm_s);
+        p.tau_j_mm = dbl("s1.tau_j_mm", p.tau_j_mm);
         const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
         const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
         if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
@@ -166,6 +188,11 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.ik.max_iter = static_cast<int>(max_iter);
         p.max_posthoc_candidates = static_cast<int>(max_posthoc);
         core::validateS3Params(p);  // fail at startup, not after the first odometry sample
+        if (core::parseS3Mode(p.mode) == core::S3Mode::kV2 && p.branch_rule == "margin") {
+            RCLCPP_WARN(this->get_logger(),
+                        "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
+                        "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
+        }
     }
 
     // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
@@ -230,9 +257,23 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
 
         if (s3_params_.force) {
-            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: FORCED k=%d theta=%.4f deg psi=%.4f deg (ignore_constraints=%s)",
+            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: FORCED k=%d theta=%.4f deg psi=%.4f deg force_flip=%s "
+                        "(ignore_constraints=%s)",
                         s3_params_.force_k, s3_params_.force_theta_deg, s3_params_.force_psi_deg,
+                        s3_params_.force_flip < 0 ? "auto(-1)" : (s3_params_.force_flip ? "1 (branch B)" : "0 (branch A)"),
                         s3_params_.force_ignore_constraints ? "true" : "false");
+        }
+        const bool v2 = core::parseS3Mode(s3_params_.mode) == core::S3Mode::kV2;
+        if (v2) {
+            std::ostringstream q;
+            for (std::size_t i = 0; i < s3_params_.rollout_q_ref.size(); ++i) q << (i ? ", " : "") << s3_params_.rollout_q_ref[i];
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: s1.mode=v2 branch_rule=%s use_w=%s kappa_w=%.3f mm kappa_t=%.3f mm/s tau_j=%.3f mm "
+                        "finalists_n=%d max_start_goal_deg=%.2f r_trust_m=%.3f posthoc_cluster_deg=%.2f rollout_q_ref=[%s] "
+                        "(w_hat_min and margin_min_rad NOT applied)",
+                        s3_params_.branch_rule.c_str(), s3_params_.use_w ? "true" : "false", s3_params_.kappa_w_mm,
+                        s3_params_.kappa_t_mm_s, s3_params_.tau_j_mm, s3_params_.finalists_n, s3_params_.max_start_goal_deg,
+                        s3_params_.r_trust_m, s3_params_.posthoc_cluster_deg, q.str().c_str());
         }
         core::S3Result s3_result;
         const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
@@ -243,11 +284,38 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                     static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
                     s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                     s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
+        if (v2) {
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
+                        "start_goal_deg rollout_err_mm rollout_err_deg");
+            const std::size_t n_rows = std::min<std::size_t>(s3_result.v2_finalists.size(), 12);
+            for (std::size_t i = 0; i < n_rows; ++i) {
+                const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
+                char jbuf[32];
+                if (f.rollout_feasible) {
+                    std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
+                } else {
+                    std::snprintf(jbuf, sizeof(jbuf), "n/a");
+                }
+                RCLCPP_INFO(this->get_logger(),
+                            "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
+                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s",
+                            i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
+                            f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
+                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg,
+                            f.rollout_feasible ? "" : " ROLLOUT_INFEASIBLE", f.winner ? " WINNER" : "");
+            }
+        }
         if (result.status == core::GraspLaunchResult::Status::kSelected) {
             RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: selected k=%d theta=%.4f deg psi=%.4f deg wrist_flip=%d wait_s=%.4f%s",
+                        "grasp_planner_node: selected k=%d theta=%.4f deg psi=%.4f deg wrist_flip=%d (force_flip=%d) "
+                        "branch_rule=%s start_goal_deg[A]=%.2f start_goal_deg[B]=%.2f wait_s=%.4f%s",
                         static_cast<int>(result.k.value()), result.theta_star_rad.value() * 180.0 / M_PI,
-                        result.psi_rad * 180.0 / M_PI, result.wrist_flip ? 1 : 0, s3_result.chosen.wait_s,
+                        result.psi_rad * 180.0 / M_PI, result.wrist_flip ? 1 : 0, s3_params_.force_flip,
+                        s3_params_.branch_rule.c_str(),
+                        s3_result.chosen.eval.branch_rot_rad[0] * 180.0 / M_PI,
+                        s3_result.chosen.eval.branch_rot_rad[1] * 180.0 / M_PI,
+                        s3_result.chosen.wait_s,
                         s3_params_.force ? " [FORCED]" : "");
         }
         if (!s3_result.forced_violations.empty()) {

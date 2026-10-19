@@ -61,6 +61,25 @@ grasp_planner_node:
     # s1.w_hat_min: 0.5                # constraint: w_trans / w_trans_demo >= w_hat_min
     # s1.margin_min_rad: 0.3           # constraint: min joint-limit margin of the IK solution
     # s1.r_trust_m: 0.30               # constraint: d_pos <= r_trust
+    # --- mode v2 (default "legacy" = everything below is ignored and the behaviour is unchanged) ---
+    # s1.mode: "legacy"                # "legacy" | "v2" (other = startup error)
+    # v2 = static scan (ik + joint limits + r_trust + max_start_goal_deg; w_hat_min / margin_min_rad NOT applied) ->
+    #      finalists (best J_static per k x wrist branch x theta cluster of posthoc_cluster_deg) -> kinematic rollout
+    #      with nullspace target s1.rollout_q_ref -> J = d_mm + kappa_w*(-ln w_full) + kappa_t*t_wait -> among
+    #      J <= J_min + tau_j the smallest t_wait -> post-hoc velocity check on the winner. Use s1.branch_rule: "rotation".
+    # s1.max_start_goal_deg: 180.0     # discard candidates whose start-goal rotation exceeds this (180 = off; data: 16.5, 34.5 ok, 179.6 fails)
+    # s1.finalists_n: 12               # >= 1
+    # s1.use_w: true                   # false: J = d_mm (+ kappa_t * t_wait)
+    # s1.kappa_w: 7.5                  # mm, ASSUMED, >= 0
+    # s1.kappa_t: 0.0                  # mm/s, >= 0
+    # s1.tau_j_mm: 2.0                 # mm, ASSUMED, >= 0
+    # s1.rollout_q_ref MANDATORY in v2 (no default): must coincide with the controller's nullspace target. The impedance
+    # controller sets it to its joint configuration AT ACTIVATION (cartesian_impedance_controller.cpp:313), i.e. the
+    # initial_value of franka_arm.ros2_control.xacro:51 ("ready" = [0, -pi/4, 0, -3*pi/4, 0, pi/2, pi/4], same as
+    # RobotModel::readyPose(), robot_model.cpp:81) unless FRANKA_START_POSE is set. It is NOT in
+    # franka_gazebo_controllers.yaml (its cartesian_impedance_controller block, lines ~112-131, has only the stiffnesses).
+    # s1.rollout_q_ref: [0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397]
+    # s1.branch_rule: "margin"         # wrist branch when both IKs converge: "margin" (static joint margin) | "rotation" (smaller angle to FK(q_start)); other = startup error; s1.force_flip >= 0 wins
     # s1.delta_v_max_m_s: 3.0e-3       # post-hoc: |v_target - v_ProDMP| at contact
     # s1.theta_step_deg: 2.0           # coarse theta scan over [-180, 180)
     # s1.theta_refine_step_deg: 0.1    # refinement of the best candidate of each k, +- theta_step_deg

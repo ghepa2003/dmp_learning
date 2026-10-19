@@ -16,6 +16,7 @@ namespace core {
 namespace {
 
 constexpr double kMarginTieRad = 1e-3;
+constexpr double kRotationTieRad = 1e-3;
 /// Damping of the nullspace projector: small, so that N = I - J^# J is (nearly) an exact projector and the
 /// nullspace pull does not leak into the task and bias the converged pose error.
 constexpr double kProjectorDamping = 1e-3;
@@ -27,12 +28,14 @@ struct Branch {
     double dq_norm = 0.0;
 };
 
-bool better(const Branch& a, const Branch& b) {
+/// rot_a / rot_b: angle to the demo orientation of a / b, read only when rule == kRotation.
+bool better(const Branch& a, const Branch& b, BranchRule rule, double rot_a, double rot_b) {
     if (a.ik.converged != b.ik.converged) return a.ik.converged;
     if (!a.ik.converged) {
         if (a.ik.pos_err_m != b.ik.pos_err_m) return a.ik.pos_err_m < b.ik.pos_err_m;
         return a.ik.ori_err_rad < b.ik.ori_err_rad;
     }
+    if (rule == BranchRule::kRotation && std::abs(rot_a - rot_b) > kRotationTieRad) return rot_a < rot_b;
     if (std::abs(a.margins.min_margin_rad - b.margins.min_margin_rad) > kMarginTieRad) {
         return a.margins.min_margin_rad > b.margins.min_margin_rad;
     }
@@ -40,6 +43,12 @@ bool better(const Branch& a, const Branch& b) {
 }
 
 }  // namespace
+
+BranchRule parseBranchRule(const std::string& name) {
+    if (name == "margin") return BranchRule::kMargin;
+    if (name == "rotation") return BranchRule::kRotation;
+    throw std::invalid_argument("branch_rule: unknown value '" + name + "' (expected 'margin' or 'rotation').");
+}
 
 IkResult solvePoseIk(RobotModel& robot, const Eigen::Vector3d& position,
                      const Eigen::Quaterniond& orientation, const RobotModel::JointVector& q_seed,
@@ -142,7 +151,11 @@ PoseEvaluationDetail evaluateGraspPoseDetailed(const haptic_dmp_learning::core::
                                                double psi_rad, RobotModel& robot,
                                                const RobotModel::JointVector& q_start, const DemoReference& demo,
                                                double length_scale_m, double angle_scale_rad,
-                                               const IkParams& params, bool compute_extra) {
+                                               const IkParams& params, bool compute_extra, int force_flip,
+                                               BranchRule branch_rule) {
+    if (force_flip < -1 || force_flip > 1) {
+        throw std::invalid_argument("evaluateGraspPose: force_flip must be -1, 0 or 1.");
+    }
     if (!(demo.w_trans_demo > 0.0)) {
         throw std::invalid_argument("evaluateGraspPose: demo.w_trans_demo must be > 0.");
     }
@@ -162,13 +175,20 @@ PoseEvaluationDetail evaluateGraspPoseDetailed(const haptic_dmp_learning::core::
                        : haptic_dmp_learning::core::applyRoll(ev.pose.orientation_nominal_world, psi_rad),
         haptic_dmp_learning::core::applyRoll(ev.pose.orientation_nominal_world,
                                              haptic_dmp_learning::core::kPi + psi_rad)};
+    // Orientation-only: filled for both branches whatever the IK or force_flip do (same function as dist_to_demo).
+    for (int i = 0; i < 2; ++i) {
+        ev.branch_rot_rad[i] =
+            se3Distance(ev.pose.position_world, orient[i], demo.position, demo.orientation, length_scale_m, angle_scale_rad)
+                .ori_rad;
+    }
     Branch br[2];
     for (int i = 0; i < 2; ++i) {
+        if (force_flip >= 0 && i != force_flip) continue;  // forced branch only
         br[i].ik = solvePoseIk(robot, ev.pose.position_world, orient[i], q_start, q_start, params);
         br[i].margins = jointMargins(robot, br[i].ik.q);
         br[i].dq_norm = (br[i].ik.q - q_start).norm();
     }
-    const int best = better(br[1], br[0]) ? 1 : 0;
+    const int best = force_flip >= 0 ? force_flip : (better(br[1], br[0], branch_rule, ev.branch_rot_rad[1], ev.branch_rot_rad[0]) ? 1 : 0);
 
     ev.wrist_flip = (best == 1);
     ev.ik = br[best].ik;
@@ -183,6 +203,8 @@ PoseEvaluationDetail evaluateGraspPoseDetailed(const haptic_dmp_learning::core::
     out.selected = best;
     for (int i = 0; i < 2; ++i) {
         BranchDetail& d = out.branch[i];
+        d.orientation = orient[i];
+        if (force_flip >= 0 && i != force_flip) continue;  // not evaluated: only the orientation is meaningful
         d.converged = br[i].ik.converged;
         d.limits_ok = br[i].ik.limits_ok;
         d.q = br[i].ik.q;

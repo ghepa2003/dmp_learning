@@ -11,6 +11,8 @@
  * frame in the planner (robot_base_world = 0). The RobotModel end-effector frame must be fer_hand_tcp.
  */
 
+#include <string>
+
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
@@ -93,12 +95,27 @@ struct PoseEvaluation {
     JointMargins margins;     ///< at ik.q
     Se3Distance dist_to_demo; ///< target pose of the CHOSEN branch vs the demo end pose
     bool feasible_basic = false;  ///< ik.converged && ik.limits_ok (no w_hat / margin thresholds here)
+    /// Geodesic angle [rad] between demo.orientation (FK(q_start) in planGraspAndLaunchS1) and the target orientation of
+    /// branch 0 / 1, independent of IK convergence and of force_flip (both are always filled). The entry of the chosen
+    /// branch equals dist_to_demo.ori_rad bit for bit.
+    double branch_rot_rad[2] = {0.0, 0.0};
 };
 
 /// Orientation of the CHOSEN branch of @p eval: applyRoll(q_nominal, psi + (wrist_flip ? pi : 0)). Rolls about the same
 /// axis (local z_tcp) commute, so this equals applyRoll(applyRoll(qn, psi), pi). For psi == 0 and no flip it returns
 /// the nominal quaternion unmodified (bit-identical to the pre-psi code).
 Eigen::Quaterniond goalOrientation(const PoseEvaluation& eval);
+
+/// How evaluateGraspPoseDetailed picks between the two wrist branches when both are solved (force_flip == -1).
+///  kMargin   (default, historical rule): converged first, then larger static joint margin, margins within 1 mrad:
+///            smaller ||q - q_start||.
+///  kRotation: converged first; if both converged, the branch with the smaller geodesic angle between its target
+///            orientation and demo.orientation; angles within 1 mrad: the kMargin rule. If not both converged, as kMargin.
+enum class BranchRule { kMargin, kRotation };
+
+/// "margin" -> kMargin, "rotation" -> kRotation (exact, case-sensitive). @throws std::invalid_argument otherwise
+/// (no fallback to the default).
+BranchRule parseBranchRule(const std::string& name);
 
 /// Per-branch diagnostics of evaluateGraspPoseDetailed (branch 0 = nominal orientation, 1 = nominal * Rz(pi)).
 /// The manipulability fields are filled only when compute_extra is true.
@@ -129,13 +146,22 @@ struct PoseEvaluationDetail {
  * used unmodified, so the result is bit-identical to the previous evaluateGraspPose.
  * compute_extra additionally fills w_trans / w_rot / w_full / smin_* for BOTH branches (one extra Jacobian pass per
  * branch); the robot model is left updated at the chosen branch's q, as evaluateGraspPose leaves it.
+ * force_flip: -1 (default) = both branches are solved and the better one wins (rule in `better()`, grasp_pose_eval.cpp,
+ * selected by branch_rule; kMargin: converged first, then larger static joint margin, margins within 1 mrad: smaller
+ * ||q - q_start||). 0 / 1 = ONLY that
+ * branch is solved and chosen (wrist_flip == force_flip); if its IK does not converge, feasible_basic is false and the
+ * other branch is NOT tried. The other BranchDetail is left default except `orientation`. force_flip >= 0 always takes
+ * precedence over branch_rule.
+ * branch_rule: only used when force_flip == -1; kMargin (default) is bit-identical to the code before the parameter.
+ * @throws std::invalid_argument if force_flip is not in {-1, 0, 1}.
  */
 PoseEvaluationDetail evaluateGraspPoseDetailed(const haptic_dmp_learning::core::CubeSatelliteModel& model,
                                                haptic_dmp_learning::core::GraspPointId k, double theta_rad,
                                                double psi_rad, RobotModel& robot,
                                                const RobotModel::JointVector& q_start, const DemoReference& demo,
                                                double length_scale_m, double angle_scale_rad,
-                                               const IkParams& params, bool compute_extra);
+                                               const IkParams& params, bool compute_extra, int force_flip = -1,
+                                               BranchRule branch_rule = BranchRule::kMargin);
 
 /**
  * Evaluates the grasp (k, theta): runs solvePoseIk for both gripper-equivalent orientations
