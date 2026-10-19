@@ -147,6 +147,16 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.ik.damping = dbl("s1.ik.damping", p.ik.damping);
         p.ik.nullspace_gain = dbl("s1.ik.nullspace_gain", p.ik.nullspace_gain);
         p.ik.max_step_rad = dbl("s1.ik.max_step_rad", p.ik.max_step_rad);
+        // Forced candidate (test mode, see S3Params::force). Validated by validateS3Params below: no fallback values.
+        p.force = bol("s1.force", p.force);
+        const int64_t force_k = this->declare_parameter<int64_t>("s1.force_k", p.force_k);
+        if (force_k < std::numeric_limits<int>::min() || force_k > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument("parameter s1.force_k out of range (must be 0..3)");
+        }
+        p.force_k = static_cast<int>(force_k);
+        p.force_theta_deg = dbl("s1.force_theta_deg", p.force_theta_deg);
+        p.force_psi_deg = dbl("s1.force_psi_deg", p.force_psi_deg);
+        p.force_ignore_constraints = bol("s1.force_ignore_constraints", p.force_ignore_constraints);
         const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
         const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
         if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
@@ -219,6 +229,11 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
             core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, start_state_);
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
 
+        if (s3_params_.force) {
+            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: FORCED k=%d theta=%.4f deg psi=%.4f deg (ignore_constraints=%s)",
+                        s3_params_.force_k, s3_params_.force_theta_deg, s3_params_.force_psi_deg,
+                        s3_params_.force_ignore_constraints ? "true" : "false");
+        }
         core::S3Result s3_result;
         const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
             in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result);
@@ -228,6 +243,18 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                     static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
                     s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                     s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
+        if (result.status == core::GraspLaunchResult::Status::kSelected) {
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: selected k=%d theta=%.4f deg psi=%.4f deg wrist_flip=%d wait_s=%.4f%s",
+                        static_cast<int>(result.k.value()), result.theta_star_rad.value() * 180.0 / M_PI,
+                        result.psi_rad * 180.0 / M_PI, result.wrist_flip ? 1 : 0, s3_result.chosen.wait_s,
+                        s3_params_.force ? " [FORCED]" : "");
+        }
+        if (!s3_result.forced_violations.empty()) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "grasp_planner_node: FORCED candidate VIOLATES constraints (force_ignore_constraints=true), "
+                         "proceeding anyway: %s", s3_result.forced_violations.c_str());
+        }
 
         rclcpp::Time now = this->get_clock()->now();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);

@@ -14,7 +14,8 @@ namespace core {
 
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot,
                                        double min_delay_s, const S3Params& s3,
-                                       std::optional<double> t_now_override_s, S3Result* s3_result_out) {
+                                       std::optional<double> t_now_override_s, S3Result* s3_result_out,
+                                       std::vector<S3EvalRecord>* eval_log) {
     if (!std::isfinite(min_delay_s) || min_delay_s < 0.0) {
         throw std::invalid_argument("planGraspAndLaunchS1: min_delay_s must be finite and >= 0.");
     }
@@ -50,6 +51,7 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     ctx.snapshot = snapshot;
     ctx.t_now_s = t_now_override_s.value_or(snapshot.t_s);
     ctx.min_delay_s = min_delay_s;
+    ctx.eval_log = eval_log;
 
     const S3Result r = selectGraspS3(model, robot, in.q0, demo, in.delta_g_demo, ctx, s3);
     const double elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
@@ -68,10 +70,8 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     out.tau_launch_s = tau_launch_s;
 
     const S3Candidate& c = r.chosen;
-    const Eigen::Quaterniond& q_nominal = c.eval.pose.orientation_nominal_world;
-    const Eigen::Quaterniond q_goal =
-        c.eval.wrist_flip ? haptic_dmp_learning::core::applyRoll(q_nominal, haptic_dmp_learning::core::kPi)
-                          : q_nominal;
+    // applyRoll(qn, psi + (flip ? pi : 0)): rolls about the same axis (z_tcp) commute.
+    const Eigen::Quaterniond q_goal = goalOrientation(c.eval);
     const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
 
     const double t_now_s = t_now_override_s.value_or(snapshot.t_s + elapsed_s);
@@ -81,6 +81,7 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     out.k = c.eval.k;
     out.theta_star_rad = c.eval.theta_rad;
     out.wrist_flip = c.eval.wrist_flip;
+    out.psi_rad = c.eval.psi_rad;
     out.cost = c.cost;
     out.d_pos_m = c.d_pos_m;
     out.w_hat = c.eval.w_hat;

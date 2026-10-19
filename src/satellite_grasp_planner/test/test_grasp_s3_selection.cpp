@@ -13,6 +13,7 @@
 
 #include "test_fixtures.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
+#include "haptic_dmp_learning/core/tcp_roll.hpp"
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
 
@@ -313,4 +314,156 @@ TEST(GraspS3Test, InvalidInputsThrow) {
     EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, bad, p), std::invalid_argument);
     p.theta_step_deg = 0.0;
     EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
+}
+
+// ---- psi propagation and forced candidate (written without being able to build/run: see the hand-over report) ----
+
+TEST(GraspS3PsiTest, GoalOrientationPsiZeroIsNominalBitForBit) {
+    PoseEvaluation e;
+    e.pose.orientation_nominal_world = Eigen::Quaterniond(0.3, -0.5, 0.2, 0.7).normalized();
+    e.psi_rad = 0.0;
+    e.wrist_flip = false;
+    EXPECT_TRUE(goalOrientation(e).coeffs() == e.pose.orientation_nominal_world.coeffs());
+    e.wrist_flip = true;  // psi = 0 with flip == the previous applyRoll(qn, pi)
+    EXPECT_TRUE(goalOrientation(e).coeffs() ==
+                haptic_dmp_learning::core::applyRoll(e.pose.orientation_nominal_world, M_PI).coeffs());
+}
+
+TEST(GraspS3PsiTest, GoalOrientationAddsRollAboutLocalZ) {
+    const Eigen::Quaterniond qn = Eigen::Quaterniond(0.3, -0.5, 0.2, 0.7).normalized();
+    const double psi = 4.0 * M_PI / 180.0;
+    for (bool flip : {false, true}) {
+        PoseEvaluation e;
+        e.pose.orientation_nominal_world = qn;
+        e.psi_rad = psi;
+        e.wrist_flip = flip;
+        const Eigen::Quaterniond want =
+            (qn * Eigen::Quaterniond(Eigen::AngleAxisd(psi + (flip ? M_PI : 0.0), Eigen::Vector3d::UnitZ()))).normalized();
+        EXPECT_LT(goalOrientation(e).angularDistance(want), 1e-12) << "flip=" << flip;
+        // the approach axis (local z) does not move
+        EXPECT_LT((goalOrientation(e) * Eigen::Vector3d::UnitZ() - qn * Eigen::Vector3d::UnitZ()).norm(), 1e-12);
+    }
+}
+
+TEST(GraspS3PsiTest, EvaluationCarriesPsiAndBranchOrientations) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    ASSERT_NE(s.robot, nullptr);
+    const double psi = 3.0 * M_PI / 180.0;
+    const PoseEvaluationDetail d = evaluateGraspPoseDetailed(s.model, GraspPointId::kP0, 0.2, psi, *s.robot, s.q_start,
+                                                             s.demo, 0.10, 1.0, IkParams(), false);
+    const Eigen::Quaterniond& qn = d.eval.pose.orientation_nominal_world;
+    EXPECT_DOUBLE_EQ(d.eval.psi_rad, psi);
+    EXPECT_LT(d.branch[0].orientation.angularDistance(haptic_dmp_learning::core::applyRoll(qn, psi)), 1e-12);
+    EXPECT_LT(d.branch[1].orientation.angularDistance(haptic_dmp_learning::core::applyRoll(qn, M_PI + psi)), 1e-12);
+    EXPECT_LT(goalOrientation(d.eval).angularDistance(d.branch[d.selected].orientation), 1e-12);
+    // evaluateGraspPose (psi = 0 wrapper) keeps psi_rad == 0
+    EXPECT_EQ(evaluateGraspPose(s.model, GraspPointId::kP0, 0.2, *s.robot, s.q_start, s.demo, 0.10, 1.0).psi_rad, 0.0);
+}
+
+TEST(GraspS3ForceTest, DefaultKeepsScanAndPsiZero) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Params p = looseParams();
+    ASSERT_FALSE(p.force);
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (r.status != S3Result::kSelected) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
+    EXPECT_FALSE(r.forced);
+    EXPECT_GT(r.evaluations, 1);
+    EXPECT_EQ(r.chosen.psi_rad, 0.0);
+    EXPECT_EQ(r.chosen.eval.psi_rad, 0.0);
+    for (const auto& c : r.ranked) EXPECT_EQ(c.eval.psi_rad, 0.0);
+    // same IK solution, bit for bit, as the pre-psi evaluateGraspPose at the chosen (k, theta)
+    const PoseEvaluation old = evaluateGraspPose(s.model, r.chosen.eval.k, r.chosen.eval.theta_rad, *s.robot, s.q_start,
+                                                 s.demo, p.length_scale_m, p.angle_scale_rad, p.ik);
+    EXPECT_TRUE((old.ik.q.array() == r.chosen.eval.ik.q.array()).all());
+    EXPECT_EQ(old.wrist_flip, r.chosen.eval.wrist_flip);
+}
+
+TEST(GraspS3ForceTest, ForceSelectsExactlyTheGivenCandidate) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Params scan = looseParams();
+    const S3Result r0 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, scan);
+    if (r0.status != S3Result::kSelected) GTEST_SKIP() << "no feasible candidate in this fixture: " << r0.note;
+    // force a candidate that is NOT the winner (the second ranked one), psi = 0 first
+    ASSERT_GE(r0.ranked.size(), 2u);
+    const S3Candidate& other = r0.ranked[1];
+    S3Params p = scan;
+    p.force = true;
+    p.force_k = static_cast<int>(other.eval.k);
+    p.force_theta_deg = other.eval.theta_rad * 180.0 / M_PI;
+    p.force_psi_deg = 0.0;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    EXPECT_TRUE(r.forced);
+    EXPECT_EQ(r.evaluations, 1);
+    EXPECT_EQ(r.chosen.eval.k, other.eval.k);
+    EXPECT_NEAR(r.chosen.eval.theta_rad, other.eval.theta_rad, 1e-12);
+    EXPECT_NEAR(r.chosen.wait_s, other.wait_s, 1e-6);  // wait computed at the forced theta
+    EXPECT_NEAR(r.chosen.cost, other.cost, 1e-9);
+
+    // psi != 0: carried into the candidate (selection may legitimately fail IK for this fixture: then skip)
+    p.force_psi_deg = 2.0;
+    const S3Result rp = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (rp.status != S3Result::kSelected) GTEST_SKIP() << "psi=2 deg not feasible in this fixture: " << rp.note;
+    EXPECT_EQ(rp.evaluations, 1);
+    EXPECT_DOUBLE_EQ(rp.chosen.psi_rad, 2.0 * M_PI / 180.0);
+    EXPECT_DOUBLE_EQ(rp.chosen.eval.psi_rad, 2.0 * M_PI / 180.0);
+}
+
+TEST(GraspS3ForceTest, InfeasibleForcedCandidateGivesNoCandidateUnlessIgnored) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = looseParams();
+    p.w_hat_min = 5.0;  // nothing passes
+    p.force = true;
+    p.force_k = 0;
+    p.force_theta_deg = 0.0;
+    S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(r.status, S3Result::kNoCandidate);
+    EXPECT_EQ(r.evaluations, 1);
+    EXPECT_NE(r.note.find("FORCED"), std::string::npos);
+    EXPECT_NE(r.note.find("w_hat"), std::string::npos);
+
+    p.force_ignore_constraints = true;
+    r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(r.status, S3Result::kSelected);
+    EXPECT_EQ(r.evaluations, 1);
+    EXPECT_FALSE(r.chosen.passes_constraints);
+    EXPECT_NE(r.forced_violations.find("w_hat"), std::string::npos);
+}
+
+TEST(GraspS3ForceTest, InvalidForceInputsThrow) {
+    S3Params p;
+    p.force = true;
+    EXPECT_NO_THROW(validateS3Params(p));
+    S3Params q = p;
+    q.force_k = 4;
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force_k = -1;
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force_theta_deg = 180.5;
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force_theta_deg = std::nan("");
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force_psi_deg = 8.5;
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force_psi_deg = -8.5;
+    EXPECT_THROW(validateS3Params(q), std::invalid_argument);
+    q = p;
+    q.force = false;
+    q.force_k = 9;  // ignored while force is off
+    EXPECT_NO_THROW(validateS3Params(q));
 }

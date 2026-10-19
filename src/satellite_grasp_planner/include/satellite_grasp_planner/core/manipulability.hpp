@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <Eigen/Dense>
 #include <Eigen/SVD>
 
@@ -55,6 +56,40 @@ double wTransFromJacobian(const Eigen::MatrixBase<Derived>& Jt) {
         w *= sv(i);
     }
     return std::max(0.0, w);
+}
+
+
+/// Singular-value summary of a full 6xN geometric Jacobian (rows 0-2 linear [m], rows 3-5 angular [rad]).
+/// w_full = product of the 6 singular values of J = sqrt(det(J J^T)); w_trans / w_rot are the same product for the
+/// linear / angular 3xN blocks taken SEPARATELY (w_trans equals wTransFromJacobian); smin_* the smallest singular
+/// value of each block. Scaling the angular rows by c (S = diag(1,1,1,c,c,c)) gives det(S J J^T S) = c^6 det(J J^T),
+/// so w_full -> c^3 w_full exactly and ln(w_full) changes by 3 ln(c).
+struct FullManipulability {
+    double w_trans = 0.0;
+    double w_rot = 0.0;
+    double w_full = 0.0;
+    double smin_trans = 0.0;
+    double smin_rot = 0.0;
+};
+
+template <typename Derived>
+FullManipulability fullManipulability(const Eigen::MatrixBase<Derived>& J) {
+    if (J.rows() != 6) throw std::invalid_argument("fullManipulability: J must have 6 rows.");
+    const Eigen::MatrixXd Jm = J;
+    auto prodMin = [](const Eigen::MatrixXd& A, double& prod, double& smin) {
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(A);
+        const auto& sv = svd.singularValues();
+        double w = 1.0;
+        for (Eigen::Index i = 0; i < sv.size(); ++i) w *= sv(i);
+        prod = std::max(0.0, w);
+        smin = sv.size() > 0 ? sv.minCoeff() : 0.0;
+    };
+    FullManipulability out;
+    double unused = 0.0;
+    prodMin(Jm.topRows(3), out.w_trans, out.smin_trans);
+    prodMin(Jm.bottomRows(3), out.w_rot, out.smin_rot);
+    prodMin(Jm, out.w_full, unused);
+    return out;
 }
 
 /**

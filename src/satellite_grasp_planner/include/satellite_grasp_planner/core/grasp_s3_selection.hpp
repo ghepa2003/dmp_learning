@@ -48,6 +48,42 @@ struct S3Params {
     /// The post-hoc stage skips a candidate of the same k within this many degrees of theta of one already
     /// checked (near-duplicates). 0 disables the clustering.
     double posthoc_cluster_deg = 10.0;
+    /// Test mode: skip the scans and evaluate ONLY (force_k, force_theta_deg, force_psi_deg); ranking, post-hoc
+    /// checks, best_per_k and the chosen candidate follow unchanged. force_k in 0..3 (GraspPointId), force_theta_deg
+    /// in [-180, 180], |force_psi_deg| <= 8 (validateS3Params throws otherwise). A candidate violating an a-priori
+    /// or post-hoc constraint gives kNoCandidate / kPosthocFailed (reasons in S3Result::note), unless
+    /// force_ignore_constraints: then it is selected anyway and the violations are listed in
+    /// S3Result::forced_violations. Default: off, behaviour unchanged.
+    bool force = false;
+    int force_k = 0;
+    double force_theta_deg = 0.0;
+    double force_psi_deg = 0.0;
+    bool force_ignore_constraints = false;
+};
+
+/// A-priori rejection bits (selectGraspS3 cascade order: ik, w_hat, margin, r_trust). A candidate passes iff the
+/// mask is 0. The mask holds ALL failing constraints; S3Candidate::reject_reason keeps only the first one.
+enum S3RejectBit : unsigned { kRejectIk = 1u, kRejectWHat = 2u, kRejectMargin = 4u, kRejectRTrust = 8u };
+
+/// One row of the optional per-candidate log (S3Context::eval_log): one per evaluateGraspPose call of the scan, in
+/// call order. Filled with the same values the selection uses; wait_s / cost_current are computed for EVERY row
+/// (S3Candidate::wait_s is 0 for rejected candidates, the log is not).
+struct S3EvalRecord {
+    haptic_dmp_learning::core::GraspPointId k = haptic_dmp_learning::core::GraspPointId::kP0;
+    double theta_rad = 0.0;
+    double psi_rad = 0.0;
+    bool refine_stage = false;  ///< false: coarse grid, true: refinement around the best of k
+    unsigned reject_mask = 0;   ///< S3RejectBit
+    bool passes_constraints = false;
+    bool wrist_flip = false;
+    double d_pos_m = 0.0;
+    double d = 0.0;
+    double wait_s = 0.0;
+    double cost_current = 0.0;  ///< d + epsilon_wait_per_s * wait_s
+    double w_hat = 0.0;
+    double w_trans = 0.0;
+    double margin_rad = 0.0;    ///< min joint margin of the IK solution of the chosen branch
+    BranchDetail branch[2];     ///< both branches (manipulability fields filled)
 };
 
 /// Everything besides the robot/pose evaluation that selectGraspS3 needs (see SelectionInputs).
@@ -59,6 +95,8 @@ struct S3Context {
     SatelliteSnapshot snapshot;  ///< omega, center, axis, theta/t of the acquisition
     double t_now_s = 0.0;        ///< instant the selection ends (as planGraspAndLaunchS1's t_now_s)
     double min_delay_s = 0.0;
+    /// Optional per-candidate log (default nullptr = off, no change of behaviour or result). Not owned.
+    std::vector<S3EvalRecord>* eval_log = nullptr;
 };
 
 struct S3Candidate {
@@ -67,6 +105,8 @@ struct S3Candidate {
     double d = 0.0;
     double wait_s = 0.0;  ///< 0 if the candidate did not pass the constraints
     double cost = 0.0;    ///< d + epsilon * wait_s (meaningful only if passes_constraints)
+    double psi_rad = 0.0;             ///< roll about z_tcp of this candidate (== eval.psi_rad; 0 in the scans)
+    unsigned reject_mask = 0;         ///< S3RejectBit mask of the a-priori constraints (all failing ones)
     bool passes_constraints = false;  ///< a-priori constraints; a post-hoc failure sets reject_reason only
     std::string reject_reason;        ///< "ik", "w_hat", "margine", "r_trust" or a post-hoc reason
 };
@@ -99,9 +139,11 @@ struct S3Result {
     double posthoc_min_margin_rad = 0.0;  ///< min joint margin along the path of the chosen one (0 if not checked)
     std::vector<S3PosthocEntry> posthoc_log;  ///< one entry per post-hoc check, in order
     std::string note;
+    bool forced = false;             ///< S3Params::force was on
+    std::string forced_violations;   ///< force_ignore_constraints: constraints violated and ignored (empty if none)
 };
 
-/// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights).
+/// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights; force_*: see S3Params).
 /// @throws std::invalid_argument.
 void validateS3Params(const S3Params& params);
 
@@ -109,6 +151,15 @@ void validateS3Params(const S3Params& params);
 /// non-positive/non-finite scales or a negative weight.
 double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double orientation_weight,
                   double angle_scale_rad);
+
+/// A-priori constraint mask of one evaluated candidate (see S3RejectBit): ik = !feasible_basic, w_hat = !(w_hat >=
+/// w_hat_min), margin = !(min_margin >= margin_min_rad), r_trust = !(d_pos <= r_trust_m). Same predicates, same NaN
+/// behaviour as the cascade of selectGraspS3 (which calls this function).
+unsigned s3AprioriRejectMask(const PoseEvaluation& eval, double d_pos_m, const S3Params& params);
+
+/// d_pos = || (position_world + contact_to_end_offset - p0) - delta_g_demo ||  (the one used by selectGraspS3).
+double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& contact_to_end_offset,
+              const Eigen::Vector3d& p0, const Eigen::Vector3d& delta_g_demo);
 
 /**
  * Scans k in {0,90,180,270} x theta in [-180, 180) deg (theta_step_deg), refines the best accepted of each k

@@ -149,6 +149,19 @@ if(BUILD_ANALYSIS_TOOLS)
   install(TARGETS orientation_path_check
     RUNTIME DESTINATION lib/${PROJECT_NAME}
   )
+  add_executable(s3_landscape analysis/s3_landscape.cpp)
+  target_include_directories(s3_landscape PRIVATE analysis)
+  target_link_libraries(s3_landscape
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(s3_landscape
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  install(TARGETS s3_landscape
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
 endif()
 
 if(BUILD_TESTING)
@@ -270,6 +283,16 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_grasp_pose_eval
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  ament_add_gtest(test_s3_landscape_log test/test_s3_landscape_log.cpp)
+  target_include_directories(test_s3_landscape_log PRIVATE analysis)
+  target_link_libraries(test_s3_landscape_log
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_s3_landscape_log
     haptic_dmp_learning
     franka_cartesian_control
   )

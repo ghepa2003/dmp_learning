@@ -70,3 +70,51 @@ orientation law sampled at t_i = (i+1)*dt, `JointPathSimulator` + `NullspaceBias
 - Hand-collar distance: not implemented (no collision/distance function in the core used by the planner).
 
 Output: table per variant on stdout, `<out>/summary.csv`, `<out>/profile_<law>_<variant>.csv` (t, w_hat, min margin, angle from hold, q1..q7).
+
+# s3_landscape
+
+Exports the landscape of the S3 selector (`selectGraspS3`) per candidate, for OFFLINE evaluation of other cost formulations
+(`tools/s3_landscape_report.py`). The selector is called as is (`planGraspAndLaunchS1` with `eval_log`, `S3Context::eval_log`);
+nothing is changed in the selection. `--selftest` compares the tool's psi = 0 rows with the real log and the winner (exit != 0 on mismatch).
+
+    colcon build --packages-select satellite_grasp_planner --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_ANALYSIS_TOOLS=ON
+    ros2 run satellite_grasp_planner s3_landscape --selftest
+    ros2 run satellite_grasp_planner s3_landscape --seed-spread 0 --out landscape.csv
+
+Arguments (defaults = the 15/10/2026 run): `--weights-dir runs/20261015_095418_fit_demo_20261014T150851`, `--params <planner yaml>` (default `config/grasp_planner_example.yaml`, found via the installed package, then the source tree; missing file, empty `--params` or a yaml without `cube_geometry.grasp_radius_m` = error, the code's default radius 0.0725 is never used;
+flat `s1.*`, `cube_geometry.*` keys; precedence defaults < yaml < CLI), `--urdf` ($HOME/thesis_ws/fer_flat_effort.urdf),
+`--q-start` (default = the run's start joints `-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398`, i.e. NOT
+`RobotModel::readyPose()` (q6 = pi/2); `ready` selects readyPose), `--omega-deg-s -2`, `--depth 0.0125`, `--follow-s 3.0`,
+`--psi-max-deg 5`, `--psi-step-deg 1`, `--theta-step-deg 2`, `--seed-spread N` (0 = off),
+`--theta-extra-deg a,b,...` (extra thetas, all k, e.g. `-163.5,144`), `--refine-top-n 6`, `--refine-step-deg 0.1`, `--refine-halfwidth-deg 2.0`, `--out landscape.csv`,
+`--rollout all|psi0|none` (default all: one `checkKinematicFeasibility` per IK-feasible row; slow), plus scenario values needed to
+reproduce the run: `--center 0.70,0.0,0.77`, `--theta-snap-rad -1.6727670737402633`, `--t-snap-s 18.318` (RUN15; the tool uses t_now = snap.t_s, so `--theta-snap-rad` must be theta_now = theta_snap + omega*elapsed = -1.626193073 + (-0.034906585*1.334242)), `--min-delay-s 5.0`,
+`--posthoc-velocity 0` (the campaigns ran without the velocity check).
+The scenario (params path, grasp_radius_m, depth, omega, center, snapshot, q_start, demo) is printed on stderr and written to `<out>.meta` (key=value, read by `tools/s3_landscape_report.py`).
+`--selftest` with the default scenario also checks the RUN15 winner (k=0, theta -163.5 deg, d_pos 7.1713 mm, wait 9.3548 s, w_hat 0.8238; SELFTEST FAIL, exit 3 otherwise); with a modified scenario it prints `RUN15 reference non applicabile (scenario modificato)`.
+
+psi: roll about the local z of the TCP = approach axis z_tcp = -R(theta) n_body; TCP position unchanged (checked, printed).
+
+CSV (one row per k, theta, psi; k = 0..3 means 0/90/180/270 deg):
+`k, theta_deg, psi_deg, accepted` (a-priori constraints pass: mask & 15 == 0), `reject_first` (first set bit in the order below, `none`),
+`reject_mask`, `ik_ok_A` / `ik_ok_B` (nominal / nominal*Rz(pi) converged), `branch_selected` (0 nominal, 1 flipped), `d_pos_mm`, `t_wait_s`
+(planLaunch, for ALL rows), `J_current` = d + eps*t_wait, `w_hat`, `w_trans`, `w_rot` (3x7 angular block), `w_full` (6x7), `smin_trans`,
+`smin_rot` (smallest singular values of the two 3x7 blocks), `margin_rollout_rad` (`checkKinematicFeasibility.min_joint_margin_rad`, the
+planner's path-check margin; NaN if not computed / IK infeasible), `margin_follow_rad` (min of margin_rollout and the margins of 7 follow-arc samples,
+t_j = j*follow_s/6, pose rotated by omega*t_j about the satellite axis through the centre, hot-started IK on the same branch, nullspace
+reference q_start; if the rollout was not computed: follow samples only; NaN if the IK fails), `follow_ik_ok`, `path_ok`, `w_full_other`,
+`margin_other` (static IK margin of the NOT selected branch), `margin_ik_rad` (static IK margin of the selected branch = the margin of the S3
+constraint), `dv_m_s`, `w_full_seedmin/max`, `margin_seedmin/max`, `n_seed_conv` (psi = 0 accepted rows, `--seed-spread N`, seeds q_start +- 0.3 rad uniform,
+mt19937 seed 12345).
+
+`reject_mask` bits: 1 = ik, 2 = w_hat, 4 = margine, 8 = r_trust (a-priori, `S3RejectBit`, decide `accepted`); 16 = velocity
+(dv > delta_v_max), 32 = path (joint limits along the rollout), 64 = follow-arc IK failure (diagnostics; they do not change `accepted`).
+Branch rule and constraints are the planner's (`evaluateGraspPoseDetailed`, `s3AprioriRejectMask`); only the coarse grid (theta step) is exported.
+
+Theta grids (CSV column `grid`): `coarse` = the selector's grid (theta = -pi + i*step, unchanged); `fine` = for each k the top `--refine-top-n`
+coarse candidates by `d_pos` (psi = 0, IK ok on the chosen branch, `reject_mask` bit 1 clear) re-evaluated at theta_c + j*`--refine-step-deg`,
+|j*step| <= `--refine-halfwidth-deg`, j != 0, for ALL psi of the band (duplicates between neighbourhoods are skipped); `extra` = the
+`--theta-extra-deg` values (all k, all psi; skipped if the theta was already evaluated). `--selftest` compares the coarse psi = 0 rows with the
+selector's log and prints separately the winner over all psi = 0 rows (coarse + fine + extra), checking that the selector's chosen (k, theta)
+is among them (expected for the 15/10 run: k=0, theta=-163.5, d_pos 7.171 mm). The fine/extra rows add about 4*6*40*|psi band| evaluations
+(rollout + follow included): use `--rollout psi0` for a quick pass.

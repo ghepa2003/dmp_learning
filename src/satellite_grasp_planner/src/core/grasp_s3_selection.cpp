@@ -35,6 +35,16 @@ void validateCtx(const S3Params& p, const S3Context& ctx) {
     }
 }
 
+std::string rejectMaskToString(unsigned mask) {
+    std::string s;
+    auto add = [&](const char* n) { s += (s.empty() ? "" : ",") + std::string(n); };
+    if (mask & kRejectIk) add("ik");
+    if (mask & kRejectWHat) add("w_hat");
+    if (mask & kRejectMargin) add("margine");
+    if (mask & kRejectRTrust) add("r_trust");
+    return s.empty() ? "none" : s;
+}
+
 bool lessCost(const S3Candidate& a, const S3Candidate& b) {
     if (a.cost != b.cost) return a.cost < b.cost;
     if (a.eval.k != b.eval.k) return static_cast<int>(a.eval.k) < static_cast<int>(b.eval.k);
@@ -60,6 +70,17 @@ void validateS3Params(const S3Params& p) {
     if (!std::isfinite(p.posthoc_cluster_deg) || p.posthoc_cluster_deg < 0.0) {
         throw std::invalid_argument("selectGraspS3: posthoc_cluster_deg must be finite and >= 0.");
     }
+    if (p.force) {
+        if (p.force_k < 0 || p.force_k > 3) {
+            throw std::invalid_argument("selectGraspS3: force_k must be in 0..3.");
+        }
+        if (!std::isfinite(p.force_theta_deg) || p.force_theta_deg < -180.0 || p.force_theta_deg > 180.0) {
+            throw std::invalid_argument("selectGraspS3: force_theta_deg must be finite and in [-180, 180].");
+        }
+        if (!std::isfinite(p.force_psi_deg) || std::abs(p.force_psi_deg) > 8.0) {
+            throw std::invalid_argument("selectGraspS3: |force_psi_deg| must be finite and <= 8.");
+        }
+    }
     if (!(p.ik.max_iter > 0) || !pos(p.ik.pos_tol_m) || !pos(p.ik.ori_tol_rad) || !pos(p.ik.max_step_rad) ||
         !pos(p.ik.damping) || !(std::isfinite(p.ik.nullspace_gain) && p.ik.nullspace_gain >= 0.0)) {
         throw std::invalid_argument("selectGraspS3: invalid IkParams.");
@@ -77,6 +98,21 @@ double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double 
     return std::sqrt(a * a + orientation_weight * b * b);
 }
 
+unsigned s3AprioriRejectMask(const PoseEvaluation& eval, double d_pos_m, const S3Params& params) {
+    unsigned mask = 0;
+    if (!eval.feasible_basic) mask |= kRejectIk;
+    if (!(eval.w_hat >= params.w_hat_min)) mask |= kRejectWHat;
+    if (!(eval.margins.min_margin_rad >= params.margin_min_rad)) mask |= kRejectMargin;
+    if (!(d_pos_m <= params.r_trust_m)) mask |= kRejectRTrust;
+    return mask;
+}
+
+double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& contact_to_end_offset,
+              const Eigen::Vector3d& p0, const Eigen::Vector3d& delta_g_demo) {
+    const Eigen::Vector3d goal = position_world + contact_to_end_offset;
+    return ((goal - p0) - delta_g_demo).norm();
+}
+
 S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& model, RobotModel& robot,
                        const RobotModel::JointVector& q_start, const DemoReference& demo,
                        const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
@@ -92,28 +128,55 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     S3Candidate least_bad[4];
     bool have_least[4] = {false, false, false, false};
 
-    auto evalOne = [&](GraspPointId k, double theta) {
+    auto evalOne = [&](GraspPointId k, double theta, bool refine_stage, double psi) {
         S3Candidate c;
-        c.eval = evaluateGraspPose(model, k, theta, robot, q_start, demo, params.length_scale_m,
-                                   params.angle_scale_rad, params.ik);
+        const bool logging = ctx.eval_log != nullptr;
+        const PoseEvaluationDetail det =
+            evaluateGraspPoseDetailed(model, k, theta, psi, robot, q_start, demo, params.length_scale_m,
+                                      params.angle_scale_rad, params.ik, logging);
+        c.eval = det.eval;
+        c.psi_rad = psi;
         ++res.evaluations;
-        const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-        c.d_pos_m = ((goal - p0) - delta_g_demo).norm();
+        c.d_pos_m = s3DPos(c.eval.pose.position_world, ctx.contact_to_end_offset, p0, delta_g_demo);
         c.d = s3Distance(c.d_pos_m, c.eval.dist_to_demo.ori_rad, params.length_scale_m,
                          params.orientation_weight, params.angle_scale_rad);
-        if (!c.eval.feasible_basic) {
+        const unsigned mask = s3AprioriRejectMask(c.eval, c.d_pos_m, params);
+        c.reject_mask = mask;
+        if (mask & kRejectIk) {
             c.reject_reason = "ik";
-        } else if (!(c.eval.w_hat >= params.w_hat_min)) {
+        } else if (mask & kRejectWHat) {
             c.reject_reason = "w_hat";
-        } else if (!(c.eval.margins.min_margin_rad >= params.margin_min_rad)) {
+        } else if (mask & kRejectMargin) {
             c.reject_reason = "margine";
-        } else if (!(c.d_pos_m <= params.r_trust_m)) {
+        } else if (mask & kRejectRTrust) {
             c.reject_reason = "r_trust";
         } else {
             c.passes_constraints = true;
             res.max_w_hat_passing = std::max(res.max_w_hat_passing, c.eval.w_hat);
             c.wait_s = planLaunch(ctx.snapshot, ctx.t_now_s, theta, ctx.tau_launch_s, ctx.min_delay_s).delay_s;
             c.cost = c.d + params.epsilon_wait_per_s * c.wait_s;
+        }
+        if (logging) {
+            S3EvalRecord r;
+            r.k = k;
+            r.theta_rad = theta;
+            r.psi_rad = psi;
+            r.refine_stage = refine_stage;
+            r.reject_mask = mask;
+            r.passes_constraints = c.passes_constraints;
+            r.wrist_flip = c.eval.wrist_flip;
+            r.d_pos_m = c.d_pos_m;
+            r.d = c.d;
+            r.wait_s = c.passes_constraints
+                           ? c.wait_s
+                           : planLaunch(ctx.snapshot, ctx.t_now_s, theta, ctx.tau_launch_s, ctx.min_delay_s).delay_s;
+            r.cost_current = c.d + params.epsilon_wait_per_s * r.wait_s;
+            r.w_hat = c.eval.w_hat;
+            r.w_trans = c.eval.w_trans;
+            r.margin_rad = c.eval.margins.min_margin_rad;
+            r.branch[0] = det.branch[0];
+            r.branch[1] = det.branch[1];
+            ctx.eval_log->push_back(r);
         }
         const int ki = static_cast<int>(k);
         if (!c.passes_constraints && (!have_least[ki] || c.d_pos_m < least_bad[ki].d_pos_m)) {
@@ -128,12 +191,34 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     const int n_theta = static_cast<int>(std::ceil(2.0 * kPi / step - 1e-9));  // [-pi, pi)
     const int n_refine = static_cast<int>(std::floor(step / refine + 1e-9));
 
+    res.forced = params.force;
+    if (params.force) {
+        // Test mode: only this candidate; everything after the scans (ranking, post-hoc, outputs) is unchanged.
+        const GraspPointId kf = kAllK[params.force_k];
+        const double theta_f = params.force_theta_deg * kPi / 180.0;
+        const double psi_f = params.force_psi_deg * kPi / 180.0;
+        S3Candidate c = evalOne(kf, theta_f, false, psi_f);
+        if (c.passes_constraints) {
+            accepted.push_back(c);
+        } else if (params.force_ignore_constraints) {
+            // evalOne computes wait/cost only for passing candidates: same formulas, forced theta.
+            c.wait_s = planLaunch(ctx.snapshot, ctx.t_now_s, theta_f, ctx.tau_launch_s, ctx.min_delay_s).delay_s;
+            c.cost = c.d + params.epsilon_wait_per_s * c.wait_s;
+            res.forced_violations = "a-priori: " + rejectMaskToString(c.reject_mask);
+            accepted.push_back(c);
+        } else {
+            res.note = "FORCED candidate rejected a priori (force_ignore_constraints=false): " +
+                       rejectMaskToString(c.reject_mask);
+        }
+    }
+
     for (GraspPointId k : kAllK) {
+        if (params.force) break;
         S3Candidate best;
         bool have_best = false;
         for (int i = 0; i < n_theta; ++i) {
             const double theta = -kPi + i * step;
-            S3Candidate c = evalOne(k, theta);
+            S3Candidate c = evalOne(k, theta, false, 0.0);
             if (!c.passes_constraints) continue;
             accepted.push_back(c);
             if (!have_best || lessCost(c, best)) {
@@ -145,7 +230,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         const double theta_best = best.eval.theta_rad;
         for (int j = -n_refine; j <= n_refine; ++j) {
             if (j == 0) continue;
-            S3Candidate c = evalOne(k, theta_best + j * refine);
+            S3Candidate c = evalOne(k, theta_best + j * refine, true, 0.0);
             if (c.passes_constraints) accepted.push_back(c);
         }
     }
@@ -209,9 +294,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         }
         double margin = 0.0;
         if (params.posthoc_path_check) {
-            const Eigen::Quaterniond& qn = c.eval.pose.orientation_nominal_world;
-            const Eigen::Quaterniond orient =
-                c.eval.wrist_flip ? haptic_dmp_learning::core::applyRoll(qn, kPi) : qn;
+            // applyRoll(qn, psi + (flip ? pi : 0)): rolls about the same axis (z_tcp) commute.
+            const Eigen::Quaterniond orient = goalOrientation(c.eval);
             const FeasibilityResult fr = checkKinematicFeasibility(
                 *ctx.prodmp_template, c.eval.pose.position_world, orient, robot_ptr, q_start);
             entry.path_checked = true;
@@ -235,6 +319,15 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         res.posthoc_min_margin_rad = margin;
     }
 
+    if (params.force && params.force_ignore_constraints && chosen_idx < 0 && !accepted.empty() &&
+        res.posthoc_checks > 0) {
+        // Forced + ignore: the post-hoc failure is reported, not obeyed.
+        chosen_idx = 0;
+        const S3PosthocEntry& e = res.posthoc_log.back();
+        res.posthoc_dv_m_s = e.dv_m_s;
+        res.posthoc_min_margin_rad = e.min_margin_rad;
+        res.forced_violations += std::string(res.forced_violations.empty() ? "" : "; ") + "post-hoc: " + e.reject_reason;
+    }
     if (params.max_posthoc_candidates == 0 && !accepted.empty()) chosen_idx = 0;  // max_posthoc_candidates == 0: no post-hoc stage
 
     // ---- outputs ----
@@ -255,13 +348,13 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
 
     if (accepted.empty()) {
         res.status = S3Result::kNoCandidate;
-        res.note = "no candidate satisfies the constraints (ik, w_hat >= w_hat_min, margin >= margin_min, d_pos <= r_trust)";
+        if (!params.force) res.note = "no candidate satisfies the constraints (ik, w_hat >= w_hat_min, margin >= margin_min, d_pos <= r_trust)";
     } else if (chosen_idx < 0) {
         res.status = S3Result::kPosthocFailed;
         std::ostringstream m;
         m << "all " << res.posthoc_checks << " post-hoc candidates failed (of " << accepted.size()
           << " constraint-passing); first: " << accepted.front().reject_reason;
-        res.note = m.str();
+        res.note = (params.force ? "FORCED candidate: " : "") + m.str();
     } else {
         res.status = S3Result::kSelected;
         res.chosen = accepted[static_cast<std::size_t>(chosen_idx)];

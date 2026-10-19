@@ -130,11 +130,19 @@ DemoReference demoReferenceFromEndJoints(RobotModel& robot, const RobotModel::Jo
     return ref;
 }
 
-PoseEvaluation evaluateGraspPose(const haptic_dmp_learning::core::CubeSatelliteModel& model,
-                                 haptic_dmp_learning::core::GraspPointId k, double theta_rad,
-                                 RobotModel& robot, const RobotModel::JointVector& q_start,
-                                 const DemoReference& demo, double length_scale_m,
-                                 double angle_scale_rad, const IkParams& params) {
+Eigen::Quaterniond goalOrientation(const PoseEvaluation& eval) {
+    const Eigen::Quaterniond& qn = eval.pose.orientation_nominal_world;
+    if (eval.psi_rad == 0.0 && !eval.wrist_flip) return qn;
+    return haptic_dmp_learning::core::applyRoll(
+        qn, eval.psi_rad + (eval.wrist_flip ? haptic_dmp_learning::core::kPi : 0.0));
+}
+
+PoseEvaluationDetail evaluateGraspPoseDetailed(const haptic_dmp_learning::core::CubeSatelliteModel& model,
+                                               haptic_dmp_learning::core::GraspPointId k, double theta_rad,
+                                               double psi_rad, RobotModel& robot,
+                                               const RobotModel::JointVector& q_start, const DemoReference& demo,
+                                               double length_scale_m, double angle_scale_rad,
+                                               const IkParams& params, bool compute_extra) {
     if (!(demo.w_trans_demo > 0.0)) {
         throw std::invalid_argument("evaluateGraspPose: demo.w_trans_demo must be > 0.");
     }
@@ -146,12 +154,14 @@ PoseEvaluation evaluateGraspPose(const haptic_dmp_learning::core::CubeSatelliteM
     PoseEvaluation ev;
     ev.k = k;
     ev.theta_rad = theta_rad;
+    ev.psi_rad = psi_rad;
     ev.pose = model.graspPoseAt(k, theta_rad);
 
     const Eigen::Quaterniond orient[2] = {
-        ev.pose.orientation_nominal_world,
+        psi_rad == 0.0 ? ev.pose.orientation_nominal_world
+                       : haptic_dmp_learning::core::applyRoll(ev.pose.orientation_nominal_world, psi_rad),
         haptic_dmp_learning::core::applyRoll(ev.pose.orientation_nominal_world,
-                                             haptic_dmp_learning::core::kPi)};
+                                             haptic_dmp_learning::core::kPi + psi_rad)};
     Branch br[2];
     for (int i = 0; i < 2; ++i) {
         br[i].ik = solvePoseIk(robot, ev.pose.position_world, orient[i], q_start, q_start, params);
@@ -168,7 +178,43 @@ PoseEvaluation evaluateGraspPose(const haptic_dmp_learning::core::CubeSatelliteM
     ev.dist_to_demo = se3Distance(ev.pose.position_world, orient[best], demo.position, demo.orientation,
                                   length_scale_m, angle_scale_rad);
     ev.feasible_basic = ev.ik.converged && ev.ik.limits_ok;
-    return ev;
+
+    PoseEvaluationDetail out;
+    out.selected = best;
+    for (int i = 0; i < 2; ++i) {
+        BranchDetail& d = out.branch[i];
+        d.converged = br[i].ik.converged;
+        d.limits_ok = br[i].ik.limits_ok;
+        d.q = br[i].ik.q;
+        d.pos_err_m = br[i].ik.pos_err_m;
+        d.ori_err_rad = br[i].ik.ori_err_rad;
+        d.iterations = br[i].ik.iterations;
+        d.min_margin_rad = br[i].margins.min_margin_rad;
+        d.worst_joint = br[i].margins.worst_joint;
+        d.orientation = orient[i];
+        if (compute_extra) {
+            robot.update(d.q, RobotModel::JointVector::Zero());
+            const FullManipulability fm = fullManipulability(robot.jacobian());
+            d.w_trans = fm.w_trans;
+            d.w_rot = fm.w_rot;
+            d.w_full = fm.w_full;
+            d.smin_trans = fm.smin_trans;
+            d.smin_rot = fm.smin_rot;
+        }
+    }
+    if (compute_extra) robot.update(ev.ik.q, RobotModel::JointVector::Zero());
+    out.eval = ev;
+    return out;
+}
+
+PoseEvaluation evaluateGraspPose(const haptic_dmp_learning::core::CubeSatelliteModel& model,
+                                 haptic_dmp_learning::core::GraspPointId k, double theta_rad,
+                                 RobotModel& robot, const RobotModel::JointVector& q_start,
+                                 const DemoReference& demo, double length_scale_m,
+                                 double angle_scale_rad, const IkParams& params) {
+    return evaluateGraspPoseDetailed(model, k, theta_rad, 0.0, robot, q_start, demo, length_scale_m,
+                                     angle_scale_rad, params, false)
+        .eval;
 }
 
 }  // namespace core

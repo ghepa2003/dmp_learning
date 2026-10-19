@@ -7,6 +7,7 @@
  */
 
 #include <optional>
+#include <vector>
 
 #include "satellite_grasp_planner/core/grasp_launch_result.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
@@ -30,16 +31,20 @@ namespace core {
  *   status: kSelected -> kSelected; kNoCandidate -> kNoFeasibleCandidate; kPosthocFailed -> kPosthocFailed
  *     (S3Result::note, available through @p s3_result_out, says why)
  *   goal_position = grasp position + contact_to_end_offset;
- *   goal_orientation = nominal orientation, rolled by pi about z_tcp if wrist_flip
+ *   goal_orientation = goalOrientation(chosen.eval) = nominal orientation rolled by psi (+ pi about z_tcp if wrist_flip);
+ *     psi_rad = chosen psi (0 unless S3Params::force sets it; not part of GraspCommand)
  *   k, theta_star_rad, wrist_flip, cost, d_pos_m, w_hat = chosen candidate; min_joint_margin_rad = margin of its
  *     IK solution; posthoc_dv_m_s = S3Result::posthoc_dv_m_s, or NaN if
  *     s3.posthoc_velocity_check is false (the velocity was not measured)
  *   evaluations = S3Result::evaluations; elapsed_s = wall-clock time of the selection
+ *
+ * eval_log: optional per-candidate log forwarded to S3Context::eval_log (nullptr = off, no change of result).
  */
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot_at_acquisition,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s = std::nullopt,
-                                       S3Result* s3_result_out = nullptr);
+                                       S3Result* s3_result_out = nullptr,
+                                       std::vector<S3EvalRecord>* eval_log = nullptr);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner
