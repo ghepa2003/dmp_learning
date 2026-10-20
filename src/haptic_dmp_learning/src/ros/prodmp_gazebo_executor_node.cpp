@@ -316,10 +316,6 @@ ProDmpGazeboExecutorNode::ProDmpGazeboExecutorNode()
     }
     if (continuous_) {
         setupContinuous();
-        if (post_grasp_follow_ && std::fabs(satellite_rotation_axis_.normalized().dot(Eigen::Vector3d::UnitZ()) - 1.0) > 1e-9) {
-            throw std::invalid_argument(
-                "post_grasp_follow=true requires satellite_rotation_axis == +z (core::rotatePoseAboutZ)");
-        }
         if (gripper_control_) {
             gripperOpenTick();  // first message right away, then at 10 Hz
             gripper_open_timer_ = rclcpp::create_timer(
@@ -1756,7 +1752,7 @@ void ProDmpGazeboExecutorNode::postGraspHoldTick() {
                                      post_hold_pose_.pose.position.z);
         const auto& o = post_hold_pose_.pose.orientation;
         p.orientation = Eigen::Quaterniond(o.w, o.x, o.y, o.z);
-        const core::RotatablePose r = core::rotatePoseAboutZ(cc_->center, p, dtheta);
+        const core::RotatablePose r = core::rotatePoseAboutAxis(cc_->center, cc_->axis_unit, p, dtheta);
         out.pose.position.x = r.position.x();
         out.pose.position.y = r.position.y();
         out.pose.position.z = r.position.z();

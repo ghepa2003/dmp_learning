@@ -13,6 +13,21 @@
 namespace satellite_grasp_planner {
 namespace core {
 
+CartesianSample followTargetSample(const Eigen::Vector3d& center, const Eigen::Vector3d& axis, double omega_rad_s,
+                                   const haptic_dmp_learning::core::RotatablePose& goal_at_end, double t_follow_s) {
+    const Eigen::Vector3d axis_unit = axis.normalized();  // exact (0,0,1) for an exact +z axis
+    const haptic_dmp_learning::core::RotatablePose cur =
+        haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, goal_at_end, omega_rad_s * t_follow_s);
+    CartesianSample target;
+    target.position = cur.position;
+    target.orientation = cur.orientation;
+    const Eigen::Vector3d r = cur.position - center;
+    // omega a x r; for a = +z this is (-omega r_y, omega r_x, 0) (the previous literal form) component by component.
+    target.linear_velocity = omega_rad_s * axis_unit.cross(r);
+    target.angular_velocity = omega_rad_s * axis_unit;
+    return target;
+}
+
 FollowMarginResult followMargin(const haptic_dmp_learning::core::ProDMP& prodmp_template,
                                 const Eigen::Vector3d& target_position, const Eigen::Quaterniond& target_orientation,
                                 const Eigen::Vector3d& center, const Eigen::Vector3d& axis, double omega_rad_s,
@@ -28,8 +43,8 @@ FollowMarginResult followMargin(const haptic_dmp_learning::core::ProDMP& prodmp_
         throw std::invalid_argument("followMargin: follow_s must be finite and >= 0.");
     }
     if (!std::isfinite(omega_rad_s)) throw std::invalid_argument("followMargin: omega must be finite.");
-    if (!(axis.norm() > 0.0) || (axis.normalized() - Eigen::Vector3d::UnitZ()).norm() > 1e-9) {
-        throw std::invalid_argument("followMargin: only the +z satellite axis is supported (rotatePoseAboutZ).");
+    if (!(axis.allFinite() && axis.norm() > 0.0)) {
+        throw std::invalid_argument("followMargin: the satellite axis must be finite and non-zero.");
     }
 
     const NullspaceBiasedResolution strategy{NullspaceBiasedResolution::Params()};  // defaults = impedance-controller proxy
@@ -84,14 +99,7 @@ FollowMarginResult followMargin(const haptic_dmp_learning::core::ProDMP& prodmp_
     const int n_follow = static_cast<int>(std::round(params.follow_s / params.dt_follow_s));
     for (int step = 1; step <= n_follow; ++step) {
         const double t_follow = step * params.dt_follow_s;
-        const haptic_dmp_learning::core::RotatablePose cur =
-            haptic_dmp_learning::core::rotatePoseAboutZ(center, goal_at_end, omega_rad_s * t_follow);
-        CartesianSample target;
-        target.position = cur.position;
-        target.orientation = cur.orientation;
-        const Eigen::Vector3d r = cur.position - center;
-        target.linear_velocity = Eigen::Vector3d(-omega_rad_s * r.y(), omega_rad_s * r.x(), 0.0);
-        target.angular_velocity = Eigen::Vector3d(0.0, 0.0, omega_rad_s);
+        const CartesianSample target = followTargetSample(center, axis, omega_rad_s, goal_at_end, t_follow);
 
         robot_model->update(q, dq_zero);
         sample(q, t_follow, false);

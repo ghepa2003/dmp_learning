@@ -202,7 +202,9 @@ TEST(S3LandscapeLog, FollowArcMatchesRotatePoseAboutZ) {
     const RotatablePose b = haptic_dmp_learning::core::rotatePoseAboutZ(center, pose, omega * t);
     EXPECT_EQ((a.position - b.position).norm(), 0.0);
     EXPECT_EQ(a.orientation.angularDistance(b.orientation), 0.0);
-    EXPECT_THROW(s3_landscape::rotateAboutSatelliteAxis(center, Eigen::Vector3d::UnitX(), pose, omega, t), std::invalid_argument);
+    // a non-vertical axis is accepted (rotatePoseAboutAxis); only a zero axis is rejected
+    EXPECT_NO_THROW(s3_landscape::rotateAboutSatelliteAxis(center, Eigen::Vector3d::UnitX(), pose, omega, t));
+    EXPECT_THROW(s3_landscape::rotateAboutSatelliteAxis(center, Eigen::Vector3d::Zero(), pose, omega, t), std::invalid_argument);
     const auto ts = s3_landscape::followSampleTimes(3.0, 7);
     ASSERT_EQ(ts.size(), 7u);
     EXPECT_DOUBLE_EQ(ts.front(), 0.0);

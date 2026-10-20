@@ -22,7 +22,9 @@
 #include <Eigen/Geometry>
 
 #include "franka_cartesian_control/core/robot_model.hpp"
+#include "haptic_dmp_learning/core/pose_rotation.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
+#include "satellite_grasp_planner/core/joint_path_simulator.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -63,22 +65,32 @@ struct FollowApproachState {
 };
 
 /**
+ * @brief Target of the follow at time @p t_follow_s after AT_END: @p goal_at_end rotated by omega t about the axis through
+ *        @p center (core::rotatePoseAboutAxis), linear velocity omega a x r (r = rotated position - center), angular velocity
+ *        omega a (a = unit axis). Exposed so the geometry of the follow can be tested without a robot; followMargin() calls it.
+ * @throws std::invalid_argument for a zero / non-finite axis.
+ */
+CartesianSample followTargetSample(const Eigen::Vector3d& center, const Eigen::Vector3d& axis, double omega_rad_s,
+                                   const haptic_dmp_learning::core::RotatablePose& goal_at_end, double t_follow_s);
+
+/**
  * @brief Minimum joint margin of the approach followed by the co-rotating follow (see the file comment).
  *
  * Approach: buildApproachTrajectory(prodmp_template, FK(q_seed), target_position, target_orientation, dt_approach_s)
  * simulated with NullspaceBiasedResolution (default params) and nullspace reference @p q_ref. Follow:
  * round(follow_s / dt_follow_s) steps, step n at t = n dt_follow_s, the target is @p target_position/@p target_orientation
- * rotated by omega t about the axis through @p center (core::rotatePoseAboutZ), feed-forward linear velocity
- * (-omega r_y, omega r_x, 0) and angular velocity (0, 0, omega) with r = rotated position - center.
+ * rotated by omega t about the axis through @p center (core::rotatePoseAboutAxis), feed-forward linear velocity
+ * omega a x r and angular velocity omega a, with a = the unit axis and r = rotated position - center (for a = +z:
+ * (-omega r_y, omega r_x, 0) and (0, 0, omega)).
  *
  * @param omega_rad_s signed satellite angular velocity [rad/s], as SatelliteSnapshot::omega_rad_s
- * @param axis only +z is supported (the executor's rotatePoseAboutZ); @throws std::invalid_argument otherwise
+ * @param axis satellite rotation axis (any direction, normalized here); omega is the signed rate about it
  * @param robot_model shared, mutated (left at the final configuration); one instance per thread
  * @param approach optional: if given, the approach is NOT simulated again; the follow starts from approach->q_end and the
  *        approach minimum is taken from it. The result is then identical (bit for bit, see test_follow_margin) to the one
  *        without it. nullptr (default): the approach is simulated here.
  * @throws std::invalid_argument for a null model, non-positive dt, non-finite or negative follow_s, a non-finite
- *         omega, or a non-+z axis.
+ *         omega, or a non-finite / zero axis.
  */
 FollowMarginResult followMargin(const haptic_dmp_learning::core::ProDMP& prodmp_template,
                                 const Eigen::Vector3d& target_position, const Eigen::Quaterniond& target_orientation,

@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -337,4 +338,44 @@ TEST(CubeSatelliteModelGraspDepth, RejectsDepthOutsideZeroToStandoff) {
     EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
     p.grasp_depth_m = p.standoff_m + 0.001;
     EXPECT_THROW(CubeSatelliteModel{p}, std::invalid_argument);
+}
+
+// ---------------------------------------------------------------------------------------
+// Rigid tilt of the whole satellite: axis, center, face_normal_body (and so the theta = 0 pose) rotated by R_tilt about
+// the center. Every candidate pose must be R_tilt applied to the nominal one, for each k and theta. A double application
+// of R_tilt (e.g. tilting the axis AND the angle convention) would break this.
+// ---------------------------------------------------------------------------------------
+TEST(CubeSatelliteModelTilt, CandidatePosesAreRTiltAppliedToTheNominalOnes) {
+    const Eigen::Vector3d center(0.70, 0.0, 0.77);
+    CubeSatelliteModel::Params nominal;
+    nominal.center_world = center;
+    nominal.axis_world = Eigen::Vector3d::UnitZ();
+    nominal.face_normal_body = Eigen::Vector3d::UnitX();
+    nominal.grasp_radius_m = 0.068;
+    nominal.grasp_depth_m = 0.0125;
+    const CubeSatelliteModel m0(nominal);
+
+    for (const auto& tilt : {std::pair<double, double>{5.0, 0.0}, {20.0, 33.0}, {35.0, -120.0}, {70.0, 250.0}}) {
+        const double alpha = deg(tilt.first), beta = deg(tilt.second);
+        const Eigen::Vector3d u(-std::sin(beta), std::cos(beta), 0.0);
+        const Eigen::Matrix3d R = Eigen::AngleAxisd(alpha, u).toRotationMatrix();
+        CubeSatelliteModel::Params tilted = nominal;
+        tilted.axis_world = R * nominal.axis_world;
+        tilted.face_normal_body = R * nominal.face_normal_body;  // the body frame at theta = 0 is R_tilt
+        const CubeSatelliteModel m1(tilted);
+        for (const GraspPointId k : kAllPoints) {
+            for (const double th : {-170.0, -90.0, -13.3, 0.0, 45.0, 120.0, 179.0}) {
+                const GraspTargetPose p0 = m0.graspPoseAt(k, deg(th));
+                const GraspTargetPose p1 = m1.graspPoseAt(k, deg(th));
+                // position: center + R (p0 - center)
+                expectVecNear(p1.position_world, center + R * (p0.position_world - center), 1e-12);
+                // orientation: R * nominal orientation (as matrices) and approach axis
+                const Eigen::Matrix3d R1 = p1.orientation_nominal_world.toRotationMatrix();
+                const Eigen::Matrix3d R0 = p0.orientation_nominal_world.toRotationMatrix();
+                EXPECT_LT((R1 - R * R0).norm(), 1e-12) << "k " << static_cast<int>(k) << " th " << th;
+                expectVecNear(p1.approach_axis_world, R * p0.approach_axis_world, 1e-12);
+                expectVecNear(m1.faceNormalWorld(deg(th)), R * m0.faceNormalWorld(deg(th)), 1e-12);
+            }
+        }
+    }
 }

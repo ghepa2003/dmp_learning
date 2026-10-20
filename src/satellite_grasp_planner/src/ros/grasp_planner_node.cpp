@@ -244,7 +244,9 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
     checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
     checkCubeCenterMatchesRotationCenter(cube_geometry_.center_world, satellite_rotation_center_);
-    checkQRefOnAxis(satellite_q_ref_, satellite_rotation_axis_, q_ref_tol_deg);
+    // q_ref is relative to the theta = 0 orientation of the satellite (identity for a vertical axis and face normal +x).
+    checkQRefOnAxis(satellite_q_ref_, satellite_rotation_axis_, q_ref_tol_deg,
+                    satelliteBaseOrientation(cube_geometry_.face_normal_body, satellite_rotation_axis_));
 
     // --- publisher (QoS: reliable, transient_local, depth 1 - one-shot retained command) ---
     pub_ = this->create_publisher<satellite_grasp_msgs::msg::GraspCommand>(

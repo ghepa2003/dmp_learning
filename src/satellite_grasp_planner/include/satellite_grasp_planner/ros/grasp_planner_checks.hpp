@@ -40,6 +40,21 @@ void checkCubeCenterMatchesRotationCenter(const Eigen::Vector3d& center_world,
 /// throw once real odometry arrives - this just moves that failure to startup.
 void checkQRefOnAxis(const Eigen::Quaterniond& q_ref, const Eigen::Vector3d& rotation_axis, double tol_deg);
 
+/// Same check for a satellite whose theta = 0 orientation is @p base (R_base, world frame) instead of the identity:
+/// PhaseTracker computes R_rel = R(q_body) R(q_ref)^T, and a body that spins about the axis starting from R_base is
+/// Rot(axis, theta) R_base, so q_ref must be Rot(axis, phi) R_base, i.e. q_ref * base^-1 must be a rotation about
+/// @p rotation_axis. A base exactly equal to the identity calls the 3-argument overload unchanged.
+/// @throws std::invalid_argument as the 3-argument overload.
+void checkQRefOnAxis(const Eigen::Quaterniond& q_ref, const Eigen::Vector3d& rotation_axis, double tol_deg,
+                     const Eigen::Quaterniond& base);
+
+/// Orientation of the satellite at theta = 0 as the xacro builds it: body x = collar normal (@p face_normal_body, the
+/// cube_geometry parameter, world frame at theta = 0), body z = spin axis (@p rotation_axis), body y = z x x.
+/// Columns [n, a x n, a]; for n = +x, a = +z it is exactly the identity quaternion. Both vectors are normalized here.
+/// @throws std::invalid_argument for a zero / non-finite vector or if |n . a| > 1e-6 (the face is not lateral: the
+///         same tolerance as CubeSatelliteModel::kLateralTolerance).
+Eigen::Quaterniond satelliteBaseOrientation(const Eigen::Vector3d& face_normal_body, const Eigen::Vector3d& rotation_axis);
+
 /// @throws std::runtime_error if @p frame_id != "world" or if @p position is farther than 10 mm from
 /// @p center. Mirrors prodmp_gazebo_executor_node::onSatelliteOdom()'s first-sample check exactly.
 void checkFirstOdomSample(const Eigen::Vector3d& position, const std::string& frame_id,

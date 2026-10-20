@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdexcept>
+
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
@@ -23,6 +25,28 @@ struct RotatablePose {
 inline RotatablePose rotatePoseAboutZ(const Eigen::Vector3d& center, const RotatablePose& pose,
                                       double dtheta_rad) {
     const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, Eigen::Vector3d::UnitZ()));
+    RotatablePose out;
+    out.position = center + rz * (pose.position - center);
+    out.orientation = (rz * pose.orientation).normalized();
+    return out;
+}
+
+/**
+ * @brief Rigidly rotates @p pose by @p dtheta_rad about the axis @p axis (any direction, normalized here) through @p center.
+ *
+ *   position'    = center + R(axis, dtheta) * (position - center)
+ *   orientation' = R(axis, dtheta) * orientation     (left multiplication: a rotation of the world frame)
+ *
+ * Same construction as rotatePoseAboutZ(); for axis == UnitZ the two functions give bit-identical results
+ * (axis.normalized() of an exact unit vector is exact).
+ * @throws std::invalid_argument if @p axis is not finite or has zero norm.
+ */
+inline RotatablePose rotatePoseAboutAxis(const Eigen::Vector3d& center, const Eigen::Vector3d& axis,
+                                         const RotatablePose& pose, double dtheta_rad) {
+    if (!(axis.allFinite() && axis.norm() > 0.0)) {
+        throw std::invalid_argument("rotatePoseAboutAxis: axis must be finite and non-zero");
+    }
+    const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, axis.normalized()));
     RotatablePose out;
     out.position = center + rz * (pose.position - center);
     out.orientation = (rz * pose.orientation).normalized();

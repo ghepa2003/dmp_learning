@@ -64,6 +64,42 @@ void checkQRefOnAxis(const Eigen::Quaterniond& q_ref, const Eigen::Vector3d& rot
     }
 }
 
+void checkQRefOnAxis(const Eigen::Quaterniond& q_ref, const Eigen::Vector3d& rotation_axis, double tol_deg,
+                     const Eigen::Quaterniond& base) {
+    if (base.coeffs() == Eigen::Quaterniond::Identity().coeffs()) {
+        checkQRefOnAxis(q_ref, rotation_axis, tol_deg);  // identity base: exactly the historical check
+        return;
+    }
+    const Eigen::Quaterniond q_rel = (q_ref.normalized() * base.normalized().conjugate()).normalized();
+    try {
+        checkQRefOnAxis(q_rel, rotation_axis, tol_deg);
+    } catch (const std::invalid_argument& e) {
+        throw std::invalid_argument(std::string(e.what()) +
+                                    " [checked on q_ref * R_base^-1, R_base = orientation at theta = 0 derived from "
+                                    "cube_geometry.face_normal_body and the rotation axis]");
+    }
+}
+
+Eigen::Quaterniond satelliteBaseOrientation(const Eigen::Vector3d& face_normal_body, const Eigen::Vector3d& rotation_axis) {
+    if (!(face_normal_body.allFinite() && face_normal_body.norm() > 1e-9) ||
+        !(rotation_axis.allFinite() && rotation_axis.norm() > 1e-9)) {
+        throw std::invalid_argument("satelliteBaseOrientation: face_normal_body and rotation_axis must be finite, non-zero");
+    }
+    const Eigen::Vector3d n = face_normal_body.normalized();
+    const Eigen::Vector3d a = rotation_axis.normalized();
+    if (std::fabs(n.dot(a)) > 1e-6) {
+        std::ostringstream m;
+        m << "satelliteBaseOrientation: cube_geometry.face_normal_body is not lateral (|n . axis| = " << std::fabs(n.dot(a))
+          << ")";
+        throw std::invalid_argument(m.str());
+    }
+    Eigen::Matrix3d R;
+    R.col(0) = n;
+    R.col(1) = a.cross(n).normalized();
+    R.col(2) = a;
+    return Eigen::Quaterniond(R).normalized();
+}
+
 void checkFirstOdomSample(const Eigen::Vector3d& position, const std::string& frame_id,
                           const Eigen::Vector3d& center) {
     if (frame_id != "world") {

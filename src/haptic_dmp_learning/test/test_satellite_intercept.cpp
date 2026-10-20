@@ -9,6 +9,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -98,6 +99,31 @@ TEST(SatelliteInterceptPhase, FirstSampleIsWrappedSignedAngleWithNonTrivialAxisA
         // R_rel really is R(theta) about the axis
         const Eigen::Matrix3d R = Eigen::AngleAxisd(deg(th), axis.normalized()).toRotationMatrix();
         EXPECT_LT((s.R_rel - R).norm(), 1e-12) << th;
+    }
+}
+
+// Tilted satellite as the world builds it: spawn orientation R_tilt Rz(theta), spin axis a = R_tilt z, q_ref = R_tilt.
+// The tracker must return theta (R_rel = R_tilt Rz(theta) R_tilt^T = Rot(a, theta)) with ~zero off-axis component.
+TEST(SatelliteInterceptPhase, TiltedSatelliteWithQRefEqualToRTiltReturnsTheta) {
+    for (const auto& tilt : {std::pair<double, double>{5.0, 0.0}, {20.0, 33.0}, {35.0, -120.0}, {80.0, 170.0}}) {
+        const double alpha = deg(tilt.first), beta = deg(tilt.second);
+        // tilt by alpha about the horizontal axis u = (-sin beta, cos beta, 0)
+        const Eigen::Vector3d u(-std::sin(beta), std::cos(beta), 0.0);
+        const Eigen::Quaterniond R_tilt(Eigen::AngleAxisd(alpha, u));
+        const Eigen::Vector3d axis = R_tilt * Eigen::Vector3d::UnitZ();
+        for (double th : {-170.0, -45.0, 0.0, 12.0, 100.0, 179.0}) {
+            PhaseTracker tr(axis, R_tilt);
+            const Eigen::Quaterniond q_body =
+                R_tilt * Eigen::Quaterniond(Eigen::AngleAxisd(deg(th), Eigen::Vector3d::UnitZ()));
+            const PhaseSample s = tr.update(q_body);
+            EXPECT_NEAR(radToDeg(s.theta_rad), th, 1e-9) << "alpha " << tilt.first << " beta " << tilt.second;
+            EXPECT_LT(s.off_axis_deg, 1e-9);
+        }
+        // With q_ref left at the identity the same body is NOT a rotation about the tilted axis: the tracker rejects it
+        // (this is why checkQRefOnAxis needs the base orientation).
+        PhaseTracker wrong(axis, Eigen::Quaterniond::Identity());
+        EXPECT_THROW(wrong.update(R_tilt * Eigen::Quaterniond(Eigen::AngleAxisd(deg(30.0), Eigen::Vector3d::UnitZ()))),
+                     std::runtime_error);
     }
 }
 
