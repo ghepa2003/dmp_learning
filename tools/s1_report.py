@@ -156,6 +156,32 @@ def quat_to_matrix(q) -> np.ndarray:
     ])
 
 
+def tilt_from_meta(meta: dict):
+    """(asse a, R_ref) da run_meta.json ("axis", "q_ref" xyzw). None se assenti o asse z con q_ref identita'
+    (comportamento storico: yaw = arctan2(R[1,0], R[0,0]))."""
+    ax, q = (meta or {}).get("axis"), (meta or {}).get("q_ref")
+    if ax is None or q is None:
+        return None
+    ax, q = [float(v) for v in ax], [float(v) for v in q]
+    if ax == [0.0, 0.0, 1.0] and q == [0.0, 0.0, 0.0, 1.0]:
+        return None
+    a = np.array(ax) / np.linalg.norm(ax)
+    return a, quat_to_matrix(q)
+
+
+def cube_angles(oR: np.ndarray, tilt=None) -> np.ndarray:
+    """Angolo del cubo attorno all'asse [rad, (-pi, pi]]. tilt None: arctan2(R[1,0], R[0,0]) (asse z, q_ref = I).
+    Altrimenti theta dell'angolo di R_rel = oR . R_ref^T attorno a a: con e = componente di R_ref.x ortogonale
+    ad a, theta = atan2(a.(e x e'), e.e'), e' = R_rel e (R_rel = Rot(a, theta) per un moto rigido attorno a a)."""
+    if tilt is None:
+        return np.arctan2(oR[:, 1, 0], oR[:, 0, 0])
+    a, R_ref = tilt
+    e = R_ref[:, 0] - (R_ref[:, 0] @ a) * a
+    e = e / np.linalg.norm(e)
+    e1 = oR @ (R_ref.T @ e)   # (oR R_ref^T) e, shape (N, 3)
+    return np.arctan2(np.cross(e, e1) @ a, e1 @ e)
+
+
 def _jsonable(o):
     if isinstance(o, dict):
         return {k: _jsonable(v) for k, v in o.items()}
@@ -503,7 +529,8 @@ def analyze(bag_dir, executor_log, meta: dict | None = None, criteria: dict | No
 
     # --- odometria
     ot, op, oR = bag["odo_t"], bag["odo_p"], bag["odo_R"]
-    yaws = np.arctan2(oR[:, 1, 0], oR[:, 0, 0])
+    tilt = tilt_from_meta(meta)   # None (asse z, q_ref = I): formula storica
+    yaws = cube_angles(oR, tilt)   # theta attorno all'asse (a alpha = 0 e' lo yaw)
     yaws_unw = np.unwrap(yaws)
     p0, z0 = op[0], oR[0][:, 2]
 

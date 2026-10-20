@@ -1,0 +1,62 @@
+{
+ "default": {
+  "argv": [],
+  "cmds": {
+   "bag": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 bag record -o /tmp/b /clock /tf /tf_static /joint_states /free_target_object/odometry /target_pose /grasp_command /gripper_position_cmd",
+   "bringup": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch franka_gazebo_bringup gazebo_cartesian_impedance_control_headless.launch.py load_gripper:=true",
+   "executor": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run haptic_dmp_learning prodmp_gazebo_executor_node --ros-args --params-file <WS>/src/haptic_dmp_learning/config/params.yaml --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p weights_yaml_path:=/w/weights.yaml -p demo_params_path:=/w/demo.yaml -p grasp_goal_source:=grasp_command -p grasp_orientation_mode:=planner_goal -p hold_target_enabled:=true -p axis_deviation_fatal_after_trigger:=false -p satellite_rotation_enabled:=true -p satellite_rotation_mode:=continuous -p satellite_phase_source:=measured -p target_odom_required:=false -p 'robot_base_world:=[0.0,0.0,0.0]' -p 'satellite_rotation_center:=[0.700,0.000,0.770]' -p satellite_rotation_angular_velocity_deg_s:=-2.000000 -p post_grasp_follow_s:=3.0 -p post_grasp_hold_s:=120.0",
+   "planner": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run satellite_grasp_planner grasp_planner_node --ros-args --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p grasp_planner_node:demo_params_path:=/w/demo.yaml -p demo_params_path:=/w/demo.yaml -p grasp_planner_node:urdf_path:=<WS>/fer_flat_effort.urdf -p urdf_path:=<WS>/fer_flat_effort.urdf -p 'grasp_planner_node:start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'grasp_planner_node:satellite_rotation_center:=[0.700,0.000,0.770]' -p 'satellite_rotation_center:=[0.700,0.000,0.770]' -p grasp_planner_node:satellite_rotation_angular_velocity_deg_s:=-2.000000 -p satellite_rotation_angular_velocity_deg_s:=-2.000000 -p 'grasp_planner_node:cube_geometry.center_world:=[0.700,0.000,0.770]' -p 'cube_geometry.center_world:=[0.700,0.000,0.770]' -p grasp_planner_node:cube_geometry.grasp_depth_m:=0.012500 -p cube_geometry.grasp_depth_m:=0.012500 -p grasp_planner_node:min_delay_s:=5.0 -p min_delay_s:=5.0 -p grasp_planner_node:s1.posthoc_velocity_check:=false -p s1.posthoc_velocity_check:=false",
+   "spawn": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch free_target_object free_target_object.launch.py x:=0.700 y:=0.000 z:=0.770 yaw:=3.14159265 wz:=-0.034906585"
+  }
+ },
+ "full": {
+  "argv": [
+   "--kt",
+   "1500",
+   "--depth",
+   "0.02",
+   "--follow-s",
+   "4",
+   "--hold-s",
+   "60",
+   "--squeeze",
+   "0.01",
+   "--omega-deg-s",
+   "-3.5",
+   "--center-xyz",
+   "0.71,0.01,0.8",
+   "--arm",
+   "v2",
+   "--planner-param",
+   "s1.force=true",
+   "--extra-exec-param",
+   "foo:=1",
+   "--spawn-yaw-deg",
+   "-73.1"
+  ],
+  "cmds": {
+   "bag": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 bag record -o /tmp/b /clock /tf /tf_static /joint_states /free_target_object/odometry /target_pose /grasp_command /gripper_position_cmd",
+   "bringup": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch franka_gazebo_bringup gazebo_cartesian_impedance_control_headless.launch.py load_gripper:=true",
+   "executor": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run haptic_dmp_learning prodmp_gazebo_executor_node --ros-args --params-file <WS>/src/haptic_dmp_learning/config/params.yaml --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p weights_yaml_path:=/w/weights.yaml -p demo_params_path:=/w/demo.yaml -p grasp_goal_source:=grasp_command -p grasp_orientation_mode:=planner_goal -p hold_target_enabled:=true -p axis_deviation_fatal_after_trigger:=false -p satellite_rotation_enabled:=true -p satellite_rotation_mode:=continuous -p satellite_phase_source:=measured -p target_odom_required:=false -p 'robot_base_world:=[0.0,0.0,0.0]' -p 'satellite_rotation_center:=[0.710,0.010,0.800]' -p satellite_rotation_angular_velocity_deg_s:=-3.500000 -p post_grasp_follow_s:=4.0 -p post_grasp_hold_s:=60.0 -p gripper_squeeze_position:=0.01 -p foo:=1",
+   "planner": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run satellite_grasp_planner grasp_planner_node --ros-args --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p grasp_planner_node:demo_params_path:=/w/demo.yaml -p demo_params_path:=/w/demo.yaml -p grasp_planner_node:urdf_path:=<WS>/fer_flat_effort.urdf -p urdf_path:=<WS>/fer_flat_effort.urdf -p 'grasp_planner_node:start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'grasp_planner_node:satellite_rotation_center:=[0.710,0.010,0.800]' -p 'satellite_rotation_center:=[0.710,0.010,0.800]' -p grasp_planner_node:satellite_rotation_angular_velocity_deg_s:=-3.500000 -p satellite_rotation_angular_velocity_deg_s:=-3.500000 -p 'grasp_planner_node:cube_geometry.center_world:=[0.710,0.010,0.800]' -p 'cube_geometry.center_world:=[0.710,0.010,0.800]' -p grasp_planner_node:cube_geometry.grasp_depth_m:=0.020000 -p cube_geometry.grasp_depth_m:=0.020000 -p grasp_planner_node:min_delay_s:=5.0 -p min_delay_s:=5.0 -p grasp_planner_node:s1.posthoc_velocity_check:=false -p s1.posthoc_velocity_check:=false -p grasp_planner_node:s1.mode:=v2 -p s1.mode:=v2 -p grasp_planner_node:s1.branch_rule:=rotation -p s1.branch_rule:=rotation -p grasp_planner_node:s1.force:=true -p s1.force:=true",
+   "spawn": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch free_target_object free_target_object.launch.py x:=0.710 y:=0.010 z:=0.800 yaw:=-1.27583568 wz:=-0.061086524"
+  }
+ },
+ "omega_pos": {
+  "argv": [
+   "--omega-deg-s",
+   "1.25",
+   "--spawn-yaw-deg",
+   "12.5",
+   "--arm",
+   "legacy"
+  ],
+  "cmds": {
+   "bag": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 bag record -o /tmp/b /clock /tf /tf_static /joint_states /free_target_object/odometry /target_pose /grasp_command /gripper_position_cmd",
+   "bringup": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch franka_gazebo_bringup gazebo_cartesian_impedance_control_headless.launch.py load_gripper:=true",
+   "executor": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run haptic_dmp_learning prodmp_gazebo_executor_node --ros-args --params-file <WS>/src/haptic_dmp_learning/config/params.yaml --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p weights_yaml_path:=/w/weights.yaml -p demo_params_path:=/w/demo.yaml -p grasp_goal_source:=grasp_command -p grasp_orientation_mode:=planner_goal -p hold_target_enabled:=true -p axis_deviation_fatal_after_trigger:=false -p satellite_rotation_enabled:=true -p satellite_rotation_mode:=continuous -p satellite_phase_source:=measured -p target_odom_required:=false -p 'robot_base_world:=[0.0,0.0,0.0]' -p 'satellite_rotation_center:=[0.700,0.000,0.770]' -p satellite_rotation_angular_velocity_deg_s:=1.250000 -p post_grasp_follow_s:=3.0 -p post_grasp_hold_s:=120.0",
+   "planner": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 run satellite_grasp_planner grasp_planner_node --ros-args --params-file <WS>/src/satellite_grasp_planner/config/grasp_planner_example.yaml -p use_sim_time:=true -p grasp_planner_node:demo_params_path:=/w/demo.yaml -p demo_params_path:=/w/demo.yaml -p grasp_planner_node:urdf_path:=<WS>/fer_flat_effort.urdf -p urdf_path:=<WS>/fer_flat_effort.urdf -p 'grasp_planner_node:start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'start_joints_override_rad:=[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]' -p 'grasp_planner_node:satellite_rotation_center:=[0.700,0.000,0.770]' -p 'satellite_rotation_center:=[0.700,0.000,0.770]' -p grasp_planner_node:satellite_rotation_angular_velocity_deg_s:=1.250000 -p satellite_rotation_angular_velocity_deg_s:=1.250000 -p 'grasp_planner_node:cube_geometry.center_world:=[0.700,0.000,0.770]' -p 'cube_geometry.center_world:=[0.700,0.000,0.770]' -p grasp_planner_node:cube_geometry.grasp_depth_m:=0.012500 -p cube_geometry.grasp_depth_m:=0.012500 -p grasp_planner_node:min_delay_s:=5.0 -p min_delay_s:=5.0 -p grasp_planner_node:s1.posthoc_velocity_check:=false -p s1.posthoc_velocity_check:=false -p grasp_planner_node:s1.mode:=legacy -p s1.mode:=legacy",
+   "spawn": "source /root/env_thesis.sh && eval \"$(python3 <WS>/tools/s1_env.py --root <WS>/install)\" && exec ros2 launch free_target_object free_target_object.launch.py x:=0.700 y:=0.000 z:=0.770 yaw:=0.21816616 wz:=0.021816616"
+  }
+ }
+}

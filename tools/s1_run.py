@@ -34,6 +34,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import s1_report  # noqa: E402
 
@@ -187,6 +189,172 @@ def parse_center_xyz(text: str):
 def center_str(c) -> str:
     """Formato dei comandi: [x,y,z] a 3 decimali (0.70 -> 0.700; stessi valori di prima per il default)."""
     return f"[{c[0]:.3f},{c[1]:.3f},{c[2]:.3f}]"
+
+
+# ------------------------------------------------------------------ asse inclinato (puro; G22)
+# Fatti misurati in Gazebo: `ros_gz_sim create -R -P -Y` = angoli ESTRINSECI R = Rz(yaw) Ry(pitch) Rx(roll);
+# initial_angular (wx, wy, wz) del VelocityControl e' nel frame BODY: con spawn R_tilt.Rz(yaw) e wz = omega
+# (wx = wy = 0) il cubo ruota rigidamente attorno a a = R_tilt.z. Il twist dell'odometria e' nel frame WORLD.
+
+AXIS_TILT_MAX_DEG = 20.0
+AXIS_NORMAL_TOL = 1e-12                  # |n.a| massimo prima di lanciare (il planner rifiuta oltre 1e-6)
+AXIS_CONSISTENT_TOL = 1e-9               # check_axis_consistent
+TILT_PARAM_KEYS = ("satellite_rotation_axis", "satellite_q_ref", "cube_geometry.axis_world",
+                   "cube_geometry.face_normal_body")
+
+
+def rot_axis_angle(axis, angle_rad: float) -> np.ndarray:
+    """Rodrigues: rotazione di angle_rad attorno a axis (normalizzato)."""
+    k = np.asarray(axis, dtype=float)
+    k = k / np.linalg.norm(k)
+    K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(angle_rad) * K + (1.0 - math.cos(angle_rad)) * (K @ K)
+
+
+def tilt_axis(alpha_deg: float, phi_deg: float) -> np.ndarray:
+    """a = (sin a cos phi, sin a sin phi, cos a): phi = azimut della proiezione orizzontale dell'asse."""
+    al, ph = math.radians(alpha_deg), math.radians(phi_deg)
+    return np.array([math.sin(al) * math.cos(ph), math.sin(al) * math.sin(ph), math.cos(al)])
+
+
+def tilt_rotation(alpha_deg: float, phi_deg: float) -> np.ndarray:
+    """R_tilt = Rot(n, alpha), n = (-sin phi, cos phi, 0); R_tilt.z = tilt_axis(alpha, phi)."""
+    ph = math.radians(phi_deg)
+    return rot_axis_angle([-math.sin(ph), math.cos(ph), 0.0], math.radians(alpha_deg))
+
+
+def tilt_quat_xyzw(alpha_deg: float, phi_deg: float) -> tuple:
+    """R_tilt come quaternione (x, y, z, w)."""
+    ph, h = math.radians(phi_deg), math.radians(alpha_deg) / 2.0
+    s = math.sin(h)
+    return (-math.sin(ph) * s, math.cos(ph) * s, 0.0, math.cos(h))
+
+
+def quat_xyzw_to_matrix(q) -> np.ndarray:
+    x, y, z, w = (float(v) for v in q)
+    n = math.sqrt(x * x + y * y + z * z + w * w)
+    x, y, z, w = x / n, y / n, z / n, w / n
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def rpy_extrinsic(R) -> tuple:
+    """(roll, pitch, yaw) [rad] con R = Rz(yaw) Ry(pitch) Rx(roll). Nessuna singolarita' per |pitch| < 90 deg."""
+    R = np.asarray(R, dtype=float)
+    pitch = -math.asin(max(-1.0, min(1.0, R[2, 0])))
+    return math.atan2(R[2, 1], R[2, 2]), pitch, math.atan2(R[1, 0], R[0, 0])
+
+
+def rpy_extrinsic_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    return (rot_axis_angle([0, 0, 1], yaw) @ rot_axis_angle([0, 1, 0], pitch) @ rot_axis_angle([1, 0, 0], roll))
+
+
+def float_str(x) -> str:
+    """repr (17 cifre significative, nessuna perdita); '1e-17' -> '1.0e-17': nel YAML dei parametri ROS un
+    esponente senza punto non e' un double."""
+    r = repr(float(x))
+    return r.replace("e", ".0e") if ("e" in r and "." not in r) else r
+
+
+def vec_str(v) -> str:
+    """[a,b,c,...] con float_str."""
+    return "[" + ",".join(float_str(x) for x in v) + "]"
+
+
+def parse_vec(text: str) -> np.ndarray:
+    return np.array([float(x) for x in text.strip().strip("[]").split(",")])
+
+
+def tilt_is_active(alpha_deg: float) -> bool:
+    return float(alpha_deg) != 0.0
+
+
+def validate_tilt(alpha_deg: float, phi_deg: float):
+    if not (math.isfinite(alpha_deg) and 0.0 <= alpha_deg <= AXIS_TILT_MAX_DEG):
+        raise RunError(f"--axis-tilt-deg {alpha_deg} fuori da [0, {AXIS_TILT_MAX_DEG:g}]")
+    if not (math.isfinite(phi_deg) and 0.0 <= phi_deg < 360.0):
+        raise RunError(f"--axis-lean-deg {phi_deg} fuori da [0, 360)")
+
+
+def tilt_values(alpha_deg: float, phi_deg: float, yaw_deg: float):
+    """None se alpha == 0 (nessun parametro nuovo). Altrimenti i valori, come stringhe dei comandi
+    (tutta la precisione di un double): asse, q_ref, normale del collare, roll/pitch/yaw di spawn."""
+    validate_tilt(alpha_deg, phi_deg)
+    if not tilt_is_active(alpha_deg):
+        return None
+    a = tilt_axis(alpha_deg, phi_deg)
+    R_tilt = tilt_rotation(alpha_deg, phi_deg)
+    q = tilt_quat_xyzw(alpha_deg, phi_deg)
+    n = R_tilt @ np.array([1.0, 0.0, 0.0])
+    dev = abs(float(n @ a))
+    if dev >= AXIS_NORMAL_TOL:
+        raise RunError(f"normale del collare non ortogonale all'asse: |n.a| = {dev:.3e} >= {AXIS_NORMAL_TOL:g}")
+    R_spawn = R_tilt @ rot_axis_angle([0, 0, 1], math.radians(yaw_deg))
+    roll, pitch, yaw = rpy_extrinsic(R_spawn)
+    return {"axis": a, "q_ref": q, "face_normal": n, "R_tilt": R_tilt,
+            "axis_str": vec_str(a), "q_ref_str": vec_str(q), "face_normal_str": vec_str(n),
+            "spawn_rpy_str": (float_str(roll), float_str(pitch), float_str(yaw)), "yaw_rad": math.radians(yaw_deg)}
+
+
+def tilt_meta(a) -> dict:
+    """Chiavi di run_meta.json (anche a alpha = 0: asse z e q_ref identita', quello che il report assume)."""
+    tv = args_tilt(a)
+    return {"axis_tilt_deg": a.axis_tilt_deg, "axis_lean_deg": a.axis_lean_deg,
+            "axis": [0.0, 0.0, 1.0] if tv is None else [float(x) for x in tv["axis"]],
+            "q_ref": [0.0, 0.0, 0.0, 1.0] if tv is None else [float(x) for x in tv["q_ref"]]}
+
+
+def git_state(ws) -> dict:
+    """Riproducibilita': HEAD, albero sporco (solo file TRACCIATI: git status --short -uno), elenco. None se git manca."""
+    def _git(*args):
+        r = subprocess.run(["git", "-C", str(ws), *args], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise OSError(r.stderr.strip())
+        return r.stdout
+    try:
+        head = _git("rev-parse", "HEAD").strip()
+        dirty = [ln for ln in _git("status", "--short", "-uno").splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return {"git_head": None, "git_dirty": None, "git_dirty_files": None}
+    return {"git_head": head, "git_dirty": bool(dirty), "git_dirty_files": dirty}
+
+
+def args_tilt(a):
+    return tilt_values(a.axis_tilt_deg, a.axis_lean_deg, a.spawn_yaw_deg)
+
+
+def check_axis_consistent(spawn: dict, executor: dict, planner: dict, tol: float = AXIS_CONSISTENT_TOL):
+    """Asse, q_ref e normale coerenti tra spawn, executor e planner (riletti dalle STRINGHE dei comandi).
+    spawn = {rpy: (roll, pitch, yaw) str, yaw_rad}; executor = {axis, q_ref}; planner = {axis, q_ref,
+    axis_world, face_normal}. Dallo spawn: R_spawn = Rz(yaw)Ry(pitch)Rx(roll), R_tilt = R_spawn.Rz(-yaw),
+    asse = R_spawn.z; deve coincidere con gli assi di executor e planner; q_ref con R_tilt; normale con R_tilt.x."""
+    R_spawn = rpy_extrinsic_to_matrix(*(float(x) for x in spawn["rpy"]))
+    R_tilt = R_spawn @ rot_axis_angle([0, 0, 1], -float(spawn["yaw_rad"]))
+    a_spawn = R_spawn[:, 2]
+    ax = {"spawn": a_spawn, "executor": parse_vec(executor["axis"]), "planner": parse_vec(planner["axis"]),
+          "planner axis_world": parse_vec(planner["axis_world"])}
+    for name, v in ax.items():
+        if np.linalg.norm(v - a_spawn) > tol:
+            raise RunError(f"asse non coerente ({name}): {v.tolist()} vs spawn {a_spawn.tolist()}")
+    qs = {"executor": executor["q_ref"], "planner": planner["q_ref"]}
+    for name, q in qs.items():
+        Rq = quat_xyzw_to_matrix(parse_vec(q))
+        if np.abs(Rq - R_tilt).max() > tol:
+            raise RunError(f"q_ref non coerente ({name}) con la rotazione di spawn")
+    n = parse_vec(planner["face_normal"])
+    if np.linalg.norm(n - R_tilt[:, 0]) > tol:
+        raise RunError("face_normal_body del planner != R_tilt.x dello spawn")
+    if abs(float(n @ a_spawn)) >= AXIS_NORMAL_TOL:
+        raise RunError(f"|n.a| = {abs(float(n @ a_spawn)):.3e} >= {AXIS_NORMAL_TOL:g}")
+
+
+def axis_rate(w_xyz, axis=None) -> float:
+    """Velocita' angolare attorno all'asse da un twist angolare WORLD. axis None (asse z, alpha = 0):
+    la componente z, identica a prima."""
+    if axis is None:
+        return w_xyz[2]
+    return float(w_xyz[0] * axis[0] + w_xyz[1] * axis[1] + w_xyz[2] * axis[2])
 
 
 def arm_planner_params(arm) -> list:
@@ -353,7 +521,7 @@ def ros_args(params: list[str]) -> str:
 
 # ------------------------------------------------------------------ monitor /clock e /grasp_command
 
-def make_monitor():
+def make_monitor(axis=None):
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -367,7 +535,8 @@ def make_monitor():
             self.sim_time = None
             self.wall_last_advance = time.time()
             self.grasp_cmd = None
-            self.cube_wz = None   # velocita' angolare del cubo attorno a z [rad/s], da odometria
+            self.cube_wz = None   # velocita' angolare del cubo attorno all'asse (z se axis None) [rad/s], da odometria
+            self.axis = axis      # asse di rotazione WORLD (None: z, alpha = 0); il twist dell'odometria e' WORLD
             self.create_subscription(Odometry, CUBE_ODOM_TOPIC, self._odom, 10)
             self.create_subscription(Clock, "/clock", self._on_clock, 10)
             qos = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -381,7 +550,8 @@ def make_monitor():
             self.sim_time = t
 
         def _odom(self, msg):
-            self.cube_wz = msg.twist.twist.angular.z
+            w = msg.twist.twist.angular
+            self.cube_wz = axis_rate((w.x, w.y, w.z), self.axis)
 
         def _gc(self, msg):
             self.grasp_cmd = msg
@@ -467,53 +637,38 @@ class CubeStopper:
 
 # ------------------------------------------------------------------ gate sul goal
 
-def goal_x_c_mm(goal_xy, theta_star_rad, center=SAT_CENTER) -> float:
-    """x_c = (goal_xy - centro_xy) . (cos theta*, sin theta*), in mm."""
-    dx, dy = goal_xy[0] - center[0], goal_xy[1] - center[1]
-    return (dx * math.cos(theta_star_rad) + dy * math.sin(theta_star_rad)) * 1000.0
+def goal_x_c_mm(goal_xy, theta_star_rad, center=SAT_CENTER, axis=None, face_normal_ref=None) -> float:
+    """alpha = 0 (axis None): x_c = (goal_xy - centro_xy) . (cos theta*, sin theta*), in mm (formula storica).
+    Asse inclinato: x_c = (goal - centro) . n_world(theta*), n_world = Rot(a, theta*) . face_normal_ref
+    (face_normal_ref = R_tilt.x); goal deve avere tre componenti."""
+    if axis is None:
+        dx, dy = goal_xy[0] - center[0], goal_xy[1] - center[1]
+        return (dx * math.cos(theta_star_rad) + dy * math.sin(theta_star_rad)) * 1000.0
+    if len(goal_xy) < 3:
+        raise RunError("gate goal con asse inclinato: serve il goal 3D")
+    n = rot_axis_angle(axis, theta_star_rad) @ np.asarray(face_normal_ref, dtype=float)
+    return float((np.asarray(goal_xy[:3], dtype=float) - np.asarray(center, dtype=float)) @ n) * 1000.0
 
 
-def goal_from_executor_log(text: str):
+def goal_from_executor_log(text: str, with_z: bool = False):
     mg = re.search(r"goal=\[([0-9.\-]+),\s*([0-9.\-]+),\s*([0-9.\-]+)\]", text)
     mt = re.search(r"theta_star=([0-9.\-]+)\s*deg", text)
     if mg and mt:
-        return (float(mg.group(1)), float(mg.group(2))), math.radians(float(mt.group(1)))
+        xyz = (float(mg.group(1)), float(mg.group(2)), float(mg.group(3)))
+        return (xyz if with_z else xyz[:2]), math.radians(float(mt.group(1)))
     return None
 
 
 # ------------------------------------------------------------------ run
 
-def build_commands(a, paths):
-    weights = paths["weights"]
-    demo = paths["demo_params"]
-    depth = f"{a.depth:.6f}"
+def exec_param_list(a, paths) -> list:
+    """Parametri -p dell'executor (senza i prefissi '-p')."""
     c = a.center_xyz
     ov = omega_values(a.omega_deg_s)
-    check_omega_consistent(a.omega_deg_s)
-
-    spawn = ros_cmd(
-        "exec ros2 launch free_target_object free_target_object.launch.py "
-        f"x:={c[0]:.3f} y:={c[1]:.3f} z:={c[2]:.3f} "
-        # yaw0 del cubo allo spawn. Per ridurre l'attesa del planner (da ~138 s a ~15 s) conviene
-        # sceglierlo cosi': il cubo ruota a omega (<0), e al tempo t_snap dello snapshot del planner
-        # deve avere la fase theta_snap_target (quella da cui il planner calcola il TRIGGER):
-        #     yaw(t_snap) = yaw0 + omega*(t_snap - t_spawn) = theta_snap_target
-        #  => yaw0 = theta_snap_target - omega*(t_snap - t_spawn)
-        #          = theta_snap_target + |omega|*(t_snap - t_spawn)        (omega < 0)
-        # --spawn-yaw-deg auto: yaw0 = theta_star_ref - omega*T_total (auto_spawn_yaw_deg), ~ -73.1 deg
-        # per -2 deg/s; il default 180 deg riproduce run_final2.py (attesa ~138 s).
-        # wz = omega del run [rad/s], coerente con il parametro dell'executor e del planner (omega_values).
-        f"yaw:={math.radians(a.spawn_yaw_deg):.8f} wz:={ov['spawn_wz_rad_s']}")
-
-    bag = ros_cmd(
-        f"exec ros2 bag record -o {shlex.quote(str(paths['bag']))} "
-        "/clock /tf /tf_static /joint_states /free_target_object/odometry /target_pose "
-        "/grasp_command /gripper_position_cmd")
-
     exec_params = [
         "use_sim_time:=true",
-        f"weights_yaml_path:={weights}",
-        f"demo_params_path:={demo}",
+        f"weights_yaml_path:={paths['weights']}",
+        f"demo_params_path:={paths['demo_params']}",
         "grasp_goal_source:=grasp_command",
         "grasp_orientation_mode:=planner_goal",
         "hold_target_enabled:=true",
@@ -528,18 +683,23 @@ def build_commands(a, paths):
         f"post_grasp_follow_s:={a.follow_s}",
         f"post_grasp_hold_s:={a.hold_s}",
     ]
+    tv = args_tilt(a)
+    if tv is not None:   # alpha > 0: asse e q_ref (se alpha = 0 NIENTE: restano i default del YAML)
+        exec_params += [f"satellite_rotation_axis:={tv['axis_str']}", f"satellite_q_ref:={tv['q_ref_str']}"]
     if a.squeeze is not None:
         exec_params.append(f"gripper_squeeze_position:={a.squeeze}")
     exec_params += a.extra_exec_param
-    executor = ros_cmd(
-        "exec ros2 run haptic_dmp_learning prodmp_gazebo_executor_node --ros-args "
-        f"--params-file {shlex.quote(str(EXECUTOR_YAML))} --params-file {shlex.quote(str(PLANNER_YAML))} "
-        + ros_args(exec_params))
+    return exec_params
 
-    centre = center_str(c)
+
+def planner_param_list(a, paths) -> list:
+    """Parametri -p del planner, nelle due forme (con e senza prefisso del nodo), nell'ordine dei comandi."""
+    depth = f"{a.depth:.6f}"
+    ov = omega_values(a.omega_deg_s)
+    centre = center_str(a.center_xyz)
     planner_params = ["use_sim_time:=true"]
-    for key, val in [
-        ("demo_params_path", str(demo)),
+    defaults = [
+        ("demo_params_path", str(paths["demo_params"])),
         ("urdf_path", str(URDF_PATH)),
         ("start_joints_override_rad", START_JOINTS),
         ("satellite_rotation_center", centre),
@@ -548,19 +708,100 @@ def build_commands(a, paths):
         ("cube_geometry.grasp_depth_m", depth),
         ("min_delay_s", "5.0"),
         ("s1.posthoc_velocity_check", "false"),
-    ]:
+    ]
+    tv = args_tilt(a)
+    if tv is not None:   # alpha > 0: gli stessi valori dell'executor e dello spawn
+        defaults += [("satellite_rotation_axis", tv["axis_str"]), ("satellite_q_ref", tv["q_ref_str"]),
+                     ("cube_geometry.axis_world", tv["axis_str"]),
+                     ("cube_geometry.face_normal_body", tv["face_normal_str"])]
+    for key, val in defaults:
         # le due forme (con e senza prefisso del nodo), come in run_final2.py
         planner_params += [f"grasp_planner_node:{key}:={val}", f"{key}:={val}"]
     # --planner-param: dopo i default (nei -p l'ultimo valore vince), stesse due forme
     for key, val in a.planner_param:
         planner_params += [f"grasp_planner_node:{key}:={val}", f"{key}:={val}"]
+    return planner_params
+
+
+def check_tilt_not_overridden(a):
+    """Con alpha > 0 i quattro parametri dell'asse li scrive il runner: una seconda fonte darebbe incoerenza."""
+    if not tilt_is_active(a.axis_tilt_deg):
+        return
+    keys = {k for k, _ in a.planner_param} & set(TILT_PARAM_KEYS)
+    keys |= {p.split(":=")[0] for p in a.extra_exec_param} & set(TILT_PARAM_KEYS)
+    if keys:
+        raise RunError(f"con --axis-tilt-deg > 0 i parametri {sorted(keys)} li scrive il runner: "
+                       "non passarli con --planner-param/--extra-exec-param")
+
+
+def build_commands(a, paths):
+    weights = paths["weights"]
+    demo = paths["demo_params"]
+    c = a.center_xyz
+    ov = omega_values(a.omega_deg_s)
+    check_omega_consistent(a.omega_deg_s)
+    check_tilt_not_overridden(a)
+    tv = args_tilt(a)
+    if tv is None:
+        spawn_pose = f"yaw:={math.radians(a.spawn_yaw_deg):.8f} wz:={ov['spawn_wz_rad_s']}"
+    else:
+        # R_spawn = R_tilt.Rz(yaw) in roll/pitch/yaw ESTRINSECI (ros_gz_sim create -R -P -Y); wz = omega nel
+        # frame BODY (wx = wy = 0): il cubo ruota rigidamente attorno a a = R_tilt.z (G22)
+        r, pi_, y = tv["spawn_rpy_str"]
+        spawn_pose = f"roll:={r} pitch:={pi_} yaw:={y} wz:={ov['spawn_wz_rad_s']}"
+        check_axis_consistent(
+            {"rpy": tv["spawn_rpy_str"], "yaw_rad": tv["yaw_rad"]},
+            {"axis": _param_value(exec_param_list(a, paths), "satellite_rotation_axis"),
+             "q_ref": _param_value(exec_param_list(a, paths), "satellite_q_ref")},
+            {"axis": _param_value(planner_param_list(a, paths), "satellite_rotation_axis"),
+             "q_ref": _param_value(planner_param_list(a, paths), "satellite_q_ref"),
+             "axis_world": _param_value(planner_param_list(a, paths), "cube_geometry.axis_world"),
+             "face_normal": _param_value(planner_param_list(a, paths), "cube_geometry.face_normal_body")})
+
+    spawn = ros_cmd(
+        "exec ros2 launch free_target_object free_target_object.launch.py "
+        f"x:={c[0]:.3f} y:={c[1]:.3f} z:={c[2]:.3f} "
+        # yaw0 del cubo allo spawn. Per ridurre l'attesa del planner (da ~138 s a ~15 s) conviene
+        # sceglierlo cosi': il cubo ruota a omega (<0), e al tempo t_snap dello snapshot del planner
+        # deve avere la fase theta_snap_target (quella da cui il planner calcola il TRIGGER):
+        #     yaw(t_snap) = yaw0 + omega*(t_snap - t_spawn) = theta_snap_target
+        #  => yaw0 = theta_snap_target - omega*(t_snap - t_spawn)
+        #          = theta_snap_target + |omega|*(t_snap - t_spawn)        (omega < 0)
+        # --spawn-yaw-deg auto: yaw0 = theta_star_ref - omega*T_total (auto_spawn_yaw_deg), ~ -73.1 deg
+        # per -2 deg/s; il default 180 deg riproduce run_final2.py (attesa ~138 s).
+        # wz = omega del run [rad/s], coerente con il parametro dell'executor e del planner (omega_values).
+        # Con --axis-tilt-deg > 0: roll/pitch/yaw estrinseci di R_tilt.Rz(yaw0) al posto di yaw.
+        + spawn_pose)
+
+    bag = ros_cmd(
+        f"exec ros2 bag record -o {shlex.quote(str(paths['bag']))} "
+        "/clock /tf /tf_static /joint_states /free_target_object/odometry /target_pose "
+        "/grasp_command /gripper_position_cmd")
+
+    executor = ros_cmd(
+        "exec ros2 run haptic_dmp_learning prodmp_gazebo_executor_node --ros-args "
+        f"--params-file {shlex.quote(str(EXECUTOR_YAML))} --params-file {shlex.quote(str(PLANNER_YAML))} "
+        + ros_args(exec_param_list(a, paths)))
+
     planner = ros_cmd(
         "exec ros2 run satellite_grasp_planner grasp_planner_node --ros-args "
-        f"--params-file {shlex.quote(str(PLANNER_YAML))} " + ros_args(planner_params))
+        f"--params-file {shlex.quote(str(PLANNER_YAML))} " + ros_args(planner_param_list(a, paths)))
 
     bringup = ros_cmd("exec ros2 launch franka_gazebo_bringup "
                       "gazebo_cartesian_impedance_control_headless.launch.py load_gripper:=true")
     return {"bringup": bringup, "spawn": spawn, "bag": bag, "executor": executor, "planner": planner}
+
+
+def _param_value(params: list, key: str) -> str:
+    """Valore dell'ULTIMA occorrenza di 'key:=valore' (o 'nodo:key:=valore') in una lista di -p."""
+    val = None
+    for p in params:
+        k, _, v = p.partition(":=")
+        if k == key or k.endswith(":" + key):
+            val = v
+    if val is None:
+        raise RunError(f"parametro {key} assente")
+    return val
 
 
 EXIT_INTERRUPTED = 130
@@ -634,7 +875,8 @@ def run_experiment(a, paths, on_bag_saved):
             procs["gui"] = Proc("gui", "DISPLAY=:0 exec ign gazebo -g", outdir / "gui.log", env)
         time.sleep(5.0)   # assestamento del robot
 
-        monitor, rclpy_mod = make_monitor()
+        tv = args_tilt(a)
+        monitor, rclpy_mod = make_monitor(None if tv is None else tv["axis"])
         time.sleep(2.0)
 
         procs["spawn"] = Proc("spawn", cmds["spawn"], outdir / "spawn.log", env)
@@ -709,13 +951,18 @@ def run_experiment(a, paths, on_bag_saved):
             if not gate_done:
                 gc = monitor.grasp_cmd
                 if gc is not None:
-                    goal = ((gc.goal_pose.position.x, gc.goal_pose.position.y), gc.theta_star_rad)
+                    gp = gc.goal_pose.position
+                    goal = (((gp.x, gp.y) if tv is None else (gp.x, gp.y, gp.z)), gc.theta_star_rad)
                 elif "GraspCommand ACCEPTED" in txt:
-                    goal = goal_from_executor_log(txt)
+                    goal = goal_from_executor_log(txt, with_z=tv is not None)
                 else:
                     goal = None
                 if goal is not None:
-                    xc = goal_x_c_mm(*goal, center=a.center_xyz)
+                    if tv is None:
+                        xc = goal_x_c_mm(*goal, center=a.center_xyz)
+                    else:
+                        xc = goal_x_c_mm(*goal, center=a.center_xyz, axis=tv["axis"],
+                                         face_normal_ref=tv["R_tilt"][:, 0])
                     log(f"gate goal: x_c = {xc:.4f} mm (atteso {expected_xc:.4f} +- {GATE_TOL_MM} mm)")
                     if abs(xc - expected_xc) > GATE_TOL_MM:
                         raise RunError(f"gate goal fallito: x_c={xc:.4f} mm != {expected_xc:.4f}+-{GATE_TOL_MM} mm "
@@ -826,6 +1073,14 @@ def make_parser():
     ap.add_argument("--center-xyz", type=parse_center_xyz, default=SAT_CENTER, metavar="X,Y,Z",
                     help="centro di rotazione / spawn del cubo [m] (0.70,0.0,0.77); stesso valore in spawn, executor,\n"
                          "planner (satellite_rotation_center, cube_geometry.center_world) e gate sul goal")
+    ap.add_argument("--axis-tilt-deg", type=float, default=0.0, metavar="ALPHA",
+                    help=f"inclinazione dell'asse di rotazione rispetto a z [deg], 0 <= ALPHA <= {AXIS_TILT_MAX_DEG:g} (0).\n"
+                         "Con 0 nessun parametro nuovo e comandi identici a prima. Con ALPHA > 0: spawn R_tilt.Rz(yaw),\n"
+                         "satellite_rotation_axis, satellite_q_ref, cube_geometry.axis_world/face_normal_body scritti\n"
+                         "in modo coerente (a = (sin a cos phi, sin a sin phi, cos a), R_tilt = Rot(n, a), n = (-sin phi, cos phi, 0))")
+    ap.add_argument("--axis-lean-deg", type=float, default=0.0, metavar="PHI",
+                    help="azimut della proiezione orizzontale dell'asse [deg], in [0, 360) (0); phi = beta - 90\n"
+                         "rispetto al beta dei test G22 (asse di inclinazione (cos beta, sin beta, 0))")
     ap.add_argument("--arm", choices=sorted(ARMS), default=None,
                     help="braccio di selezione, espanso in --planner-param: "
                          + "; ".join(f"{k}: " + " ".join(f"{a}={b}" for a, b in v) for k, v in ARMS.items()))
@@ -866,6 +1121,7 @@ def main(argv=None) -> int:
     try:
         if not (math.isfinite(a.omega_deg_s) and a.omega_deg_s != 0.0):
             raise RunError("--omega-deg-s deve essere finito e != 0")
+        validate_tilt(a.axis_tilt_deg, a.axis_lean_deg)
         a.spawn_yaw_mode = "auto" if a.spawn_yaw_deg == "auto" else "fixed"
         if a.spawn_yaw_deg == "auto":
             a.spawn_yaw_deg = auto_spawn_yaw_deg(a.omega_deg_s, a.theta_star_ref_deg, a.t_total_s)
@@ -882,6 +1138,8 @@ def main(argv=None) -> int:
             raise RunError("--post-s troppo corto per follow_s + stop-cube-delay-s + 1 s")
         if a.stop_cube_delay_s < 0.0:
             raise RunError("--stop-cube-delay-s deve essere >= 0")
+        check_tilt_not_overridden(a)
+        args_tilt(a)   # |n.a| < 1e-12 e conversione RPY prima di lanciare qualsiasi cosa
         weights, demo = resolve_weights(Path(a.weights_dir).resolve())
         bag = outdir / "bag"
         if bag.exists():
@@ -898,6 +1156,10 @@ def main(argv=None) -> int:
                 "extra_exec_param": a.extra_exec_param, "sim_timeout": a.sim_timeout,
                 "planner_param": planner_param_dict(a.planner_param),
                 "stop_cube": a.stop_cube, "stop_cube_delay_s": a.stop_cube_delay_s, "post_s": a.post_s}
+        meta.update(tilt_meta(a))
+        meta.update(git_state(WS_DIR))
+        meta["planner_params_passed"] = planner_param_list(a, paths)
+        meta["executor_params_passed"] = exec_param_list(a, paths)
 
         def save_meta():
             (outdir / "run_meta.json").write_text(json.dumps(meta, indent=2))
