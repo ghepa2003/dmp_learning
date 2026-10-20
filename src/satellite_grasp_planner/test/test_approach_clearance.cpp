@@ -15,13 +15,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -398,5 +401,110 @@ TEST(HandMeshTest, DegenerateTriangleThrows) {
         ADD_FAILURE() << "expected an exception";
     } catch (const std::invalid_argument& e) {
         EXPECT_NE(std::string(e.what()).find("degenerate"), std::string::npos) << e.what();
+    }
+}
+
+// Rigid invariance: the clearance depends only on the relative geometry. Applying the same rigid motion x -> R x + shift to
+// the hand trajectory (positions and orientations), the satellite centre, the spin axis and the collar normal gives the
+// same distances, pair and time (the hand frames and the satellite shapes move together).
+TEST(ApproachClearanceTest, RigidMotionOfTheWholeSceneLeavesTheClearanceUnchanged) {
+    constexpr double tau = 8.0, theta_star = 0.4, omega = -5.0 * kDeg;
+    const Eigen::Quaterniond qa = kHandAlongPlusX * Eigen::Quaterniond(Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitZ()));
+    const Eigen::Quaterniond qb = kHandAlongPlusX * Eigen::Quaterniond(Eigen::AngleAxisd(0.15, Eigen::Vector3d::UnitZ()));
+    ApproachSample a, b;
+    a.t_s = 0.0;
+    b.t_s = tau;
+    a.position = Eigen::Vector3d(-0.60, 0.05, 0.03);
+    b.position = Eigen::Vector3d(-0.19, 0.013, 0.021);
+    a.orientation = qa;
+    b.orientation = qb;
+    const ApproachClearanceModel m0(cubeParams(), syntheticHand(0.01));
+    const ClearanceResult r0 = approachClearance(m0, {a, b}, tau, theta_star, omega, Eigen::Vector3d::Zero(),
+                                                 Eigen::Vector3d::UnitZ(), ClearanceParams());
+    ASSERT_TRUE(std::isfinite(r0.min_mm));
+
+    const Eigen::Vector3d shift(0.31, -0.22, 0.47);
+    std::vector<double> min_mm_values;
+    int orientation_sensitive = 0;  // tilts for which ignoring the rotation of the satellite frame changes the result
+    int tilt_index = -1;
+    for (const auto& tilt : {std::pair<double, double>{0.0, 0.0}, {5.0, 0.0}, {20.0, 33.0}, {35.0, -120.0}, {80.0, 250.0}}) {
+        ++tilt_index;
+        SCOPED_TRACE(testing::Message() << "tilt index " << tilt_index << " alpha " << tilt.first << " deg beta " << tilt.second << " deg");
+        const double al = tilt.first * kDeg, be = tilt.second * kDeg;
+        const Eigen::Matrix3d R =
+            (Eigen::AngleAxisd(al, Eigen::Vector3d(-std::sin(be), std::cos(be), 0.0)) * Eigen::AngleAxisd(0.6, Eigen::Vector3d::UnitX()))
+                .toRotationMatrix();
+        const Eigen::Quaterniond qR(R);
+        CubeSatelliteModel::Params p = cubeParams();
+        p.axis_world = R * Eigen::Vector3d::UnitZ();
+        p.face_normal_body = R * Eigen::Vector3d::UnitX();
+        const ApproachClearanceModel m1(p, syntheticHand(0.01));
+        ApproachSample a2 = a, b2 = b;
+        a2.position = R * a.position + shift;
+        b2.position = R * b.position + shift;
+        a2.orientation = (qR * qa).normalized();
+        b2.orientation = (qR * qb).normalized();
+        const ClearanceResult r1 = approachClearance(m1, {a2, b2}, tau, theta_star, omega, shift, p.axis_world, ClearanceParams());
+        // non-vacuity: a finite, positive, bounded clearance (a degenerate scene would pass any invariance check)
+        for (const double v : {r1.min_mm, r1.min_mm_no_tail}) {
+            EXPECT_TRUE(std::isfinite(v));
+            EXPECT_GT(v, 0.0);
+            EXPECT_LT(v, 1000.0);
+        }
+        min_mm_values.push_back(r1.min_mm);
+        // The same moved hand against the NOMINAL satellite frame (n = +x, a = +z): if this equals r0 the rotation would not
+        // be tested at all.
+        const ClearanceResult r_nominal_frame =
+            approachClearance(m0, {a2, b2}, tau, theta_star, omega, shift, Eigen::Vector3d::UnitZ(), ClearanceParams());
+        if (std::abs(r_nominal_frame.min_mm - r0.min_mm) > 1e-2) ++orientation_sensitive;
+        EXPECT_NEAR(r1.min_mm, r0.min_mm, 1e-3) << "alpha " << tilt.first << " beta " << tilt.second;
+        EXPECT_NEAR(r1.min_mm_no_tail, r0.min_mm_no_tail, 1e-3);
+        EXPECT_NEAR(r1.t_rel_s, r0.t_rel_s, 1e-9);
+        EXPECT_NEAR(r1.t_rel_no_tail_s, r0.t_rel_no_tail_s, 1e-9);
+        EXPECT_EQ(r1.pair.str(), r0.pair.str());
+        EXPECT_EQ(r1.pair_no_tail.str(), r0.pair_no_tail.str());
+    }
+    const auto mm = std::minmax_element(min_mm_values.begin(), min_mm_values.end());
+    std::cout << "[RigidMotion] min_mm over the tilts: min " << *mm.first << " max " << *mm.second << " (r0 " << r0.min_mm
+              << "), orientation-sensitive tilts " << orientation_sensitive << "/" << min_mm_values.size() << std::endl;
+    EXPECT_GE(orientation_sensitive, 2);
+}
+
+// Known face of the cube, nominal scene and the same scene rotated: face to face at 10 mm (see the header: hand z along +x,
+// fingers open 0.060, TCP.x = -0.0945, tip faces at x = -0.085, cube -x face at x = -0.075), spin omega = 0. The cube box
+// must turn with the satellite frame (n, a x n, a): with a world-aligned cube box the tilted scenes would give another value.
+TEST(ApproachClearanceTest, KnownCubeFaceDistanceIsTheSameInARotatedScene) {
+    constexpr double tau = 5.0;
+    const Eigen::Vector3d tcp(-0.0945, 0.0, 0.0);
+    const ApproachClearanceModel m0 = makeModel();
+    const ClearanceResult r0 = run(m0, stationary(tcp, kHandAlongPlusX, tau), tau, 0.0);
+    EXPECT_NEAR(r0.min_mm, 10.0, 0.01);
+    EXPECT_NEAR(r0.min_mm_no_tail, 10.0, 0.01);
+    EXPECT_EQ(r0.pair.satellite, "cubo");
+    EXPECT_EQ(r0.pair_no_tail.satellite, "cubo");
+
+    const Eigen::Vector3d shift(0.31, -0.22, 0.47);
+    const std::vector<Eigen::Matrix3d> rotations = {
+        Eigen::AngleAxisd(35.0 * kDeg, Eigen::Vector3d::UnitY()).toRotationMatrix(),
+        Eigen::AngleAxisd(60.0 * kDeg, Eigen::Vector3d(1.0, 1.0, 1.0).normalized()).toRotationMatrix(),
+        (Eigen::AngleAxisd(80.0 * kDeg, Eigen::Vector3d(-0.5, 0.8, 0.0).normalized()) * Eigen::AngleAxisd(0.6, Eigen::Vector3d::UnitX()))
+            .toRotationMatrix()};
+    int index = -1;
+    for (const Eigen::Matrix3d& R : rotations) {
+        ++index;
+        SCOPED_TRACE(testing::Message() << "rotation index " << index);
+        CubeSatelliteModel::Params p = cubeParams();
+        p.axis_world = R * Eigen::Vector3d::UnitZ();
+        p.face_normal_body = R * Eigen::Vector3d::UnitX();
+        p.center_world = shift;
+        const ApproachClearanceModel m1(p, syntheticHand(0.01));
+        const std::vector<ApproachSample> traj = stationary(R * tcp + shift, Eigen::Quaterniond(R) * kHandAlongPlusX, tau);
+        const ClearanceResult r1 = approachClearance(m1, traj, tau, 0.0, 0.0, shift, p.axis_world, ClearanceParams());
+        EXPECT_NEAR(r1.min_mm, 10.0, 0.01);
+        EXPECT_NEAR(r1.min_mm_no_tail, r0.min_mm_no_tail, 1e-3);
+        // Only the satellite body is compared, not the finger index: the two fingers are symmetric about the hand x-z plane
+        // and both at 10 mm from the face, so which one is reported as the closest is decided by rounding.
+        EXPECT_EQ(r1.pair.satellite, "cubo");
+        EXPECT_EQ(r1.pair_no_tail.satellite, "cubo");
     }
 }

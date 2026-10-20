@@ -297,6 +297,18 @@ ClearanceResult approachClearance(const ApproachClearanceModel& model, const std
     }
     const Eigen::Vector3d u = n_body.cross(axis).normalized();  // collar frame of CubeSatelliteModel: u = n x axis, v = axis
 
+    // Cube box orientation at theta = 0: the proper rotation [n, a x n, a] (det = n . ((a x n) x a) = n . n = 1 for n . a = 0),
+    // the same as satelliteBaseOrientation() (ros/grasp_planner_checks.cpp; not linkable from the core). It is the identity,
+    // component by component, for n = +x, a = +z: then R_cube is a copy of R_s and the nominal numeric path is unchanged.
+    if (!(std::abs(n_body.dot(axis)) <= CubeSatelliteModel::kLateralTolerance)) {
+        throw std::invalid_argument("approachClearance: face_normal_body is not lateral (|n . axis| > 1e-6).");
+    }
+    Eigen::Matrix3d R_base;
+    R_base.col(0) = n_body;
+    R_base.col(1) = axis.cross(n_body).normalized();
+    R_base.col(2) = axis;
+    const bool base_is_identity = (R_base == Eigen::Matrix3d::Identity());  // exact comparison (-0.0 == 0.0)
+
     // Collar boxes in the satellite body frame (theta = 0), relative to the center. Box axes: x along n (length),
     // y radial (thickness), z tangential - as free_target_object.sdf.xacro (rotation phi about +n).
     std::vector<Eigen::Vector3d> col_p(kCollarSegments);
@@ -352,7 +364,9 @@ ClearanceResult approachClearance(const ApproachClearanceModel& model, const std
         const double theta = theta_star_rad - omega_rad_s * (tau_s - t);
         const Eigen::Matrix3d R_s = Eigen::AngleAxisd(theta, axis).toRotationMatrix();
         sat.clear();
-        sat.push_back({&m.cube_box, coal::Transform3s(R_s, center_world), center_world, 0});
+        Eigen::Matrix3d R_cube = R_s;
+        if (!base_is_identity) R_cube = R_s * R_base;
+        sat.push_back({&m.cube_box, coal::Transform3s(R_cube, center_world), center_world, 0});
         for (int i = 0; i < kCollarSegments; ++i) {
             const Eigen::Vector3d pw = center_world + R_s * col_p[static_cast<std::size_t>(i)];
             sat.push_back({&m.collar_box, coal::Transform3s(R_s * col_R[static_cast<std::size_t>(i)], pw), pw, 1});
