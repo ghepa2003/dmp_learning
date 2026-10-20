@@ -2,11 +2,14 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
+#include "satellite_grasp_planner/core/approach_clearance.hpp"
+#include "satellite_grasp_planner/core/joint_path_simulator.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -33,6 +36,29 @@ struct FeasibilityResult {
     /// exceeded. DIAGNOSTIC ONLY (does not influence `feasible`); 0.0 if nothing was simulated.
     double min_joint_margin_rad = 0.0;
 };
+
+/**
+ * @brief The Cartesian approach trajectory of checkKinematicFeasibility(), as its own function (the loop that used to
+ *        be inline there, operation for operation): ProDMP position (absolute goal, ceil(tau/dt) steps from
+ *        @p p0, goal @p target_position) and shortest-path SLERP @p quat0 -> @p target_orientation with
+ *        s = min(1, (i + 1) dt / tau). Sample i belongs to the time (i + 1) dt.
+ * @param prodmp_template NOT modified (a local copy is rolled out). @throws std::invalid_argument if dt <= 0.
+ */
+std::vector<CartesianSample> buildApproachTrajectory(const haptic_dmp_learning::core::ProDMP& prodmp_template,
+                                                     const Eigen::Vector3d& p0, const Eigen::Quaterniond& quat0,
+                                                     const Eigen::Vector3d& target_position,
+                                                     const Eigen::Quaterniond& target_orientation, double dt);
+
+/**
+ * @brief buildApproachTrajectory() with explicit times, as the executor publishes it on /target_pose: a first sample
+ *        (t = 0, @p p0, @p quat0) - the executor's first tick has elapsed = 0 - then sample i at t = (i + 1) dt, with
+ *        the position clamped to @p target_position from t >= tau on (the executor publishes the goal once
+ *        elapsed >= tau). Input of approachClearance().
+ */
+std::vector<ApproachSample> timedApproachTrajectory(const haptic_dmp_learning::core::ProDMP& prodmp_template,
+                                                    const Eigen::Vector3d& p0, const Eigen::Quaterniond& quat0,
+                                                    const Eigen::Vector3d& target_position,
+                                                    const Eigen::Quaterniond& target_orientation, double dt);
 
 /**
  * @brief Offline kinematic feasibility of reaching a complete target pose from @p q0.

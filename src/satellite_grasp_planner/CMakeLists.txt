@@ -18,6 +18,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
+find_package(coal REQUIRED)
 find_package(haptic_dmp_learning REQUIRED)
 find_package(franka_cartesian_control REQUIRED)
 
@@ -29,6 +30,7 @@ include_directories(include)
 # core::computePoseError - reused verbatim for the offline joint-path
 # simulation, see core/joint_path_simulator.hpp).
 add_library(${PROJECT_NAME}_core
+  src/core/approach_clearance.cpp
   src/core/manipulability.cpp
   src/core/joint_path_simulator.cpp
   src/core/kinematic_feasibility.cpp
@@ -44,9 +46,12 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
+# coal: signed distances of the approach clearance constraint (core/approach_clearance.cpp), as the planner linked it
+# before b3080b5 (find_package(coal REQUIRED), coal::coal).
 target_link_libraries(${PROJECT_NAME}_core
   Eigen3::Eigen
   pinocchio::pinocchio
+  coal::coal
 )
 # haptic_dmp_learning and franka_cartesian_control export their _core
 # libraries the classic ament_cmake way (ament_export_libraries +
@@ -160,6 +165,19 @@ if(BUILD_ANALYSIS_TOOLS)
     franka_cartesian_control
   )
   install(TARGETS s3_landscape
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+
+  add_executable(s3_clearance analysis/s3_clearance.cpp)
+  target_link_libraries(s3_clearance
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(s3_clearance
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  install(TARGETS s3_clearance
     RUNTIME DESTINATION lib/${PROJECT_NAME}
   )
 endif()
@@ -286,6 +304,15 @@ if(BUILD_TESTING)
     haptic_dmp_learning
     franka_cartesian_control
   )
+  ament_add_gtest(test_approach_clearance test/test_approach_clearance.cpp)
+  target_link_libraries(test_approach_clearance
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_approach_clearance
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
   ament_add_gtest(test_s3_landscape_log test/test_s3_landscape_log.cpp)
   target_include_directories(test_s3_landscape_log PRIVATE analysis)
   target_link_libraries(test_s3_landscape_log
@@ -301,6 +328,6 @@ endif()
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_targets(export_${PROJECT_NAME})
-ament_export_dependencies(Eigen3 pinocchio haptic_dmp_learning franka_cartesian_control)
+ament_export_dependencies(Eigen3 pinocchio coal haptic_dmp_learning franka_cartesian_control)
 
 ament_package()

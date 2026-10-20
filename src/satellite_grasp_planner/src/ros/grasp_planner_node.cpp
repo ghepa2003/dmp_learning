@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -80,7 +81,18 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     };
 
     demo_params_path_ = require_string("demo_params_path");
-    urdf_path_ = require_string("urdf_path");
+    // urdf_path: optional. Unset or empty -> $HOME/thesis_ws/fer_flat_effort.urdf, the default of s3_clearance / s3_landscape.
+    // The SAME path feeds RobotModel (buildSelectionInputs), the start-state override and the fer_hand collision mesh
+    // (s1.use_clearance): there is no second URDF parameter.
+    {
+        const auto v = this->declare_parameter("urdf_path", rclcpp::ParameterType::PARAMETER_STRING);
+        urdf_path_ = v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET ? std::string() : v.get<std::string>();
+        if (urdf_path_.empty()) {
+            const char* home = std::getenv("HOME");
+            urdf_path_ = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
+            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: urdf_path not set, using default %s", urdf_path_.c_str());
+        }
+    }
     min_delay_s_ = require_double("min_delay_s");
 
     cube_geometry_.center_world = toVector3(require_vec("cube_geometry.center_world"), "cube_geometry.center_world");
@@ -179,6 +191,11 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.kappa_w_mm = dbl("s1.kappa_w", p.kappa_w_mm);
         p.kappa_t_mm_s = dbl("s1.kappa_t", p.kappa_t_mm_s);
         p.tau_j_mm = dbl("s1.tau_j_mm", p.tau_j_mm);
+        // Clearance constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+        p.use_clearance = bol("s1.use_clearance", p.use_clearance);
+        p.min_clearance_mm = dbl("s1.min_clearance_mm", p.min_clearance_mm);
+        p.clearance_dt_s = dbl("s1.clearance_dt_s", p.clearance_dt_s);
+        p.gripper_open_m = dbl("s1.gripper_open_m", p.gripper_open_m);
         const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
         const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
         if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
@@ -192,6 +209,22 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
             RCLCPP_WARN(this->get_logger(),
                         "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
                         "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
+        }
+        if (p.use_clearance) {
+            // fer_hand collision mesh from the URDF (checked closed and convex), built once here (a missing mesh is a startup error).
+            core::HandMesh hand_mesh;
+            try {
+                hand_mesh = core::loadHandCollisionMesh(urdf_path_);
+            } catch (const std::exception& e) {
+                throw std::invalid_argument(std::string("s1.use_clearance=true: cannot load the fer_hand collision mesh: ") +
+                                            e.what());
+            }
+            clearance_model_ = std::make_shared<core::ApproachClearanceModel>(cube_geometry_, hand_mesh);
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: s1.use_clearance=true min_clearance_mm=%.3f (ASSUMED) clearance_dt_s=%.3f "
+                        "gripper_open_m=%.4f (must equal the executor's gripper_open_position)",
+                        p.min_clearance_mm, p.clearance_dt_s, p.gripper_open_m);
+            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeHandMesh(hand_mesh).c_str());
         }
     }
 
@@ -277,7 +310,8 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         }
         core::S3Result s3_result;
         const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
-            in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result);
+            in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
+            /*eval_log=*/nullptr, clearance_model_.get());
         RCLCPP_INFO(this->get_logger(),
                     "grasp_planner_node: s1 status=%d evaluations=%d posthoc_checks=%d dv=%.3g m/s "
                     "path_margin=%.3f rad%s%s",
@@ -287,7 +321,8 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         if (v2) {
             RCLCPP_INFO(this->get_logger(),
                         "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
-                        "start_goal_deg rollout_err_mm rollout_err_deg");
+                        "start_goal_deg rollout_err_mm rollout_err_deg%s",
+                        s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
             const std::size_t n_rows = std::min<std::size_t>(s3_result.v2_finalists.size(), 12);
             for (std::size_t i = 0; i < n_rows; ++i) {
                 const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
@@ -297,14 +332,29 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                 } else {
                     std::snprintf(jbuf, sizeof(jbuf), "n/a");
                 }
+                char cbuf[96] = "";
+                if (s3_params_.use_clearance) {
+                    if (f.clearance_done) {
+                        std::snprintf(cbuf, sizeof(cbuf), " clearance=%.2f mm %s t_rel=%.2f s%s", f.clearance_mm,
+                                      f.clearance_pair.c_str(), f.clearance_t_rel_s, f.clearance_rejected ? " REJECTED" : "");
+                    } else {
+                        std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
+                    }
+                }
                 RCLCPP_INFO(this->get_logger(),
                             "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
-                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s",
+                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s",
                             i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
                             f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
-                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg,
+                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, cbuf,
                             f.rollout_feasible ? "" : " ROLLOUT_INFEASIBLE", f.winner ? " WINNER" : "");
             }
+        }
+        if (v2 && s3_params_.use_clearance) {
+            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 clearance stage: %.1f ms", s3_result.clearance_stage_ms);
+        }
+        for (const std::string& w : s3_result.warnings) {
+            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: %s", w.c_str());
         }
         if (result.status == core::GraspLaunchResult::Status::kSelected) {
             RCLCPP_INFO(this->get_logger(),

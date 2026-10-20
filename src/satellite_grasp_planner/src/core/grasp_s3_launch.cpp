@@ -15,7 +15,8 @@ namespace core {
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s, S3Result* s3_result_out,
-                                       std::vector<S3EvalRecord>* eval_log) {
+                                       std::vector<S3EvalRecord>* eval_log,
+                                       const ApproachClearanceModel* clearance_model) {
     if (!std::isfinite(min_delay_s) || min_delay_s < 0.0) {
         throw std::invalid_argument("planGraspAndLaunchS1: min_delay_s must be finite and >= 0.");
     }
@@ -52,6 +53,12 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     ctx.t_now_s = t_now_override_s.value_or(snapshot.t_s);
     ctx.min_delay_s = min_delay_s;
     ctx.eval_log = eval_log;
+    if (s3.use_clearance) {
+        if (!clearance_model) {
+            throw std::invalid_argument("planGraspAndLaunchS1: s1.use_clearance=true needs a clearance_model.");
+        }
+        ctx.clearance_eval = makeClearanceEvaluator(*clearance_model, ClearanceParams{s3.clearance_dt_s, s3.gripper_open_m});
+    }
 
     const S3Result r = selectGraspS3(model, robot, in.q0, demo, in.delta_g_demo, ctx, s3);
     const double elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();

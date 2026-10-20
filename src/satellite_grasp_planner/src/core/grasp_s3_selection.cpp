@@ -1,6 +1,7 @@
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -97,6 +98,14 @@ void validateS3Params(const S3Params& p) {
         throw std::invalid_argument("selectGraspS3: tau_j_mm must be finite and >= 0.");
     }
     if (p.finalists_n < 1) throw std::invalid_argument("selectGraspS3: finalists_n must be >= 1.");
+    if (!(std::isfinite(p.min_clearance_mm) && p.min_clearance_mm >= 0.0)) {
+        throw std::invalid_argument("selectGraspS3: s1.min_clearance_mm must be finite and >= 0.");
+    }
+    validateClearanceParams(ClearanceParams{p.clearance_dt_s, p.gripper_open_m});  // s1.clearance_dt_s, s1.gripper_open_m
+    if (p.use_clearance && mode != S3Mode::kV2) {
+        throw std::invalid_argument(
+            "selectGraspS3: s1.use_clearance=true is only defined in s1.mode=v2 (the constraint acts on the v2 finalists).");
+    }
     if (!(std::isfinite(p.max_start_goal_deg) && p.max_start_goal_deg >= 0.0 && p.max_start_goal_deg <= 180.0)) {
         throw std::invalid_argument("selectGraspS3: max_start_goal_deg must be finite and in [0, 180].");
     }
@@ -197,6 +206,46 @@ int s3PickWinnerV2(const std::vector<double>& j, const std::vector<double>& t_wa
     return best;
 }
 
+bool s3ClearanceRound(const std::vector<double>& j, std::vector<char>& alive, std::vector<char>& done,
+                      std::vector<double>& clearance_mm, const std::function<double(std::size_t)>& eval,
+                      double min_clearance_mm, double tau_j_mm) {
+    if (j.size() != alive.size() || j.size() != done.size() || j.size() != clearance_mm.size()) {
+        throw std::invalid_argument("s3ClearanceRound: size mismatch.");
+    }
+    if (!(std::isfinite(min_clearance_mm) && min_clearance_mm >= 0.0) || !(std::isfinite(tau_j_mm) && tau_j_mm >= 0.0)) {
+        throw std::invalid_argument("s3ClearanceRound: min_clearance_mm and tau_j_mm must be finite and >= 0.");
+    }
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < j.size(); ++i) {
+        if (alive[i] && std::isfinite(j[i])) order.push_back(i);
+    }
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return j[a] < j[b]; });
+    auto ensure = [&](std::size_t i) {
+        if (!done[i]) {
+            clearance_mm[i] = eval(i);
+            done[i] = 1;
+        }
+        const bool ok = clearance_mm[i] >= min_clearance_mm;  // NaN -> false
+        if (!ok) alive[i] = 0;
+        return ok;
+    };
+    double j_star = 0.0;
+    bool have = false;
+    for (const std::size_t i : order) {
+        if (ensure(i)) {
+            j_star = j[i];
+            have = true;
+            break;
+        }
+    }
+    if (!have) return false;
+    for (const std::size_t i : order) {
+        if (!alive[i] || done[i]) continue;
+        if (j[i] <= j_star + tau_j_mm) ensure(i);  // same band as s3PickWinnerV2: J <= J_min + tau_j
+    }
+    return true;
+}
+
 double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& contact_to_end_offset,
               const Eigen::Vector3d& p0, const Eigen::Vector3d& delta_g_demo) {
     const Eigen::Vector3d goal = position_world + contact_to_end_offset;
@@ -223,6 +272,12 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
 
     robot.update(q_start, RobotModel::JointVector::Zero());
     const Eigen::Vector3d p0 = robot.eePosition();
+    const bool use_clearance = v2 && params.use_clearance;  // validateS3Params: use_clearance implies v2
+    if (use_clearance && !ctx.clearance_eval) {
+        throw std::invalid_argument("selectGraspS3: s1.use_clearance=true needs S3Context::clearance_eval.");
+    }
+    // Start orientation of the approach trajectory = FK(q_start), as in checkKinematicFeasibility (read only if used).
+    const Eigen::Quaterniond quat0 = use_clearance ? robot.eeOrientation() : Eigen::Quaterniond::Identity();
 
     S3Result res;
     std::vector<S3Candidate> accepted;
@@ -426,6 +481,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         res.posthoc_min_margin_rad = margin;
     }
 
+    bool clearance_no_candidate = false;
+    std::string clearance_note;
     if (v2) {
         const double kRad2Deg = 180.0 / kPi;
 
@@ -500,7 +557,53 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         // ---- v2 tie-break (smallest t_wait within J_min + tau_j) + post-hoc velocity check, next best on failure ----
         std::vector<char> alive(fin.size(), 0);
         for (std::size_t i = 0; i < fin.size(); ++i) alive[i] = fin[i].rollout_feasible ? 1 : 0;
+
+        // Clearance constraint (S3Params::use_clearance): evaluated lazily, see s3ClearanceRound. Off: none of this runs.
+        std::vector<char> clr_done(fin.size(), 0);
+        std::vector<double> clr_mm(fin.size(), 0.0);
+        bool clearance_any_admissible = false;
+        bool any_rollout_feasible = false;
+        for (const auto& f : fin) any_rollout_feasible = any_rollout_feasible || f.rollout_feasible;
+        auto clearanceOf = [&](std::size_t i) -> double {
+            S3FinalistRecord& f = fin[i];
+            const S3Candidate& cand = accepted[static_cast<std::size_t>(f.accepted_index)];
+            const auto t0 = std::chrono::steady_clock::now();
+            // Executor-faithful trajectory: goal = grasp position + contact_to_end_offset (grasp_s3_launch.cpp), orientation
+            // of the chosen branch, start = FK(q_start), times as the executor publishes them (t = 0 first).
+            const std::vector<ApproachSample> traj =
+                timedApproachTrajectory(*ctx.prodmp_template, p0, quat0,
+                                        cand.eval.pose.position_world + ctx.contact_to_end_offset,
+                                        goalOrientation(cand.eval), kDt);
+            ClearanceQuery q;
+            q.trajectory = &traj;
+            q.tau_s = ctx.prodmp_template->tau();
+            q.theta_star_rad = cand.eval.theta_rad;
+            q.omega_rad_s = ctx.snapshot.omega_rad_s;
+            q.center_world = ctx.snapshot.center;
+            q.axis_world = ctx.snapshot.axis;
+            q.k = static_cast<int>(cand.eval.k);
+            q.wrist_flip = cand.eval.wrist_flip;
+            const ClearanceResult cr = ctx.clearance_eval(q);
+            res.clearance_stage_ms +=
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            f.clearance_done = true;
+            f.clearance_mm = cr.min_mm_no_tail;
+            f.clearance_pair = cr.pair_no_tail.str();
+            f.clearance_t_rel_s = cr.t_rel_no_tail_s;
+            f.clearance_full_mm = cr.min_mm;
+            f.clearance_rejected = !(cr.min_mm_no_tail >= params.min_clearance_mm);
+            return cr.min_mm_no_tail;
+        };
         while (chosen_idx < 0) {
+            if (use_clearance && !params.force) {
+                std::vector<double> js_all(fin.size(), std::numeric_limits<double>::infinity());
+                for (std::size_t i = 0; i < fin.size(); ++i) {
+                    if (fin[i].rollout_feasible) js_all[i] = fin[i].j;
+                }
+                if (s3ClearanceRound(js_all, alive, clr_done, clr_mm, clearanceOf, params.min_clearance_mm, params.tau_j_mm)) {
+                    clearance_any_admissible = true;
+                }
+            }
             std::vector<std::size_t> pool;
             std::vector<double> js, ts;
             for (std::size_t i = 0; i < fin.size(); ++i) {
@@ -514,6 +617,18 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             const std::size_t fi = pool[static_cast<std::size_t>(pick)];
             S3FinalistRecord& rec = fin[fi];
             S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
+            if (use_clearance && params.force && !clr_done[fi]) {  // forced: the constraint never discards, it warns
+                clr_mm[fi] = clearanceOf(fi);
+                clr_done[fi] = 1;
+                if (rec.clearance_rejected) {
+                    std::ostringstream w;
+                    w << "WARN s1.use_clearance: FORCED candidate k=" << static_cast<int>(c.eval.k) << " theta="
+                      << c.eval.theta_rad * kRad2Deg << " deg has clearance " << rec.clearance_mm << " mm < "
+                      << params.min_clearance_mm << " mm (" << rec.clearance_pair << " at t_rel " << rec.clearance_t_rel_s
+                      << " s); kept because force is on";
+                    res.warnings.push_back(w.str());
+                }
+            }
             if (params.max_posthoc_candidates == 0) {  // no post-hoc stage
                 chosen_idx = rec.accepted_index;
                 rec.winner = true;
@@ -556,6 +671,23 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
         }
         res.v2_finalists = fin;
+        if (use_clearance && !params.force && chosen_idx < 0 && any_rollout_feasible && !clearance_any_admissible) {
+            clearance_no_candidate = true;
+            const S3FinalistRecord* best = nullptr;
+            for (const auto& f : fin) {
+                if (f.clearance_done && (!best || f.clearance_mm > best->clearance_mm)) best = &f;
+            }
+            std::ostringstream m;
+            m << "v2 clearance: no finalist has clearance >= " << params.min_clearance_mm << " mm ("
+              << res.v2_finalists.size() << " finalists)";
+            if (best) {
+                m << "; best clearance " << best->clearance_mm << " mm for k=" << static_cast<int>(best->cand.eval.k)
+                  << " branch " << (best->cand.eval.wrist_flip ? 'B' : 'A') << " theta="
+                  << best->cand.eval.theta_rad * kRad2Deg << " deg (" << best->clearance_pair << " at t_rel "
+                  << best->clearance_t_rel_s << " s)";
+            }
+            clearance_note = m.str();
+        }
         if (chosen_idx < 0 && params.force && params.force_ignore_constraints && !accepted.empty()) {
             chosen_idx = 0;  // forced + ignore: the failure is reported, not obeyed (as in legacy)
             res.forced_violations += std::string(res.forced_violations.empty() ? "" : "; ") +
@@ -602,7 +734,10 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         if (!found && !have_least[ki]) res.best_per_k[static_cast<std::size_t>(ki)].eval.k = kAllK[ki];
     }
 
-    if (accepted.empty()) {
+    if (clearance_no_candidate) {
+        res.status = S3Result::kNoCandidate;
+        res.note = clearance_note;
+    } else if (accepted.empty()) {
         res.status = S3Result::kNoCandidate;
         if (!params.force) {
             res.note = v2 ? "no candidate satisfies the v2 constraints (ik, d_pos <= r_trust, start_goal <= max_start_goal_deg)"

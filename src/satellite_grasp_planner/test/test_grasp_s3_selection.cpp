@@ -963,7 +963,9 @@ TEST(GraspS3V2Test, EndToEndFinalistsAndWinner) {
         EXPECT_LE(f.j, j_min + p.tau_j_mm);
         EXPECT_DOUBLE_EQ(r.chosen.cost, f.j);
         for (const auto& g : r.v2_finalists) {
-            if (g.rollout_feasible && g.j <= j_min + p.tau_j_mm) EXPECT_GE(g.t_wait_s, f.t_wait_s);
+            if (g.rollout_feasible && g.j <= j_min + p.tau_j_mm) {
+                EXPECT_GE(g.t_wait_s, f.t_wait_s);
+            }
         }
     }
     // one finalist per (k, branch, theta cluster)
@@ -977,4 +979,191 @@ TEST(GraspS3V2Test, EndToEndFinalistsAndWinner) {
             EXPECT_GE(d * 180.0 / M_PI, p.posthoc_cluster_deg);
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// v2 clearance constraint (S3Params::use_clearance), with an injected evaluator: the selection logic is tested, not
+// the geometry (see test_approach_clearance.cpp).
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+ClearanceResult fakeClearance(double mm) {
+    ClearanceResult r;
+    r.min_mm = r.min_mm_no_tail = mm;
+    r.pair = r.pair_no_tail = {"dito 1", "collare"};
+    r.t_rel_s = r.t_rel_no_tail_s = -3.0;
+    return r;
+}
+
+bool sameCandidate(const ClearanceQuery& q, const S3Candidate& c) {
+    return q.k == static_cast<int>(c.eval.k) && q.wrist_flip == c.eval.wrist_flip &&
+           std::abs(q.theta_star_rad - c.eval.theta_rad) < 1e-9;
+}
+
+S3Params v2LooseParams() {
+    S3Params p = v2Params();
+    p.w_hat_min = 1e9;       // ignored in v2
+    p.margin_min_rad = 1e9;  // idem
+    p.finalists_n = 4;
+    return p;
+}
+
+}  // namespace
+
+TEST(GraspS3ClearanceTest, LegacyWithUseClearanceIsAnError) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = looseParams();  // legacy
+    p.use_clearance = true;
+    s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(100.0); };
+    EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
+}
+
+TEST(GraspS3ClearanceTest, MissingEvaluatorIsAnError) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = v2LooseParams();
+    p.use_clearance = true;  // ctx.clearance_eval is empty
+    EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
+}
+
+TEST(GraspS3ClearanceTest, DisabledIsUnchangedAndNeverCallsTheEvaluator) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Params base = v2LooseParams();
+    const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+    if (a.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << a.note;
+
+    int calls = 0;
+    s.ctx.clearance_eval = [&calls](const ClearanceQuery&) {
+        ++calls;
+        return fakeClearance(-100.0);
+    };
+    S3Params other = base;  // use_clearance stays false; the other clearance fields are ignored
+    other.min_clearance_mm = 99.0;
+    other.clearance_dt_s = 0.5;
+    other.gripper_open_m = 0.01;
+    const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+    EXPECT_EQ(calls, 0);
+    ASSERT_EQ(a.status, b.status);
+    EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+    EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+    EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+    EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+    EXPECT_EQ(a.evaluations, b.evaluations);
+    ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+    for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+        EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+        EXPECT_EQ(a.v2_finalists[i].winner, b.v2_finalists[i].winner);
+        EXPECT_FALSE(b.v2_finalists[i].clearance_done);
+    }
+    EXPECT_EQ(b.clearance_stage_ms, 0.0);
+    EXPECT_TRUE(b.warnings.empty());
+}
+
+TEST(GraspS3ClearanceTest, ViolatingWinnerIsSkippedAndTheNextOneWins) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = v2LooseParams();
+    const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+    int n_feasible = 0;
+    for (const auto& f : base.v2_finalists) n_feasible += f.rollout_feasible ? 1 : 0;
+    if (n_feasible < 2) GTEST_SKIP() << "need >= 2 rollout-feasible finalists, have " << n_feasible;
+    const S3Candidate winner = base.chosen;
+
+    p.use_clearance = true;
+    p.min_clearance_mm = 2.0;
+    s.ctx.clearance_eval = [&](const ClearanceQuery& q) { return fakeClearance(sameCandidate(q, winner) ? 0.5 : 10.0); };
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    EXPECT_FALSE(r.chosen.eval.k == winner.eval.k && r.chosen.eval.wrist_flip == winner.eval.wrist_flip &&
+                 std::abs(r.chosen.eval.theta_rad - winner.eval.theta_rad) < 1e-9);
+    bool saw_rejected = false, saw_chosen = false;
+    for (const auto& f : r.v2_finalists) {
+        const bool is_baseline_winner = f.cand.eval.k == winner.eval.k && f.cand.eval.wrist_flip == winner.eval.wrist_flip &&
+                                        std::abs(f.cand.eval.theta_rad - winner.eval.theta_rad) < 1e-9;
+        if (f.clearance_done && is_baseline_winner) {
+            EXPECT_TRUE(f.clearance_rejected);
+            EXPECT_FALSE(f.winner);
+            EXPECT_DOUBLE_EQ(f.clearance_mm, 0.5);
+            saw_rejected = true;
+        }
+        if (f.winner) {
+            EXPECT_TRUE(f.clearance_done);
+            EXPECT_FALSE(f.clearance_rejected);
+            EXPECT_DOUBLE_EQ(f.clearance_mm, 10.0);
+            EXPECT_EQ(f.clearance_pair, "dito 1-collare");
+            saw_chosen = true;
+        }
+    }
+    EXPECT_TRUE(saw_rejected);
+    EXPECT_TRUE(saw_chosen);
+    EXPECT_GE(r.clearance_stage_ms, 0.0);
+}
+
+TEST(GraspS3ClearanceTest, NoAdmissibleFinalistGivesNoCandidateWithNote) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = v2LooseParams();
+    const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+
+    p.use_clearance = true;
+    p.min_clearance_mm = 2.0;
+    s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(1.5); };
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(r.status, S3Result::kNoCandidate);
+    EXPECT_NE(r.note.find("clearance"), std::string::npos) << r.note;
+    EXPECT_NE(r.note.find("1.5"), std::string::npos) << r.note;  // best clearance reported
+    for (const auto& f : r.v2_finalists) {
+        EXPECT_FALSE(f.winner);
+        if (f.rollout_feasible) {
+            EXPECT_TRUE(f.clearance_done);
+            EXPECT_TRUE(f.clearance_rejected);
+        }
+    }
+}
+
+TEST(GraspS3ClearanceTest, ForceKeepsTheCandidateAndWarns) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    S3Params p = v2LooseParams();
+    const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+    const double theta_deg = base.chosen.eval.theta_rad * 180.0 / M_PI;
+    if (std::abs(theta_deg) > 180.0) GTEST_SKIP() << "winner theta outside [-180, 180]";
+
+    p.force = true;
+    p.force_k = static_cast<int>(base.chosen.eval.k);
+    p.force_theta_deg = theta_deg;
+    p.force_flip = base.chosen.eval.wrist_flip ? 1 : 0;
+    p.use_clearance = true;
+    p.min_clearance_mm = 2.0;
+    s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(0.5); };
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    ASSERT_EQ(r.warnings.size(), 1u);
+    EXPECT_NE(r.warnings[0].find("WARN"), std::string::npos);
+    ASSERT_EQ(r.v2_finalists.size(), 1u);
+    EXPECT_TRUE(r.v2_finalists[0].clearance_rejected);  // below threshold, but kept
+    EXPECT_TRUE(r.v2_finalists[0].winner);
+
+    s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(10.0); };
+    const S3Result ok = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(ok.status, S3Result::kSelected);
+    EXPECT_TRUE(ok.warnings.empty());
 }

@@ -198,30 +198,43 @@ Il controllo accetta/rifiuta **solo** sulle violazioni dei limiti; `margin_min_r
 
 ## 3. Parametri
 
-Default nel codice = `S3Params` (`SP/include/…/grasp_s3_selection.hpp:33-51`); YAML = `config/grasp_planner_example.yaml` (tutti gli `s1.*` sono **commentati**: righe 57-76; i valori mostrati coincidono con il codice). Dichiarazione nel nodo: `node:132-157`.
+Default nel codice = `S3Params` (`SP/include/…/grasp_s3_selection.hpp:36-107`); YAML = `config/grasp_planner_example.yaml` (gli `s1.*` legacy sono **commentati**: righe 57-76; i parametri v2 e della clearance sono raggruppati in un blocco, righe 78-97, uno per riga; **solo `s1.rollout_q_ref` (riga 93) è attivo**, gli altri sono commentati; i valori mostrati coincidono con il codice). Dichiarazione nel nodo: `node:134-186` (`SP/src/ros/grasp_planner_node.cpp`). Le righe `hpp:` della tabella sono state ricalcolate sul sorgente attuale (sezione 10).
 
 | Nome | Codice | YAML | Origine | file:riga |
 |---|---|---|---|---|
-| `length_scale_m` (l) | 0.10 | 0.10 (:57) | ASSUNTO (scala) | hpp:34 |
-| `orientation_weight` (w_o) | 0.0 | 0.0 (:58) | ASSUNTO (scelta: distanza solo posizione) | hpp:35 |
-| `angle_scale_rad` (θ_s) | 1.0 | 1.0 (:59) | ASSUNTO | hpp:36 |
-| `epsilon_wait_per_s` (ε) | 1e-4 | 1e-4 (:60) | ASSUNTO | hpp:37 |
-| `w_hat_min` | 0.5 | 0.5 (:61) | ASSUNTO ("soglia da giustificare" nel brainstorming) | hpp:38 |
-| `margin_min_rad` | 0.3 | 0.3 (:62) | ASSUNTO | hpp:39 |
-| `r_trust_m` | 0.30 | 0.30 (:63) | ASSUNTO (brainstorming: "qualche cm") | hpp:40 |
-| `delta_v_max_m_s` | 3e-3 | 3e-3 (:64) | ASSUNTO; nessuna misura Gazebo nel repo (**NON VERIFICATO**) | hpp:41 |
-| `theta_step_deg` | 2.0 | 2.0 (:65) | ASSUNTO (numerico) | hpp:42 |
-| `theta_refine_step_deg` | 0.1 | 0.1 (:66) | ASSUNTO (numerico) | hpp:43 |
-| `posthoc_path_check` | true | true (:67) | scelta | hpp:45 |
-| `posthoc_velocity_check` | true | true (:68) | scelta; **le campagne S1 usano `false`** (`tools/s1_run.py:434`) | hpp:46 |
-| `max_posthoc_candidates` | 10 | 10 (:69) | ASSUNTO | hpp:47 |
-| `posthoc_cluster_deg` | 10.0 | 10.0 (:70) | ASSUNTO | hpp:50 |
+| `length_scale_m` (l) | 0.10 | 0.10 (:57) | ASSUNTO (scala) | hpp:36 |
+| `orientation_weight` (w_o) | 0.0 | 0.0 (:58) | ASSUNTO (scelta: distanza solo posizione) | hpp:37 |
+| `angle_scale_rad` (θ_s) | 1.0 | 1.0 (:59) | ASSUNTO | hpp:38 |
+| `epsilon_wait_per_s` (ε) | 1e-4 | 1e-4 (:60) | ASSUNTO | hpp:39 |
+| `w_hat_min` | 0.5 | 0.5 (:61) | ASSUNTO ("soglia da giustificare" nel brainstorming) | hpp:40 |
+| `margin_min_rad` | 0.3 | 0.3 (:62) | ASSUNTO | hpp:41 |
+| `r_trust_m` | 0.30 | 0.30 (:63) | ASSUNTO (brainstorming: "qualche cm") | hpp:42 |
+| `delta_v_max_m_s` | 3e-3 | 3e-3 (:64) | ASSUNTO; nessuna misura Gazebo nel repo (**NON VERIFICATO**) | hpp:43 |
+| `theta_step_deg` | 2.0 | 2.0 (:65) | ASSUNTO (numerico) | hpp:44 |
+| `theta_refine_step_deg` | 0.1 | 0.1 (:66) | ASSUNTO (numerico) | hpp:45 |
+| `posthoc_path_check` | true | true (:67) | scelta | hpp:47 |
+| `posthoc_velocity_check` | true | true (:68) | scelta; **le campagne S1 usano `false`** (`tools/s1_run.py:434`) | hpp:48 |
+| `max_posthoc_candidates` | 10 | 10 (:69) | ASSUNTO | hpp:49 |
+| `posthoc_cluster_deg` | 10.0 | 10.0 (:70) | ASSUNTO | hpp:52 |
 | `ik.pos_tol_m` | 1e-4 | 1e-4 (:71) | ASSUNTO | eval.hpp:26 |
 | `ik.ori_tol_rad` | 1e-3 | 1e-3 (:72) | ASSUNTO | eval.hpp:27 |
 | `ik.max_iter` | 300 | 300 (:73) | ASSUNTO | eval.hpp:28 |
 | `ik.damping` (λ) | 0.05 | 0.05 (:74) | ASSUNTO | eval.hpp:29 |
 | `ik.nullspace_gain` | 1.0 | 1.0 (:75) | ASSUNTO | eval.hpp:30 |
 | `ik.max_step_rad` | 0.2 | 0.2 (:76) | ASSUNTO | eval.hpp:31 |
+| `mode` | "legacy" | "legacy" (:84, commentato) | ASSUNTO (selettore; il default conserva il comportamento storico) | hpp:82, node:170 |
+| `branch_rule` | "margin" | "margin" (:85, commentato) | ASSUNTO; con `mode=v2` il nodo avvisa se resta "margin" | hpp:71, node:168 |
+| `max_start_goal_deg` | 180.0 (= disattivo) | 180.0 (:86, commentato) | ASSUNTO; evidenza **MISURATA** citata nel commento del codice: 16.5° e 34.5° riusciti, 179.6° fallito (non rieseguita) | hpp:85 |
+| `finalists_n` | 12 | 12 (:87, commentato) | ASSUNTO | hpp:86 |
+| `use_w` | true | true (:88, commentato) | ASSUNTO | hpp:90 |
+| `kappa_w` (`kappa_w_mm`) | 7.5 mm | 7.5 (:89, commentato) | ASSUNTO (il commento del codice lo dichiara tale) | hpp:91 |
+| `kappa_t` (`kappa_t_mm_s`) | 0.0 mm/s | 0.0 (:90, commentato) | ASSUNTO | hpp:92 |
+| `tau_j_mm` | 2.0 mm | 2.0 (:91, commentato) | ASSUNTO (il commento del codice lo dichiara tale) | hpp:93 |
+| `rollout_q_ref` | vuoto (obbligatorio in v2, 7 valori) | 7 valori della readyPose (:93, **attivo**; ignorato in legacy) | DERIVATO: postura "ready" = `initial_value` del controllore = nullspace target all'attivazione | `franka_arm.ros2_control.xacro:51`; `robot_model.cpp:79`; `cartesian_impedance_controller.cpp:313`; hpp:89 |
+| `use_clearance` | false | false (:94, commentato) | ASSUNTO (vincolo disattivo di default); `true` solo con `mode=v2`, in legacy è un errore | hpp:102, node:183 |
+| `min_clearance_mm` | 2.0 mm | 2.0 (:95, commentato) | **ASSUNTO** (soglia scelta, non misurata: §10) | hpp:103, node:184 |
+| `clearance_dt_s` | 0.05 s | 0.05 (:96, commentato) | DERIVATO dal predittore validato, campionato a 20 Hz | hpp:104; `_diag_1019/interference/predict_distance.py:376` |
+| `gripper_open_m` | 0.060 m per dito | 0.060 (:97, commentato) | DERIVATO dall'apertura dell'executor; **deve coincidere** con `gripper_open_position` (il planner non può leggerlo) | hpp:107; `haptic_dmp_learning/config/params.yaml:93` (sezione `prodmp_gazebo_executor_node`; la riga 49 è lo stesso valore 0.06 ma della sezione `demo_replay_sync_orchestrator`); default del codice `prodmp_gazebo_executor_node.cpp:130` |
 | IK `kp` | 0.5 (costante) | — | ASSUNTO (passo unitario) | eval.cpp:48-49 |
 | `kMarginTieRad` | 1e-3 (costante) | — | ASSUNTO | eval.cpp:18 |
 | `kProjectorDamping` | 1e-3 (costante) | — | ASSUNTO | eval.cpp:21 |
@@ -379,3 +392,72 @@ Obiettivo: un record per **ogni** chiamata a `evalOne` (880 nel caso nominale), 
 ## 9. Aggiornamento: log per candidato implementato (non compilato)
 
 Implementato il §7.3 (i `file:riga` dei §1-§7 si riferiscono al sorgente PRIMA di questa modifica; i riferimenti `node:` sono stati corretti di −91 righe, erano contati sul listato concatenato con il YAML): `S3Context::eval_log` (default `nullptr`), `S3EvalRecord`, `S3RejectBit`, `s3AprioriRejectMask`, `s3DPos` (la cascata ora vive in una sola funzione, usata da `evalOne` e dal tool), `evaluateGraspPoseDetailed` (con roll ψ; `evaluateGraspPose` ne è un wrapper a ψ=0, bit-identico), `fullManipulability`, `planGraspAndLaunchS1(..., eval_log)`, tool `analysis/s3_landscape.cpp`. Vedi `analysis/README.md`.
+
+---
+
+## 10. Vincolo di clearance (v2) — scritto, NON compilato né eseguito
+
+Stato: implementato in `SP/include/…/approach_clearance.hpp`, `SP/src/core/approach_clearance.cpp`, `grasp_s3_selection.{hpp,cpp}` (parametri `s1.use_clearance`, `s1.min_clearance_mm`, `s1.clearance_dt_s`, `s1.gripper_open_m`, righe nella tabella del §3), `kinematic_feasibility.{hpp,cpp}` (`buildApproachTrajectory`, `timedApproachTrajectory`), nodo e tool `analysis/s3_clearance.cpp`. Con `s1.use_clearance=false` (default) il comportamento è identico bit a bit, in legacy e in v2: il codice nuovo non viene eseguito e il ciclo di `checkKinematicFeasibility` è stato solo spostato in `buildApproachTrajectory` (stesse operazioni, stesso ordine). **Nessun test è stato eseguito** (§10.7).
+
+### 10.1 Formula
+
+```
+tau      = ProDMP::tau() del template  (durata del rollout dell'executor)
+theta(t) = theta* - omega * (tau - t)                       omega con segno [rad/s], t in [0, tau] dal TRIGGER
+R_sat(t) = AngleAxis(theta(t), asse)  attorno all'asse per il centro dello snapshot
+mano(t)  : origine = p_tcp(t) - R_tcp(t) (0, 0, 0.1034);  orientazione = R_tcp(t)          (fer_hand_tcp_joint ha rpy 0)
+dita     : origine = origine_mano + R (0, +-gripper_open_m, 0.0584);  4 box ciascuna (franka_hand.xacro: box sinistro righe 51, 58, 65, 72; destro 90, 97, 104, 111)
+satellite: cubo cube_side_m + collare di 24 box  standoff_m x wall_thickness_m x 2 R tan(pi/24) (1 + 0.05)
+           centri a  (cube_side_m/2 + standoff_m/2) n + (R - wall/2)(cos phi_i u + sin phi_i a),  phi_i = 2 pi i / 24,  u = n x a
+d(t)     = min su {mano (mesh convessa), 8 box delle dita} x {cubo, 24 box del collare} di dist_coal_con_segno   [mm]
+clearance = min_{t in [0, tau - 2 s]} d(t)        (campioni t_k = k * clearance_dt_s, k*dt < tau, piu' t = tau)
+vincolo   : clearance >= s1.min_clearance_mm
+```
+
+`t_rel = t - tau` (≤ 0). `approachClearance` restituisce anche il minimo sull'intera finestra (`min_mm`, con coppia e `t_rel_s`), ma il vincolo usa `min_mm_no_tail` ("senza ultimi 2 s"): negli ultimi 2 s la mano deve avvicinarsi al collare. Tau ≤ 2 s è un errore (la finestra sarebbe vuota). Il confronto sulla finestra usa `t_rel ≤ -2 + 1e-4`, come `predict_distance.py`. Costanti dalla `cube_geometry` del planner (`CubeSatelliteModel::Params`): nessuna copia; i soli valori ripresi dall'SDF sono il numero di segmenti (24) e il fattore di sovrapposizione (0.05) di `free_target_object.sdf.xacro` (`collar_segments`, `collar_overlap`). Mano: la mesh di collisione di `fer_hand` letta dal URDF (`package://franka_description/meshes/robot_ee/franka_hand_white/collision/hand.stl`, risolto con `AMENT_PREFIX_PATH`) **così com'è**, costruita una volta all'avvio del nodo in un `coal::Convex<coal::Triangle>`: nessun inviluppo viene calcolato (§10.6).
+
+**Selezione (lazy)**, dopo il calcolo di J dei finalisti e prima di ogni scelta del vincitore (`s3ClearanceRound`): si scorrono i finalisti vivi per J crescente; il primo con clearance ≥ soglia fissa J*; si valutano anche tutti quelli con J ≤ J* + tau_j; chi sta sotto soglia è scartato; fra gli ammissibili vince l'attesa minore (`s3PickWinnerV2`, invariato). Se il controllo di velocità scarta il vincitore, il giro successivo riusa le clearance già calcolate e valuta solo i finalisti che entrano nella banda. Nessun finalista ammissibile → `kNoCandidate` (`GraspLaunchResult::kNoFeasibleCandidate`) con nota che riporta la clearance migliore e il candidato; nessun ripiego. Se almeno un finalista era ammissibile e poi tutti sono caduti ai controlli post-hoc resta `kPosthocFailed`. Con `s1.force=true` il vincolo non scarta: `S3Result::warnings` riceve un "WARN" e il nodo lo stampa. Un NaN conta come violazione. Un finalista con rollout non fattibile o J non finito non viene valutato.
+
+### 10.2 Traiettoria usata e differenze dall'executor
+
+La clearance usa la traiettoria **cartesiana** dei finalisti (`timedApproachTrajectory`), non il rollout in giunti (che sbaglia di 5 mm in media, massimo 13). Confronto con quanto l'executor pubblica su `/target_pose` (`prodmp_gazebo_executor_node.cpp`, `stepCallback` 764-905, `startContinuousRollout` 1489-1580):
+
+| Aspetto | Planner | Executor | Effetto |
+|---|---|---|---|
+| Primitiva posizione | ProDMP copia, goal assoluto, cond. iniz. (p0, 0) (`kinematic_feasibility.cpp:15-41`, ex corpo di `checkKinematicFeasibility`) | stessa ProDMP, goal relativo (`:1521-1523`); `setRelativeGoal` conserva il goal assoluto | uguale a meno dell'arrotondamento |
+| SLERP | `slerpShortestPath(quat0, q_goal, min(1,(i+1)dt/tau))` | `slerpAt(q_start, q_goal allineato, elapsed, tau)` = stessa funzione (`grasp_orientation.hpp:114`), solo con `grasp_orientation_mode=planner_goal` | uguale; con `demo_native` l'executor usa il `QuaternionDMP` e il modello **non** vale |
+| Griglia dei tempi | campione i a t=(i+1)dt, nessun campione a t=0, ultimo a ceil(tau/dt)dt ≥ tau | primo tick a elapsed=0 (posa di partenza), poi il tempo misurato; a elapsed ≥ tau pubblica il goal | `timedApproachTrajectory` aggiunge il campione a t=0 e pone la posizione = goal da t ≥ tau |
+| dt | `kDt` = 0.005 (`grasp_s3_selection.cpp:25`) | `1/control_rate_hz` = 0.005 (`params.yaml:90`) | uguale; il passo reale è misurato (jitter non modellato) |
+| Istante del TRIGGER | contatto assunto a tau (`contact_assumed_at_end`) | `theta_trig = theta* - omega*T_total` con T_total = tau (`plannerThetaTrigRad`), primo tick dopo un dt (`satellite_intercept.hpp:418-431`) | fase del satellite a t=0 in ritardo di omega*dt: 0.02 gradi a 4 gradi/s, non modellato |
+| Posa di partenza | FK(`q_start`), posizione e orientazione | posizione TF all'attivazione (controllata entro 5 mm da `start_position`, tolleranza `checkStartPositionMatches`); orientazione = quaternione di hold (solo loggata) | uguale se la partenza è quella pianificata (log di `forced_k2A_a`: \|ee_start − ee_plan\| = 0.000 mm e angolo(TF, hold) = 0.000 gradi; l'executor non confronta l'orientazione con FK(`q_start`) del planner) |
+| Offset di contatto | il rollout di `checkKinematicFeasibility` usa `position_world` **senza** `contact_to_end_offset` (D10) | il goal comandato lo include (`grasp_s3_launch.cpp`) | la clearance usa goal **con** offset (executor-fedele); nullo in produzione (offset = 0) |
+| Follow dopo AT_END | assente | `post_grasp_follow` dopo AT_END | fuori dalla finestra [0, tau] |
+
+Con tau = 24.474 s, spostamento 0.11 m e rotazione di 179.6 gradi (log di `forced_k2A_a`), lo scarto di una griglia (5 ms) vale, alle velocità medie, circa 0.02 mm in posizione e 0.06 mm a 0.1 m dal TCP per la rotazione (picchi di velocità non calcolati): trascurabile rispetto all'errore del predittore (0.35 mm medio).
+
+### 10.3 Fonte dei dati (G12 e G13 del 19/10)
+
+Riportati dall'autore e dal riferimento `_diag_1019/interference/predict_distance.py`; **non rieseguiti qui**. Il predittore T (traiettoria comandata + satellite ricostruito da theta(t)) prevede la distanza misurata con errore medio 0.35 mm e massimo 1.46 mm su 17 run senza contatto; nei run che falliscono dà valori negativi, da −2.4 a −16.6 mm. Il predittore R (rollout in giunti del planner) sbaglia di 5 mm in media (massimo 13). Quattro run falliscono perché le dita colpiscono il collare in approccio mentre il satellite ruota (k2 ramo A; k1 ramo B theta 170; k2 ramo B a 4 gradi/s; a 3 gradi/s tocca senza spostare il cubo). Le distanze misurate sono in `predict_distance.py:302-327` (`g12_meas`), geometrie e convenzioni di frame in `predict_distance.py:30-127` e `:129-232`. Attenzione: `analysis_demo_1009/g12.md` e `g13.md` sono report del **12/10** su altro argomento, non questi.
+
+### 10.4 Condizioni di fallimento osservate
+
+Condizioni di fallimento per interferenza dita-collare osservate in Gazebo il 19/10/2026 (3 candidati distinti): (1) k2 ramo A, theta 145.5, omega 2 gradi/s, rotazione start-goal 179.6: 2 run, spostamento del cubo 31.81 mm in approccio. (2) k1 ramo B, theta 170, omega 2 gradi/s, rotazione 90.3: 1 run, 20.70 mm. (3) k2 ramo B, theta 145.3: a 3 gradi/s tocca il collare senza spostare il cubo (0.036 mm, presa riuscita), a 4 gradi/s fallisce (18.42 mm). In tutti i casi la distanza minima dita-collare, calcolata dalla traiettoria comandata, è <= 0 mm. Successo più vicino alla soglia: k0 ramo A a 4 gradi/s, 2.54 mm. Limiti: una sola demo, un solo satellite, Kt 2000, apertura delle dita fissa a 120 mm. Dati e script: analysis/interference_1019/ (da creare).
+
+### 10.5 Limiti
+
+- Il vincolo copre solo il contatto in approccio (distanza con segno < soglia lungo la traiettoria comandata); non sostituisce il controllo di velocità né il rollout in giunti. Le condizioni di fallimento osservate sono nel §10.4.
+- **Soglia assunta**: `min_clearance_mm = 2.0` è **ASSUNTO**. Errore massimo del predittore 1.46 mm; due casi vicini alla soglia misurati a 2.78 mm (`omega_legacy_w-4.0`) e 3.17 mm (`scaleA_A8`), `predict_distance.py:321`, `:317`. La soglia non è stata ottimizzata sui dati.
+- **Apertura delle dita fissa**: `gripper_open_m` è costante su tutta la finestra (il predittore T usa 0.060). L'executor chiude le dita solo dopo AT_END, ma se `gripper_open_position` cambia il parametro va cambiato a mano (il planner non può leggerlo).
+- **Modello**: asse del satellite = +z del mondo con corpo allineato agli assi mondo a theta = 0 (cubo come box asse-allineato); fase del satellite = modello a omega costante (nessuna misura); dipende dall'esattezza di `cube_geometry.*` (non riconfrontata con CAD) e dalla mesh di collisione della mano; collare a 24 box come nell'SDF, non il cilindro del CAD.
+- **Costo**: una valutazione ≈ 490 campioni × (9 forme robot × 25 forme satellite) distanze con segno, ridotte da un test sulle sfere di contorno (non cambia il risultato); il tempo dello stadio è nel log (`clearance_stage_ms`). Non misurato.
+- La finestra senza ultimi 2 s rende il vincolo cieco a un impatto negli ultimi 2 s, per scelta.
+
+### 10.6 Dipendenza `coal` e mesh della mano
+
+`find_package(coal REQUIRED)` e `coal::coal` come nel `CMakeLists.txt` precedente a `b3080b5`; `package.xml`: `<depend>coal</depend>`. Il coal 3.0.3 di ROS Humble è compilato **senza Qhull**: `ConvexBase::convexHull` lancia "Library built without qhull", quindi non viene usata in nessun punto. La mesh di collisione di `fer_hand` è già un poliedro convesso chiuso (misurato sul file reale: `hand.stl` binario di 10084 byte = 84 + 50·200, 200 triangoli, 102 vertici unici tutti sull'inviluppo, Euler 102 − 300 + 200 = 2; bounding box min [−0.031636, −0.103990, −0.025925], max [0.031616, 0.100426, 0.065962] m; il `<collision>` del URDF non ha `origin` né `scale`). Il modello la usa quindi direttamente: `readStlMesh` (binario se la dimensione è 84 + 50 n, altrimenti ASCII; vertici identici uniti per valore esatto), poi `validateHandMesh` a ogni caricamento: nessun triangolo degenerato (|prodotto vettoriale| ≥ 1e-12 m²), orientazione antioraria vista da fuori forzata, convessità (massimo di n̂·(p − a) su tutti i punti e triangoli ≤ `kHandMeshConvexityTolM` = 1.0e-3 m, altrimenti errore "not convex"; la tolleranza è un parametro di `validateHandMesh`, usata solo lì). Nessun ripiego su un inviluppo calcolato. L'unica chiamata all'API di coal per la mesh è `makeCoalConvex` in `approach_clearance.cpp` (`coal::Convex<coal::Triangle>(shared_ptr<vector<Vec3s>>, n, shared_ptr<vector<Triangle>>, m)`; API da documentazione, da confermare sull'header installato). All'avvio il nodo e `s3_clearance` stampano `HAND_MESH vertices=N triangles=M bbox_min=… bbox_max=…` da confrontare con 102, 200 e il bounding box sopra; la riga riporta sempre anche `max_convexity_violation_mm=` (violazione massima misurata, `n/a` se la mesh non è stata validata).
+
+Tolleranza di convessità: la mesh reale ha una violazione di convessità di 0.74 mm (misurata il 19/10/2026); tolleranza 1.0 mm, ASSUNTA; effetto sulla distanza atteso trascurabile rispetto al gioco di 2 mm perché GJK lavora sui vertici; verificato confrontando il modello con il predittore T di G13 (G14a). Sopra la tolleranza `validateHandMesh` resta fail-loud. (Il valore 1e-4 m usato nella prima versione non era stato misurato e rifiutava la mesh reale.)
+
+### 10.7 Cosa non è verificato
+
+Non ho compilato né eseguito nulla (niente coal, Pinocchio né ROS in questo ambiente): né i gtest (`test_approach_clearance.cpp`, i nuovi `GraspS3ClearanceTest.*`), né il tool `s3_clearance`. I valori attesi dei test (100 mm, 10 mm, sovrapposizione, monotonia in omega) sono calcolati a mano sulla geometria e vanno confermati dall'esecuzione.

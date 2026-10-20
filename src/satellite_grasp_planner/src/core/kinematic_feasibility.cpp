@@ -12,6 +12,58 @@
 namespace satellite_grasp_planner {
 namespace core {
 
+std::vector<CartesianSample> buildApproachTrajectory(const haptic_dmp_learning::core::ProDMP& prodmp_template,
+                                                     const Eigen::Vector3d& p0, const Eigen::Quaterniond& quat0,
+                                                     const Eigen::Vector3d& target_position,
+                                                     const Eigen::Quaterniond& target_orientation, double dt) {
+    if (!(dt > 0.0)) {
+        throw std::invalid_argument("buildApproachTrajectory: dt must be > 0");
+    }
+    const double tau = prodmp_template.tau();
+    const int n_steps = static_cast<int>(std::ceil(tau / dt));
+
+    haptic_dmp_learning::core::ProDMP prodmp = prodmp_template;  // step() mutates: work on a copy
+    prodmp.setRelativeGoal(false);
+    prodmp.setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
+    prodmp.setGoal(target_position);
+
+    std::vector<CartesianSample> trajectory;
+    trajectory.reserve(static_cast<size_t>(n_steps));
+    for (int i = 0; i < n_steps; ++i) {
+        CartesianSample sample;
+        sample.position = prodmp.step(dt);
+        const double s = std::min(1.0, static_cast<double>(i + 1) * dt / tau);
+        sample.orientation =
+            haptic_dmp_learning::core::slerpShortestPath(quat0, target_orientation, s);
+        trajectory.push_back(sample);
+    }
+    return trajectory;
+}
+
+std::vector<ApproachSample> timedApproachTrajectory(const haptic_dmp_learning::core::ProDMP& prodmp_template,
+                                                    const Eigen::Vector3d& p0, const Eigen::Quaterniond& quat0,
+                                                    const Eigen::Vector3d& target_position,
+                                                    const Eigen::Quaterniond& target_orientation, double dt) {
+    const double tau = prodmp_template.tau();
+    const std::vector<CartesianSample> samples =
+        buildApproachTrajectory(prodmp_template, p0, quat0, target_position, target_orientation, dt);
+    std::vector<ApproachSample> out;
+    out.reserve(samples.size() + 1);
+    ApproachSample first;
+    first.t_s = 0.0;
+    first.position = p0;
+    first.orientation = quat0;
+    out.push_back(first);
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        ApproachSample a;
+        a.t_s = static_cast<double>(i + 1) * dt;
+        a.position = a.t_s >= tau ? target_position : samples[i].position;
+        a.orientation = samples[i].orientation;
+        out.push_back(a);
+    }
+    return out;
+}
+
 FeasibilityResult checkKinematicFeasibility(
     const haptic_dmp_learning::core::ProDMP& prodmp_template,
     const Eigen::Vector3d& target_position,
@@ -33,24 +85,8 @@ FeasibilityResult checkKinematicFeasibility(
     const Eigen::Vector3d p0 = robot_model->eePosition();
     const Eigen::Quaterniond quat0 = robot_model->eeOrientation();
 
-    const double tau = prodmp_template.tau();
-    const int n_steps = static_cast<int>(std::ceil(tau / dt));
-
-    haptic_dmp_learning::core::ProDMP prodmp = prodmp_template;  // step() mutates: work on a copy
-    prodmp.setRelativeGoal(false);
-    prodmp.setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
-    prodmp.setGoal(target_position);
-
-    std::vector<CartesianSample> trajectory;
-    trajectory.reserve(static_cast<size_t>(n_steps));
-    for (int i = 0; i < n_steps; ++i) {
-        CartesianSample sample;
-        sample.position = prodmp.step(dt);
-        const double s = std::min(1.0, static_cast<double>(i + 1) * dt / tau);
-        sample.orientation =
-            haptic_dmp_learning::core::slerpShortestPath(quat0, target_orientation, s);
-        trajectory.push_back(sample);
-    }
+    const std::vector<CartesianSample> trajectory =
+        buildApproachTrajectory(prodmp_template, p0, quat0, target_position, target_orientation, dt);
 
     NullspaceBiasedResolution::Params ns_params;  // defaults = impedance-controller proxy, as in the tools
     JointPathSimulator::Params sim_params;

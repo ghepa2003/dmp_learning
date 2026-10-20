@@ -118,3 +118,22 @@ coarse candidates by `d_pos` (psi = 0, IK ok on the chosen branch, `reject_mask`
 selector's log and prints separately the winner over all psi = 0 rows (coarse + fine + extra), checking that the selector's chosen (k, theta)
 is among them (expected for the 15/10 run: k=0, theta=-163.5, d_pos 7.171 mm). The fine/extra rows add about 4*6*40*|psi band| evaluations
 (rollout + follow included): use `--rollout psi0` for a quick pass.
+
+# s3_clearance
+
+Clearance (signed distance gripper <-> rotating satellite over the window [0, tau], see `docs/S3_SPEC.md` section 10) of ONE candidate,
+at a given satellite rate. Same scenario inputs as `s3_landscape` (`--weights-dir`, `--params`, `--urdf`, `--q-start`, `--depth`,
+`--center`, `--theta-snap-rad`, `--t-snap-s`; defaults = the 15/10 run) plus the candidate: `--k 0..3`, `--theta-deg`, `--flip 0|1`
+(wrist branch, forced) and `--omega-deg-s` (signed; it is the snapshot's omega AND the one of the clearance). `--hand-mesh <stl>`
+overrides the `fer_hand` collision mesh read from the URDF through `AMENT_PREFIX_PATH`. `s1.clearance_dt_s` and `s1.gripper_open_m`
+are read from `--params` (defaults 0.05 s, 0.060 m).
+
+    ros2 run satellite_grasp_planner s3_clearance --k 2 --theta-deg 145.3 --flip 1 --omega-deg-s -4.0
+    ros2 run satellite_grasp_planner s3_clearance --selftest
+
+Output (stdout, one line; details on stderr):
+`CLEARANCE k=.. theta=.. flip=.. omega=.. min_mm=.. coppia=.. t_rel_s=.. min_mm_senza_ultimi_2s=..` - `min_mm`, `coppia` (robot part - satellite
+part) and `t_rel_s` (= t - tau) refer to the whole window; `min_mm_senza_ultimi_2s` is the value the constraint uses.
+The trajectory is the planner's (`timedApproachTrajectory`: start pose, ProDMP + SLERP, executor time grid), goal = grasp position +
+`contact_to_end_offset`. A candidate whose IK does not converge is still evaluated (only the TCP path matters) with a warning.
+`--selftest` (no URDF, no demo): synthetic hand, real fingers and satellite, known values 100 mm and 10 mm; exit 3 on mismatch.

@@ -16,6 +16,7 @@
  */
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
+#include "satellite_grasp_planner/core/approach_clearance.hpp"
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 
@@ -89,6 +91,20 @@ struct S3Params {
     double kappa_w_mm = 7.5;     ///< v2: weight of -ln(w_full) [mm], ASSUMED, >= 0
     double kappa_t_mm_s = 0.0;   ///< v2: weight of the wait [mm/s], >= 0
     double tau_j_mm = 2.0;       ///< v2: tie band on J [mm], ASSUMED, >= 0
+
+    // ---- v2 clearance constraint (docs/S3_SPEC.md, "vincolo di clearance"); with use_clearance == false (default)
+    //      nothing below is read and the selection is bit-identical ----
+    /// v2 only (true with mode "legacy" is an error): a finalist whose clearance (approachClearance(), commanded TCP
+    /// trajectory vs rotating satellite, window [0, tau - 2 s]) is below min_clearance_mm is discarded. Lazy: the finalists are
+    /// scanned in J order; the first admissible one fixes J*; the others with J <= J* + tau_j_mm are evaluated too;
+    /// among the admissible ones the smaller wait wins. No admissible finalist: kNoCandidate (no fallback). With
+    /// force the constraint only warns (S3Result::warnings). Needs S3Context::clearance_eval.
+    bool use_clearance = false;
+    double min_clearance_mm = 2.0;  ///< ASSUMED threshold [mm], finite and >= 0
+    double clearance_dt_s = 0.05;   ///< sampling of the window [s], finite and > 0
+    /// Finger joint position of the open gripper [m], both fingers, in [0, 0.08]. MUST equal the executor's
+    /// gripper_open_position (haptic_dmp_learning/config/params.yaml:49, value 0.06): the planner cannot read it.
+    double gripper_open_m = 0.060;
 };
 
 enum class S3Mode { kLegacy, kV2 };
@@ -134,6 +150,9 @@ struct S3Context {
     double min_delay_s = 0.0;
     /// Optional per-candidate log (default nullptr = off, no change of behaviour or result). Not owned.
     std::vector<S3EvalRecord>* eval_log = nullptr;
+    /// Clearance of one finalist (see S3Params::use_clearance). Required (non-empty) iff use_clearance; ignored otherwise.
+    /// Production: makeClearanceEvaluator(model, {clearance_dt_s, gripper_open_m}).
+    ClearanceEvaluator clearance_eval;
 };
 
 struct S3Candidate {
@@ -167,6 +186,13 @@ struct S3FinalistRecord {
     double rollout_max_violation_rad = 0.0;
     double rollout_min_margin_rad = 0.0;   ///< min joint margin along the rollout
     bool winner = false;
+    // ---- clearance constraint (filled only if S3Params::use_clearance and the finalist was evaluated: lazy) ----
+    bool clearance_done = false;
+    bool clearance_rejected = false;       ///< evaluated and below min_clearance_mm (discarded; with force: only warned)
+    double clearance_mm = 0.0;             ///< ClearanceResult::min_mm_no_tail, the value the constraint uses
+    std::string clearance_pair;            ///< ClearancePair::str() of that minimum
+    double clearance_t_rel_s = 0.0;        ///< its time relative to contact (t - tau, <= 0)
+    double clearance_full_mm = 0.0;        ///< ClearanceResult::min_mm over the whole window (informative)
 };
 
 /// One post-hoc check (clustering skips are not logged). Vectors are zero when the velocity check is off.
@@ -200,6 +226,8 @@ struct S3Result {
     bool forced = false;             ///< S3Params::force was on
     std::string forced_violations;   ///< force_ignore_constraints: constraints violated and ignored (empty if none)
     std::vector<S3FinalistRecord> v2_finalists;  ///< mode "v2" only: finalists in J_static order (empty in legacy)
+    double clearance_stage_ms = 0.0;  ///< wall-clock time spent in the clearance evaluations (0 if use_clearance is off)
+    std::vector<std::string> warnings;  ///< use_clearance with force: clearance below threshold (not discarded)
 };
 
 /// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights; force_*, branch_rule: see S3Params).
@@ -229,6 +257,22 @@ double s3CostV2(double d_mm, double w_full, double t_wait_s, const S3Params& par
 /// finite entries; ties on t_wait: smaller J, then smaller index). -1 if @p j is empty or has no finite entry.
 /// @throws std::invalid_argument if the vectors differ in size or tau_j_mm < 0.
 int s3PickWinnerV2(const std::vector<double>& j, const std::vector<double>& t_wait_s, double tau_j_mm);
+
+/**
+ * One round of the lazy v2 clearance filter (pure; selectGraspS3 calls it before every tie-break pick).
+ * @param j  J of each finalist (non-finite = never considered, as in s3PickWinnerV2)
+ * @param alive  in/out: entries still in play; a finalist evaluated below @p min_clearance_mm is set to 0
+ * @param done / clearance_mm  in/out cache: eval(i) runs at most once per i
+ * Scans the alive finite-J entries by increasing J (ties: smaller index), evaluating each until the first one with
+ * clearance >= min_clearance_mm: its J is J*. Then evaluates every alive entry with J <= J* + tau_j_mm (the same
+ * comparison as s3PickWinnerV2). A NaN clearance counts as a violation.
+ * @return true iff at least one alive entry is admissible (J* exists); false: none is, and every alive finite-J entry
+ *         was evaluated and discarded.
+ * @throws std::invalid_argument for size mismatches or a non-finite / negative threshold or band.
+ */
+bool s3ClearanceRound(const std::vector<double>& j, std::vector<char>& alive, std::vector<char>& done,
+                      std::vector<double>& clearance_mm, const std::function<double(std::size_t)>& eval,
+                      double min_clearance_mm, double tau_j_mm);
 
 /// d_pos = || (position_world + contact_to_end_offset - p0) - delta_g_demo ||  (the one used by selectGraspS3).
 double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& contact_to_end_offset,

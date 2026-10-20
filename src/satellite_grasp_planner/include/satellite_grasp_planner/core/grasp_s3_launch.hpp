@@ -39,12 +39,17 @@ namespace core {
  *   evaluations = S3Result::evaluations; elapsed_s = wall-clock time of the selection
  *
  * eval_log: optional per-candidate log forwarded to S3Context::eval_log (nullptr = off, no change of result).
+ *
+ * clearance_model: required (non-null, outliving the call) iff s3.use_clearance; its evaluator is built here from
+ * s3.clearance_dt_s and s3.gripper_open_m and passed in S3Context::clearance_eval. Ignored if use_clearance is off.
+ * @throws std::invalid_argument if s3.use_clearance and clearance_model is null.
  */
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot_at_acquisition,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s = std::nullopt,
                                        S3Result* s3_result_out = nullptr,
-                                       std::vector<S3EvalRecord>* eval_log = nullptr);
+                                       std::vector<S3EvalRecord>* eval_log = nullptr,
+                                       const ApproachClearanceModel* clearance_model = nullptr);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

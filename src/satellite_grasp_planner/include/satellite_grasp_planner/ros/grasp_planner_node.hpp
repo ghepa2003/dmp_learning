@@ -32,6 +32,7 @@
  */
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -42,6 +43,7 @@
 
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "satellite_grasp_msgs/msg/grasp_command.hpp"
+#include "satellite_grasp_planner/core/approach_clearance.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 #include "satellite_grasp_planner/core/start_state.hpp"
@@ -79,6 +81,8 @@ private:
     std::optional<core::StartState> start_state_;
 
     core::S3Params s3_params_;  ///< s1.* parameters, see grasp_planner_example.yaml
+    /// Set iff s1.use_clearance (hand convex hull computed once at startup); null otherwise.
+    std::shared_ptr<core::ApproachClearanceModel> clearance_model_;
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;
