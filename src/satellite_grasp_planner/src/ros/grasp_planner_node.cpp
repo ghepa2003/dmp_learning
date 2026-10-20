@@ -196,6 +196,11 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
         p.min_clearance_mm = dbl("s1.min_clearance_mm", p.min_clearance_mm);
         p.clearance_dt_s = dbl("s1.clearance_dt_s", p.clearance_dt_s);
         p.gripper_open_m = dbl("s1.gripper_open_m", p.gripper_open_m);
+        // Joint-margin constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+        p.use_margin = bol("s1.use_margin", p.use_margin);
+        p.min_margin_deg = dbl("s1.min_margin_deg", p.min_margin_deg);
+        p.margin_follow_s = dbl("s1.margin_follow_s", p.margin_follow_s);
+        p.margin_follow_dt_s = dbl("s1.margin_follow_dt_s", p.margin_follow_dt_s);
         const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
         const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
         if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
@@ -209,6 +214,13 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
             RCLCPP_WARN(this->get_logger(),
                         "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
                         "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
+        }
+        if (p.use_margin) {
+            RCLCPP_INFO(this->get_logger(),
+                        "grasp_planner_node: s1.use_margin=true min_margin_deg=%.3f (ASSUMED; G16 observed 20.84-28.63) "
+                        "margin_follow_s=%.3f margin_follow_dt_s=%.4f; lazy evaluation in J_static order, the wait tie-break "
+                        "(tau_j_mm) is not applied",
+                        p.min_margin_deg, p.margin_follow_s, p.margin_follow_dt_s);
         }
         if (p.use_clearance) {
             // fer_hand collision mesh from the URDF (checked closed and convex), built once here (a missing mesh is a startup error).
@@ -313,9 +325,10 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
             in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
             /*eval_log=*/nullptr, clearance_model_.get());
         RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: s1 status=%d evaluations=%d posthoc_checks=%d dv=%.3g m/s "
+                    "grasp_planner_node: s1 status=%d evaluations=%d rollouts=%d margin_evals=%d posthoc_checks=%d dv=%.3g m/s "
                     "path_margin=%.3f rad%s%s",
-                    static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.posthoc_checks,
+                    static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.rollouts_done,
+                    s3_result.margin_evals_done, s3_result.posthoc_checks,
                     s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                     s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
         if (v2) {
@@ -323,11 +336,19 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                         "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
                         "start_goal_deg rollout_err_mm rollout_err_deg%s",
                         s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
-            const std::size_t n_rows = std::min<std::size_t>(s3_result.v2_finalists.size(), 12);
-            for (std::size_t i = 0; i < n_rows; ++i) {
+            // ALL finalists that were evaluated (rollout done), numbered by their J_static rank; the ones after the winner of the
+            // lazy use_margin flow were never evaluated and are summarised in one line.
+            std::size_t n_evaluated = 0;
+            for (const core::S3FinalistRecord& f : s3_result.v2_finalists) n_evaluated += f.rollout_done ? 1 : 0;
+            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 finalists evaluated: %zu of %zu", n_evaluated,
+                        s3_result.v2_finalists.size());
+            for (std::size_t i = 0; i < s3_result.v2_finalists.size(); ++i) {
                 const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
+                if (!f.rollout_done) continue;
                 char jbuf[32];
-                if (f.rollout_feasible) {
+                if (!f.rollout_done) {
+                    std::snprintf(jbuf, sizeof(jbuf), "n/v");
+                } else if (f.rollout_feasible) {
                     std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
                 } else {
                     std::snprintf(jbuf, sizeof(jbuf), "n/a");
@@ -341,13 +362,24 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                         std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
                     }
                 }
+                char mbuf[160] = "";
+                if (s3_params_.use_margin) {
+                    if (f.margin_done) {
+                        std::snprintf(mbuf, sizeof(mbuf), " margin=%.2f deg limiting=fer_joint%d t_rel=%.2f s%s", f.margin_deg,
+                                      f.margin_joint + 1, f.margin_t_rel_s, f.margin_rejected ? " REJECTED" : "");
+                    } else {
+                        std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
+                    }
+                }
                 RCLCPP_INFO(this->get_logger(),
                             "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
-                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s",
+                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
                             i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
                             f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
-                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, cbuf,
-                            f.rollout_feasible ? "" : " ROLLOUT_INFEASIBLE", f.winner ? " WINNER" : "");
+                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
+                            (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
+                            f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
+                            f.winner ? " WINNER" : "");
             }
         }
         if (v2 && s3_params_.use_clearance) {
@@ -367,6 +399,20 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                         s3_result.chosen.eval.branch_rot_rad[1] * 180.0 / M_PI,
                         s3_result.chosen.wait_s,
                         s3_params_.force ? " [FORCED]" : "");
+            for (const core::S3FinalistRecord& f : s3_result.v2_finalists) {
+                if (!f.winner) continue;
+                char mbuf[128] = "n/a", cbuf[160] = "n/a";
+                if (f.margin_done) {
+                    std::snprintf(mbuf, sizeof(mbuf), "%.2f deg (fer_joint%d at t_rel %.2f s)", f.margin_deg, f.margin_joint + 1,
+                                  f.margin_t_rel_s);
+                }
+                if (f.clearance_done) {
+                    std::snprintf(cbuf, sizeof(cbuf), "%.2f mm (%s at t_rel %.2f s)", f.clearance_mm, f.clearance_pair.c_str(),
+                                  f.clearance_t_rel_s);
+                }
+                RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner: predicted margin %s, clearance %s", mbuf,
+                            cbuf);
+            }
         }
         if (!s3_result.forced_violations.empty()) {
             RCLCPP_ERROR(this->get_logger(),

@@ -104,3 +104,33 @@ TEST(KinematicFeasibilityTest, DoesNotModifyProDmpTemplate) {
     EXPECT_EQ(prodmp.goal(), goal_before);
     EXPECT_EQ(prodmp.initPos(), init_before);
 }
+
+// min_margin_joint (new field): the joint that gives min_joint_margin_rad, set also without violation; the value of
+// min_joint_margin_rad is unchanged by it.
+TEST(KinematicFeasibilityTest, MinMarginJointIdentifiesTheLimitingJoint) {
+    auto model = loadPandaRobotModel();
+    ASSERT_NE(model, nullptr);
+    const auto prodmp = makeSyntheticProDmpTemplate();
+
+    // Same start as StartBeyondJointLimitIsInfeasibleWithExactViolation: joint 4 (index 3) starts 0.0498 rad beyond its limit.
+    RobotModel::JointVector q0 = RobotModel::readyPose();
+    q0(3) = -0.02;
+    model->update(q0, RobotModel::JointVector::Zero());
+    const Eigen::Vector3d target = model->eePosition() + Eigen::Vector3d(0.01, 0.0, 0.0);
+    const Eigen::Quaterniond quat = model->eeOrientation();
+    const auto bad = checkKinematicFeasibility(prodmp, target, quat, model, q0);
+    EXPECT_EQ(bad.min_margin_joint, 3);
+    const double excess = q0(3) - model->jointUpperLimits()(3);
+    ASSERT_GT(excess, 1e-4);
+    EXPECT_LE(bad.min_joint_margin_rad, -excess + 1e-12);
+
+    // No violation: worst_joint stays -1, min_margin_joint is still set, in 0..6, and consistent with the margin.
+    resetRobotToReady(model);
+    const Eigen::Vector3d t2 = model->eePosition() + Eigen::Vector3d(0.1, 0.0, 0.0);
+    const auto ok = checkKinematicFeasibility(prodmp, t2, model->eeOrientation(), model);
+    ASSERT_TRUE(ok.feasible);
+    EXPECT_EQ(ok.worst_joint, -1);
+    ASSERT_GE(ok.min_margin_joint, 0);
+    ASSERT_LE(ok.min_margin_joint, 6);
+    EXPECT_GT(ok.min_joint_margin_rad, 0.0);
+}

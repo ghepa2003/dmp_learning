@@ -119,8 +119,15 @@ std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
     const RobotModel::JointVector& q_ref) const {
+    return simulate(trajectory, q0, q_ref, nullptr);
+}
+
+std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
+    const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
+    const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const {
     std::vector<Step> steps;
     steps.reserve(trajectory.size());
+    if (q_after_last_step) *q_after_last_step = q0;
     if (trajectory.empty()) {
         return steps;
     }
@@ -145,6 +152,7 @@ std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
         q += dq_cmd * params_.dt;
     }
 
+    if (q_after_last_step) *q_after_last_step = q;
     return steps;
 }
 

@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -16,7 +18,10 @@
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/tcp_roll.hpp"
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
+#include "satellite_grasp_planner/core/grasp_s3_launch.hpp"
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
+#include "satellite_grasp_planner/core/selection_inputs.hpp"
+#include "satellite_grasp_planner/core/start_state.hpp"
 
 using namespace satellite_grasp_planner::core;
 using haptic_dmp_learning::core::CubeSatelliteModel;
@@ -1166,4 +1171,310 @@ TEST(GraspS3ClearanceTest, ForceKeepsTheCandidateAndWarns) {
     const S3Result ok = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
     ASSERT_EQ(ok.status, S3Result::kSelected);
     EXPECT_TRUE(ok.warnings.empty());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// v2 joint-margin constraint (S3Params::use_margin). Written without being able to build/run. The margins come from the
+// real followMargin() on the synthetic template (their values are not known a priori): the tests use the threshold as the
+// lever, with a probe run (threshold 1e6 deg: every finalist that passes the rollout is evaluated and discarded, so the
+// probe lists the margin of all of them) to build the expected outcome.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr double kHugeMarginDeg = 1e6;
+
+S3Params v2MarginParams(double min_margin_deg) {
+    S3Params p = v2LooseParams();
+    p.use_margin = true;
+    p.min_margin_deg = min_margin_deg;
+    return p;
+}
+
+bool isBaselineChoice(const S3FinalistRecord& f, const S3Candidate& c) {
+    return f.cand.eval.k == c.eval.k && f.cand.eval.wrist_flip == c.eval.wrist_flip &&
+           std::abs(f.cand.eval.theta_rad - c.eval.theta_rad) < 1e-9;
+}
+
+}  // namespace
+
+TEST(GraspS3MarginTest, DefaultsAndValidation) {
+    const S3Params d;
+    EXPECT_FALSE(d.use_margin);
+    EXPECT_DOUBLE_EQ(d.min_margin_deg, 24.0);  // ASSUMED
+    EXPECT_DOUBLE_EQ(d.margin_follow_s, 3.0);
+    EXPECT_DOUBLE_EQ(d.margin_follow_dt_s, 0.01);
+    EXPECT_NO_THROW(validateS3Params(v2MarginParams(24.0)));
+    S3Params legacy = looseParams();
+    legacy.use_margin = true;  // legacy: error
+    EXPECT_THROW(validateS3Params(legacy), std::invalid_argument);
+    auto bad = [](auto mutate) {
+        S3Params p = v2MarginParams(24.0);
+        mutate(p);
+        EXPECT_THROW(validateS3Params(p), std::invalid_argument);
+    };
+    bad([](S3Params& p) { p.min_margin_deg = -0.1; });
+    bad([](S3Params& p) { p.min_margin_deg = std::nan(""); });
+    bad([](S3Params& p) { p.margin_follow_s = -1.0; });
+    bad([](S3Params& p) { p.margin_follow_dt_s = 0.0; });
+}
+
+// use_margin = false: the other margin fields are ignored, the v2 selection is unchanged (and no followMargin runs).
+TEST(GraspS3MarginTest, DisabledIsUnchangedV2Selection) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Params base = v2LooseParams();
+    const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+    if (a.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << a.note;
+    S3Params other = base;  // use_margin stays false
+    other.min_margin_deg = 1e6;
+    other.margin_follow_s = 99.0;
+    other.margin_follow_dt_s = 0.5;
+    const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+    ASSERT_EQ(a.status, b.status);
+    EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+    EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+    EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+    EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+    EXPECT_EQ(a.evaluations, b.evaluations);
+    EXPECT_EQ(a.posthoc_min_margin_rad, b.posthoc_min_margin_rad);  // rollout margin on [start, tau]: semantics untouched
+    ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+    EXPECT_EQ(b.rollouts_done, static_cast<int>(b.v2_finalists.size()));  // eager: every finalist
+    EXPECT_EQ(b.margin_evals_done, 0);
+    for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+        EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+        EXPECT_EQ(a.v2_finalists[i].winner, b.v2_finalists[i].winner);
+        EXPECT_EQ(a.v2_finalists[i].rollout_min_margin_rad, b.v2_finalists[i].rollout_min_margin_rad);
+        EXPECT_FALSE(b.v2_finalists[i].margin_done);
+        EXPECT_TRUE(b.v2_finalists[i].discard_reason.empty());
+    }
+}
+
+// Legacy ignores every margin field (use_margin true is an error there, so only the other three fields are varied).
+TEST(GraspS3MarginTest, LegacySelectionIgnoresTheMarginFields) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Params base = looseParams();
+    S3Params other = base;
+    other.min_margin_deg = 1e6;
+    other.margin_follow_s = 99.0;
+    other.margin_follow_dt_s = 0.5;
+    const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+    const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+    ASSERT_EQ(a.status, b.status);
+    EXPECT_EQ(a.evaluations, b.evaluations);
+    EXPECT_EQ(a.rollouts_done, 0);
+    EXPECT_EQ(b.rollouts_done, 0);
+    if (a.status == S3Result::kSelected) {
+        EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+        EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+    }
+}
+
+// RUN15 (production weights, RUN15 scenario of analysis/s3_landscape.cpp --selftest): the legacy default selection gives the
+// recorded winner, and the margin fields do not change it. Parameters = code defaults (every s1.* line of
+// config/grasp_planner_example.yaml is commented) with posthoc_velocity_check = false and min_delay 5.0 as the landscape tool
+// (ASSUMED equal to the 15/10 campaign; if this test fails check them first). Skipped if the run directory or URDF is missing.
+TEST(GraspS3MarginTest, Run15LegacyWinnerUnchanged) {
+    REQUIRE_URDF_OR_SKIP();
+    const char* home = std::getenv("HOME");
+    const std::string weights =
+        std::string(home ? home : "/root") + "/thesis_ws/runs/20261015_095418_fit_demo_20261014T150851/weights_demo_params.yaml";
+    if (!std::ifstream(weights).good()) GTEST_SKIP() << "RUN15 demo parameters not found: " << weights;
+
+    SatelliteSnapshot snap;
+    snap.center = Eigen::Vector3d(0.70, 0.0, 0.77);
+    snap.axis = Eigen::Vector3d::UnitZ();
+    snap.omega_rad_s = -2.0 * M_PI / 180.0;
+    snap.theta_rad = -1.6727670737402633;
+    snap.t_s = 18.318;
+    CubeSatelliteModel::Params cube;
+    cube.center_world = snap.center;
+    cube.axis_world = snap.axis;
+    cube.face_normal_body = Eigen::Vector3d(1.0, 0.0, 0.0);
+    cube.cube_side_m = 0.150;
+    cube.standoff_m = 0.08;
+    cube.collar_radius_m = 0.0725;
+    cube.wall_thickness_m = 0.009;
+    cube.grasp_radius_m = 0.068;
+    cube.grasp_depth_m = 0.0125;
+    const std::vector<double> q = {-9e-06, -0.786572, 2e-06, -2.378914, -6e-06, 3.141609, 0.785398};
+    const StartState start = makeStartStateFromOverride(q, tf::urdfPath());
+    const SelectionInputs in = buildSelectionInputs(weights, tf::urdfPath(), snap, cube, start);
+
+    S3Params base;
+    base.posthoc_velocity_check = false;
+    S3Params other = base;
+    other.min_margin_deg = 1e6;
+    other.margin_follow_s = 99.0;
+    other.margin_follow_dt_s = 0.5;
+    S3Result ra, rb;
+    planGraspAndLaunchS1(in, snap, 5.0, base, snap.t_s, &ra);
+    planGraspAndLaunchS1(in, snap, 5.0, other, snap.t_s, &rb);
+    ASSERT_EQ(ra.status, S3Result::kSelected) << ra.note;
+    ASSERT_EQ(rb.status, S3Result::kSelected) << rb.note;
+    EXPECT_EQ(static_cast<int>(ra.chosen.eval.k), 0);
+    EXPECT_NEAR(ra.chosen.eval.theta_rad * 180.0 / M_PI, -163.5, 0.05);
+    EXPECT_NEAR(ra.chosen.d_pos_m * 1000.0, 7.1713, 0.001);
+    EXPECT_NEAR(ra.chosen.wait_s, 9.3548, 0.01);
+    EXPECT_NEAR(ra.chosen.eval.w_hat, 0.8238, 1e-3);
+    EXPECT_EQ(ra.chosen.eval.theta_rad, rb.chosen.eval.theta_rad);
+    EXPECT_EQ(ra.chosen.cost, rb.chosen.cost);
+    EXPECT_EQ(ra.evaluations, rb.evaluations);
+}
+
+// Margin below the threshold: discarded; the next admissible finalist (J_static order) is chosen; the ones after it get no rollout.
+TEST(GraspS3MarginTest, BelowThresholdDiscardedAdmissibleChosenLazy) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Result probe = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2MarginParams(kHugeMarginDeg));
+    std::vector<std::size_t> idx;  // finalists that reached the margin stage, in J_static order
+    for (std::size_t i = 0; i < probe.v2_finalists.size(); ++i) {
+        if (probe.v2_finalists[i].margin_done) idx.push_back(i);
+    }
+    if (idx.size() < 2) GTEST_SKIP() << "need >= 2 rollout-feasible finalists in this fixture, have " << idx.size();
+    const double m_first = probe.v2_finalists[idx[0]].margin_deg;
+    std::size_t expected = probe.v2_finalists.size();
+    ASSERT_TRUE(std::isfinite(m_first));
+    // The synthetic fixture can give a NEGATIVE predicted margin (rollout feasible = no violation on [0, tau], but the follow
+    // may leave the limits): m_first + 1e-6 would then be negative and validateS3Params (correctly) throws. A threshold of 0
+    // still discards a negative first margin.
+    const double thr = std::max(m_first + 1e-6, 0.0);
+    for (std::size_t n = 1; n < idx.size(); ++n) {
+        if (probe.v2_finalists[idx[n]].margin_deg >= thr) {
+            expected = idx[n];
+            break;
+        }
+    }
+    if (expected == probe.v2_finalists.size()) GTEST_SKIP() << "no later finalist has a larger margin than the first in this fixture";
+
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2MarginParams(thr));
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    ASSERT_EQ(r.v2_finalists.size(), probe.v2_finalists.size());
+    EXPECT_TRUE(r.v2_finalists[idx[0]].margin_rejected);
+    EXPECT_EQ(r.v2_finalists[idx[0]].discard_reason, "margin");
+    for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+        const auto& f = r.v2_finalists[i];
+        EXPECT_EQ(f.winner, i == expected) << "finalist " << i;
+        if (i < expected) {
+            EXPECT_TRUE(f.rollout_done) << i;
+            EXPECT_FALSE(f.discard_reason.empty()) << i;  // everything before the winner was discarded
+        }
+        if (i > expected) {
+            EXPECT_FALSE(f.rollout_done) << "no rollout after the first admissible finalist: " << i;  // lazy
+            EXPECT_FALSE(f.margin_done) << i;
+        }
+    }
+    EXPECT_GE(r.v2_finalists[expected].margin_deg, thr);
+    EXPECT_FALSE(isBaselineChoice(r.v2_finalists[idx[0]], r.chosen));
+    EXPECT_EQ(r.rollouts_done, static_cast<int>(expected) + 1);  // rollouts up to and including the winner
+    EXPECT_LE(r.rollouts_done, probe.rollouts_done);
+}
+
+// Lazy: with threshold 0 the number of rollouts never exceeds the position of the first admissible finalist.
+TEST(GraspS3MarginTest, RolloutCountDoesNotExceedFirstAdmissiblePosition) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Result eager = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+    if (eager.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << eager.note;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2MarginParams(0.0));
+    if (r.status != S3Result::kSelected) GTEST_SKIP() << "no finalist with a non-negative margin in this fixture: " << r.note;
+    std::size_t pos = r.v2_finalists.size();
+    for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+        if (r.v2_finalists[i].winner) pos = i;
+    }
+    ASSERT_LT(pos, r.v2_finalists.size());
+    EXPECT_LE(r.rollouts_done, static_cast<int>(pos) + 1);
+    EXPECT_LE(r.rollouts_done, eager.rollouts_done);
+    EXPECT_LE(r.margin_evals_done, r.rollouts_done);
+    for (std::size_t i = pos + 1; i < r.v2_finalists.size(); ++i) EXPECT_FALSE(r.v2_finalists[i].rollout_done) << i;
+    // J_static order is the finalists' order: nobody before the winner was admissible
+    for (std::size_t i = 0; i < pos; ++i) EXPECT_FALSE(r.v2_finalists[i].discard_reason.empty()) << i;
+}
+
+// No admissible finalist: kNoCandidate, with a note, no winner, no fallback; every rollout-feasible finalist evaluated.
+TEST(GraspS3MarginTest, AllBelowThresholdGivesNoCandidate) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Result eager = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+    if (eager.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << eager.note;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2MarginParams(kHugeMarginDeg));
+    EXPECT_EQ(r.status, S3Result::kNoCandidate);
+    EXPECT_NE(r.note.find("margin"), std::string::npos) << r.note;
+    EXPECT_EQ(r.rollouts_done, static_cast<int>(r.v2_finalists.size()));  // nothing admissible: all finalists were evaluated
+    for (const auto& f : r.v2_finalists) {
+        EXPECT_FALSE(f.winner);
+        if (f.rollout_feasible) {
+            EXPECT_TRUE(f.margin_done);
+            EXPECT_TRUE(f.margin_rejected);
+            EXPECT_EQ(f.discard_reason, "margin");
+            EXPECT_GE(f.margin_joint, 0);
+            EXPECT_LE(f.margin_joint, 6);
+        }
+    }
+}
+
+// With clearance on, the margin is checked first: a finalist discarded by the margin never reaches the clearance evaluator.
+TEST(GraspS3MarginTest, MarginIsCheckedBeforeClearance) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Result eager = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+    if (eager.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << eager.note;
+
+    int calls = 0;
+    s.ctx.clearance_eval = [&calls](const ClearanceQuery&) {
+        ++calls;
+        return fakeClearance(10.0);
+    };
+    S3Params p = v2MarginParams(kHugeMarginDeg);
+    p.use_clearance = true;
+    const S3Result none = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(none.status, S3Result::kNoCandidate);
+    EXPECT_EQ(calls, 0);
+
+    calls = 0;
+    p.min_margin_deg = 0.0;
+    const S3Result ok = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    if (ok.status != S3Result::kSelected) GTEST_SKIP() << "no finalist with a non-negative margin in this fixture: " << ok.note;
+    EXPECT_EQ(calls, 1);  // clearance 10 mm passes: only the first margin-admissible finalist reaches it
+    s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(0.5); };  // all below 2 mm
+    const S3Result rej = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(rej.status, S3Result::kNoCandidate);
+    for (const auto& f : rej.v2_finalists) EXPECT_FALSE(f.winner);
+}
+
+// force: the margin constraint only warns.
+TEST(GraspS3MarginTest, ForceKeepsTheCandidateAndWarns) {
+    REQUIRE_URDF_OR_SKIP();
+    S3TestSetup s = makeS3TestSetup();
+    s.ctx.prodmp_template = &s.tmpl;
+    ASSERT_NE(s.robot, nullptr);
+    const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+    if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+    const double theta_deg = base.chosen.eval.theta_rad * 180.0 / M_PI;
+    if (std::abs(theta_deg) > 180.0) GTEST_SKIP() << "winner theta outside [-180, 180]";
+    S3Params p = v2MarginParams(kHugeMarginDeg);
+    p.force = true;
+    p.force_k = static_cast<int>(base.chosen.eval.k);
+    p.force_theta_deg = theta_deg;
+    p.force_flip = base.chosen.eval.wrist_flip ? 1 : 0;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    ASSERT_EQ(r.warnings.size(), 1u);
+    EXPECT_NE(r.warnings[0].find("use_margin"), std::string::npos);
+    ASSERT_EQ(r.v2_finalists.size(), 1u);
+    EXPECT_TRUE(r.v2_finalists[0].margin_rejected);  // below threshold, but kept
+    EXPECT_TRUE(r.v2_finalists[0].winner);
 }

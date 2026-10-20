@@ -93,7 +93,8 @@ FeasibilityResult checkKinematicFeasibility(
     sim_params.dt = dt;
     sim_params.strategy = std::make_shared<NullspaceBiasedResolution>(ns_params);
     const JointPathSimulator sim(robot_model, sim_params);
-    const auto steps = sim.simulate(trajectory, q0, q_ref.value_or(q0));
+    RobotModel::JointVector q_post = q0;
+    const auto steps = sim.simulate(trajectory, q0, q_ref.value_or(q0), &q_post);
 
     FeasibilityResult res;
     if (steps.empty()) {
@@ -104,9 +105,17 @@ FeasibilityResult checkKinematicFeasibility(
     const RobotModel::JointVector& hi = robot_model->jointUpperLimits();
     double max_viol = 0.0;
     double min_margin = std::numeric_limits<double>::infinity();
+    int min_margin_joint = -1;
+    int min_margin_step = -1;
     for (std::size_t i = 0; i < steps.size(); ++i) {
         const auto& step = steps[i];
-        min_margin = std::min(min_margin, (step.q - lo).cwiseMin(hi - step.q).minCoeff());
+        Eigen::Index jmin = 0;
+        const double step_min = (step.q - lo).cwiseMin(hi - step.q).minCoeff(&jmin);  // same value as the former minCoeff()
+        if (step_min < min_margin) {  // strict: the first minimum wins (min_margin is unchanged otherwise)
+            min_margin = step_min;
+            min_margin_joint = static_cast<int>(jmin);
+            min_margin_step = static_cast<int>(i);
+        }
         for (int j = 0; j < RobotModel::kNumJoints; ++j) {
             const double below = lo(j) - step.q(j);
             const double above = step.q(j) - hi(j);
@@ -126,6 +135,9 @@ FeasibilityResult checkKinematicFeasibility(
     }
     res.max_joint_violation_rad = max_viol;
     res.min_joint_margin_rad = min_margin;
+    res.min_margin_joint = min_margin_joint;
+    res.min_margin_step = min_margin_step;
+    res.q_end_post_step = q_post;
     res.q_final = steps.back().q;
     res.w_trans_final = steps.back().w_trans;
 

@@ -26,6 +26,7 @@
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "haptic_dmp_learning/core/prodmp.hpp"
 #include "satellite_grasp_planner/core/approach_clearance.hpp"
+#include "satellite_grasp_planner/core/follow_margin.hpp"
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 
@@ -105,6 +106,22 @@ struct S3Params {
     /// Finger joint position of the open gripper [m], both fingers, in [0, 0.08]. MUST equal the executor's
     /// gripper_open_position (haptic_dmp_learning/config/params.yaml:49, value 0.06): the planner cannot read it.
     double gripper_open_m = 0.060;
+
+    // ---- v2 joint-margin constraint (docs/S3_SPEC.md §10, criterion 11); with use_margin == false (default) nothing
+    //      below is read and the selection is bit-identical ----
+    /// v2 only (true with mode "legacy" is an error): a finalist whose predicted joint margin over [start, AT_END + margin_follow_s]
+    /// (followMargin(): the G16 / step 0c procedure, nullspace reference rollout_q_ref, seed q_start) is below min_margin_deg is
+    /// discarded. LAZY, in J_static order: for each finalist rollout (w, margin), then margin, then clearance (if use_clearance),
+    /// then the post-hoc velocity check; the first finalist satisfying all of them is selected and no further rollout is done
+    /// (so the wait tie-break within tau_j_mm of the eager v2 selection does NOT apply in this mode). None admissible:
+    /// kNoCandidate (no fallback). With force the constraint only warns (S3Result::warnings).
+    bool use_margin = false;
+    /// ASSUMED threshold [deg], finite and >= 0 (observed G16 interval: failed 13.26-20.84, succeeded 28.63-35.00; 24 lies in the gap).
+    double min_margin_deg = 24.0;
+    /// Duration of the simulated follow after AT_END [s], finite and >= 0. 3.0 = executor's post_grasp_follow_s (and the G16 runs).
+    double margin_follow_s = 3.0;
+    /// Integration step of the follow [s], finite and > 0. 0.01 = step0c_margins.cpp (the G16 / criterion-11 values).
+    double margin_follow_dt_s = 0.01;
 };
 
 enum class S3Mode { kLegacy, kV2 };
@@ -185,6 +202,10 @@ struct S3FinalistRecord {
     double rollout_ori_err_deg = 0.0;
     double rollout_max_violation_rad = 0.0;
     double rollout_min_margin_rad = 0.0;   ///< min joint margin along the rollout
+    /// End state of the rollout (q after the last step, margin/joint/time of its approach minimum), handed to followMargin() so
+    /// it does not re-simulate the approach. Valid iff rollout_end_valid.
+    FollowApproachState rollout_end;
+    bool rollout_end_valid = false;
     bool winner = false;
     // ---- clearance constraint (filled only if S3Params::use_clearance and the finalist was evaluated: lazy) ----
     bool clearance_done = false;
@@ -193,6 +214,15 @@ struct S3FinalistRecord {
     std::string clearance_pair;            ///< ClearancePair::str() of that minimum
     double clearance_t_rel_s = 0.0;        ///< its time relative to contact (t - tau, <= 0)
     double clearance_full_mm = 0.0;        ///< ClearanceResult::min_mm over the whole window (informative)
+    // ---- joint-margin constraint (filled only if S3Params::use_margin and the finalist reached that stage: lazy) ----
+    bool margin_done = false;
+    bool margin_rejected = false;          ///< evaluated and below min_margin_deg
+    double margin_deg = 0.0;               ///< followMargin() min margin over [start, AT_END + margin_follow_s] [deg]
+    int margin_joint = -1;                 ///< limiting joint, 0-based (0 = fer_joint1)
+    double margin_t_rel_s = 0.0;           ///< its time relative to AT_END [s]
+    /// Why the finalist was discarded in the lazy (use_margin) flow: "rollout" (joint-limit violation), "margin", "clearance",
+    /// "velocity"; empty if not discarded / not evaluated. Empty in the eager flow.
+    std::string discard_reason;
 };
 
 /// One post-hoc check (clustering skips are not logged). Vectors are zero when the velocity check is off.
@@ -227,7 +257,9 @@ struct S3Result {
     std::string forced_violations;   ///< force_ignore_constraints: constraints violated and ignored (empty if none)
     std::vector<S3FinalistRecord> v2_finalists;  ///< mode "v2" only: finalists in J_static order (empty in legacy)
     double clearance_stage_ms = 0.0;  ///< wall-clock time spent in the clearance evaluations (0 if use_clearance is off)
-    std::vector<std::string> warnings;  ///< use_clearance with force: clearance below threshold (not discarded)
+    std::vector<std::string> warnings;  ///< use_clearance / use_margin with force: below threshold (not discarded)
+    int rollouts_done = 0;  ///< v2: kinematic rollouts of finalists performed (eager: all finalists; use_margin: up to the first admissible; 0 in legacy)
+    int margin_evals_done = 0;  ///< v2 use_margin: followMargin() evaluations performed
 };
 
 /// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights; force_*, branch_rule: see S3Params).

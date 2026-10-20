@@ -165,6 +165,14 @@ public:
     std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
                                const RobotModel::JointVector& q_ref) const;
 
+    /**
+     * @brief simulate(trajectory, q_seed, q_ref) that also returns the joint configuration AFTER the last integration step
+     *        (steps.back().q is the configuration BEFORE it). @p q_after_last_step may be nullptr (then it is exactly the 3-argument
+     *        overload, which delegates here). Empty trajectory: set to @p q_seed.
+     */
+    std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
+                               const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const;
+
     const Params& params() const { return params_; }
 
 private:

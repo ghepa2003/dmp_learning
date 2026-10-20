@@ -12,6 +12,7 @@
 #include "haptic_dmp_learning/core/surface_velocity.hpp"
 #include "haptic_dmp_learning/core/tcp_roll.hpp"
 #include "haptic_dmp_learning/core/math_utils.hpp"
+#include "satellite_grasp_planner/core/follow_margin.hpp"
 #include "satellite_grasp_planner/core/kinematic_feasibility.hpp"
 #include "satellite_grasp_planner/core/manipulability.hpp"
 
@@ -105,6 +106,19 @@ void validateS3Params(const S3Params& p) {
     if (p.use_clearance && mode != S3Mode::kV2) {
         throw std::invalid_argument(
             "selectGraspS3: s1.use_clearance=true is only defined in s1.mode=v2 (the constraint acts on the v2 finalists).");
+    }
+    if (!(std::isfinite(p.min_margin_deg) && p.min_margin_deg >= 0.0)) {
+        throw std::invalid_argument("selectGraspS3: s1.min_margin_deg must be finite and >= 0.");
+    }
+    if (!(std::isfinite(p.margin_follow_s) && p.margin_follow_s >= 0.0)) {
+        throw std::invalid_argument("selectGraspS3: s1.margin_follow_s must be finite and >= 0.");
+    }
+    if (!(std::isfinite(p.margin_follow_dt_s) && p.margin_follow_dt_s > 0.0)) {
+        throw std::invalid_argument("selectGraspS3: s1.margin_follow_dt_s must be finite and > 0.");
+    }
+    if (p.use_margin && mode != S3Mode::kV2) {
+        throw std::invalid_argument(
+            "selectGraspS3: s1.use_margin=true is only defined in s1.mode=v2 (the constraint acts on the v2 finalists).");
     }
     if (!(std::isfinite(p.max_start_goal_deg) && p.max_start_goal_deg >= 0.0 && p.max_start_goal_deg <= 180.0)) {
         throw std::invalid_argument("selectGraspS3: max_start_goal_deg must be finite and in [0, 180].");
@@ -273,6 +287,9 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     robot.update(q_start, RobotModel::JointVector::Zero());
     const Eigen::Vector3d p0 = robot.eePosition();
     const bool use_clearance = v2 && params.use_clearance;  // validateS3Params: use_clearance implies v2
+    const bool use_margin = v2 && params.use_margin;        // validateS3Params: use_margin implies v2
+    // use_margin without force: lazy evaluation in J_static order (see S3Params::use_margin). With force the constraint only warns.
+    const bool lazy = use_margin && !params.force;
     if (use_clearance && !ctx.clearance_eval) {
         throw std::invalid_argument("selectGraspS3: s1.use_clearance=true needs S3Context::clearance_eval.");
     }
@@ -518,11 +535,11 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             if (!dup) groups.push_back(it);
         }
 
-        // ---- v2 phase 3: rollout of every finalist with nullspace target rollout_q_ref ----
+        // ---- v2 phase 3: rollout of every finalist with nullspace target rollout_q_ref (use_margin without force: lazy, below) ----
         std::vector<S3FinalistRecord> fin;
         fin.reserve(groups.size());
         const RobotModel::JointVector zero_dq = RobotModel::JointVector::Zero();
-        for (const StaticItem& g : groups) {
+        auto makeRecord = [&](const StaticItem& g) {
             const S3Candidate& c = accepted[static_cast<std::size_t>(g.idx)];
             S3FinalistRecord rec;
             rec.cand = c;
@@ -532,14 +549,26 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             rec.j_static = g.j_static;
             rec.t_wait_s = c.wait_s;
             rec.start_goal_deg = c.eval.dist_to_demo.ori_rad * kRad2Deg;
+            return rec;
+        };
+        auto runRollout = [&](S3FinalistRecord& rec) {
+            const S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
             const Eigen::Quaterniond orient = goalOrientation(c.eval);
             const FeasibilityResult fr = checkKinematicFeasibility(
                 *ctx.prodmp_template, c.eval.pose.position_world, orient, robot_ptr, q_start, kDt, kRolloutViolTolRad,
                 q_rollout_ref);
+            ++res.rollouts_done;
             rec.rollout_done = true;
             rec.rollout_feasible = fr.feasible;
             rec.rollout_max_violation_rad = fr.max_joint_violation_rad;
             rec.rollout_min_margin_rad = fr.min_joint_margin_rad;
+            if (fr.min_margin_joint >= 0 && fr.min_margin_step >= 0) {  // something was simulated
+                rec.rollout_end.q_end = fr.q_end_post_step;
+                rec.rollout_end.min_margin_rad = fr.min_joint_margin_rad;
+                rec.rollout_end.joint = fr.min_margin_joint;
+                rec.rollout_end.t_rel_s = static_cast<double>(fr.min_margin_step + 1) * kDt - ctx.prodmp_template->tau();
+                rec.rollout_end_valid = true;
+            }
             rec.rollout_pos_err_mm = fr.pos_err_final_mm;
             robot.update(fr.q_final, zero_dq);  // w_eval = w_full(q_final of the rollout)
             rec.rollout_ori_err_deg =
@@ -549,7 +578,32 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             if (fr.feasible) {
                 rec.j = s3CostV2(rec.d_mm, rec.w_rollout, rec.t_wait_s, params);
                 rec.cand.cost = rec.j;
-                accepted[static_cast<std::size_t>(g.idx)].cost = rec.j;
+                accepted[static_cast<std::size_t>(rec.accepted_index)].cost = rec.j;
+            }
+        };
+        // Predicted joint margin over [start, AT_END + margin_follow_s] (followMargin, the G16 procedure).
+        auto runMargin = [&](S3FinalistRecord& rec) {
+            const S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
+            FollowMarginParams fp;
+            fp.follow_s = params.margin_follow_s;
+            fp.dt_approach_s = kDt;
+            fp.dt_follow_s = params.margin_follow_dt_s;
+            const FollowMarginResult fm = followMargin(
+                *ctx.prodmp_template, c.eval.pose.position_world, goalOrientation(c.eval), ctx.snapshot.center,
+                ctx.snapshot.axis, ctx.snapshot.omega_rad_s, robot_ptr, q_start, q_rollout_ref, fp,
+                rec.rollout_end_valid ? &rec.rollout_end : nullptr);  // same finalist, seed, q_ref, dt: the approach is not repeated
+            ++res.margin_evals_done;
+            rec.margin_done = true;
+            rec.margin_deg = fm.min_margin_rad * kRad2Deg;
+            rec.margin_joint = fm.joint;
+            rec.margin_t_rel_s = fm.t_rel_s;
+            rec.margin_rejected = !(rec.margin_deg >= params.min_margin_deg);  // NaN -> rejected
+        };
+        for (const StaticItem& g : groups) {
+            S3FinalistRecord rec = makeRecord(g);
+            if (!lazy) {
+                runRollout(rec);
+                if (use_margin) runMargin(rec);  // force: evaluated for the single forced finalist, warns below
             }
             fin.push_back(rec);
         }
@@ -594,7 +648,100 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             f.clearance_rejected = !(cr.min_mm_no_tail >= params.min_clearance_mm);
             return cr.min_mm_no_tail;
         };
-        while (chosen_idx < 0) {
+        // ---- use_margin without force: lazy flow in J_static order (S3Params::use_margin). Per finalist: rollout (w, margin
+        //      on [start, tau]) -> followMargin -> clearance -> post-hoc velocity check; stop at the first that passes all of
+        //      them. No rollout is done on the finalists after it. ----
+        if (lazy) {
+            bool any_admissible = false;   // passed rollout, margin and clearance (the velocity check may still discard it)
+            bool any_rollout_ok = false;
+            for (std::size_t fi = 0; fi < fin.size() && chosen_idx < 0; ++fi) {
+                S3FinalistRecord& rec = fin[fi];
+                S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
+                runRollout(rec);
+                if (!rec.rollout_feasible) {
+                    rec.discard_reason = "rollout";
+                    continue;
+                }
+                any_rollout_ok = true;
+                runMargin(rec);
+                if (rec.margin_rejected) {
+                    rec.discard_reason = "margin";
+                    continue;
+                }
+                if (use_clearance) {
+                    clearanceOf(fi);
+                    if (rec.clearance_rejected) {
+                        rec.discard_reason = "clearance";
+                        continue;
+                    }
+                }
+                any_admissible = true;
+                if (params.max_posthoc_candidates == 0) {  // no post-hoc stage
+                    chosen_idx = rec.accepted_index;
+                    rec.winner = true;
+                    break;
+                }
+                if (res.posthoc_checks >= params.max_posthoc_candidates) break;
+                ++res.posthoc_checks;
+                S3PosthocEntry entry;
+                entry.k = c.eval.k;
+                entry.theta_rad = c.eval.theta_rad;
+                entry.wait_s = c.wait_s;
+                double dv = 0.0;
+                if (params.posthoc_velocity_check) {
+                    const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
+                    const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
+                    const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
+                        model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
+                    dv = (v_t - v_ee).norm();
+                    entry.v_ee = v_ee;
+                    entry.v_target = v_t;
+                    entry.dv_m_s = dv;
+                    if (!(dv <= params.delta_v_max_m_s)) {
+                        std::ostringstream m;
+                        m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
+                        c.reject_reason = m.str();
+                        entry.reject_reason = c.reject_reason;
+                        res.posthoc_log.push_back(entry);
+                        rec.discard_reason = "velocity";
+                        continue;
+                    }
+                }
+                entry.path_checked = true;  // the rollout above is the path check
+                entry.path_ok = true;
+                entry.min_margin_rad = rec.rollout_min_margin_rad;
+                entry.accepted = true;
+                res.posthoc_log.push_back(entry);
+                chosen_idx = rec.accepted_index;
+                rec.winner = true;
+                res.posthoc_dv_m_s = dv;
+                res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
+            }
+            if (chosen_idx < 0 && any_rollout_ok && !any_admissible) {
+                // No finalist satisfies rollout + margin (+ clearance): kNoCandidate, no fallback.
+                clearance_no_candidate = true;  // (flag shared with the clearance constraint: it selects kNoCandidate + clearance_note)
+                const S3FinalistRecord* best = nullptr;
+                int n_margin = 0, n_clearance = 0;
+                for (const auto& f : fin) {
+                    if (f.discard_reason == "margin") ++n_margin;
+                    if (f.discard_reason == "clearance") ++n_clearance;
+                    if (f.margin_done && (!best || f.margin_deg > best->margin_deg)) best = &f;
+                }
+                std::ostringstream m;
+                m << "v2 margin/clearance: no finalist is admissible (" << fin.size() << " finalists, " << res.rollouts_done
+                  << " rollouts, " << n_margin << " discarded by margin < " << params.min_margin_deg << " deg, " << n_clearance
+                  << " by clearance < " << params.min_clearance_mm << " mm)";
+                if (best) {
+                    m << "; best margin " << best->margin_deg << " deg for k=" << static_cast<int>(best->cand.eval.k)
+                      << " branch " << (best->cand.eval.wrist_flip ? 'B' : 'A') << " theta="
+                      << best->cand.eval.theta_rad * kRad2Deg << " deg (fer_joint" << best->margin_joint + 1 << " at t_rel "
+                      << best->margin_t_rel_s << " s)";
+                }
+                clearance_note = m.str();
+            }
+            any_rollout_feasible = any_rollout_ok;
+        }
+        while (!lazy && chosen_idx < 0) {
             if (use_clearance && !params.force) {
                 std::vector<double> js_all(fin.size(), std::numeric_limits<double>::infinity());
                 for (std::size_t i = 0; i < fin.size(); ++i) {
@@ -628,6 +775,14 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
                       << " s); kept because force is on";
                     res.warnings.push_back(w.str());
                 }
+            }
+            if (use_margin && params.force && rec.margin_done && rec.margin_rejected) {  // forced: the constraint never discards, it warns
+                std::ostringstream w;
+                w << "WARN s1.use_margin: FORCED candidate k=" << static_cast<int>(c.eval.k) << " theta="
+                  << c.eval.theta_rad * kRad2Deg << " deg has predicted joint margin " << rec.margin_deg << " deg < "
+                  << params.min_margin_deg << " deg (fer_joint" << rec.margin_joint + 1 << " at t_rel " << rec.margin_t_rel_s
+                  << " s); kept because force is on";
+                res.warnings.push_back(w.str());
             }
             if (params.max_posthoc_candidates == 0) {  // no post-hoc stage
                 chosen_idx = rec.accepted_index;
@@ -671,7 +826,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
             res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
         }
         res.v2_finalists = fin;
-        if (use_clearance && !params.force && chosen_idx < 0 && any_rollout_feasible && !clearance_any_admissible) {
+        if (!lazy && use_clearance && !params.force && chosen_idx < 0 && any_rollout_feasible && !clearance_any_admissible) {
             clearance_no_candidate = true;
             const S3FinalistRecord* best = nullptr;
             for (const auto& f : fin) {

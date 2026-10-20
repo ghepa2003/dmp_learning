@@ -35,6 +35,17 @@ struct FeasibilityResult {
     /// min over all simulated Steps and joints of min(q - lower, upper - q) [rad]; negative if a limit is
     /// exceeded. DIAGNOSTIC ONLY (does not influence `feasible`); 0.0 if nothing was simulated.
     double min_joint_margin_rad = 0.0;
+    /// Joint (0-6, fer_joint1..7) that gives min_joint_margin_rad (first one on ties); -1 if nothing was simulated.
+    /// Unlike worst_joint it is set also when there is no violation. DIAGNOSTIC ONLY.
+    int min_margin_joint = -1;
+    /// Simulated Step index of min_joint_margin_rad (first one on ties); -1 if nothing was simulated. The time of that sample
+    /// relative to the end of the approach is (min_margin_step + 1) dt - tau. DIAGNOSTIC ONLY.
+    int min_margin_step = -1;
+    /// Joint configuration AFTER the last integration step of the approach (q_final is the one BEFORE it). It is the exact
+    /// state at AT_END from which a follow simulation continues (the resolution strategy has no internal state). Zero if nothing
+    /// was simulated. Appended last: field order of the earlier members is unchanged.
+    franka_cartesian_control::core::RobotModel::JointVector q_end_post_step =
+        franka_cartesian_control::core::RobotModel::JointVector::Zero();
 };
 
 /**

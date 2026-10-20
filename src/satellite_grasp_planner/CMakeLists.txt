@@ -31,6 +31,7 @@ include_directories(include)
 # simulation, see core/joint_path_simulator.hpp).
 add_library(${PROJECT_NAME}_core
   src/core/approach_clearance.cpp
+  src/core/follow_margin.cpp
   src/core/manipulability.cpp
   src/core/joint_path_simulator.cpp
   src/core/kinematic_feasibility.cpp
@@ -180,6 +181,19 @@ if(BUILD_ANALYSIS_TOOLS)
   install(TARGETS s3_clearance
     RUNTIME DESTINATION lib/${PROJECT_NAME}
   )
+
+  add_executable(s3_followmargin_check analysis/s3_followmargin_check.cpp)
+  target_link_libraries(s3_followmargin_check
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(s3_followmargin_check
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+  install(TARGETS s3_followmargin_check
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
 endif()
 
 if(BUILD_TESTING)
@@ -213,6 +227,16 @@ if(BUILD_TESTING)
     pinocchio::pinocchio
   )
   ament_target_dependencies(test_kinematic_feasibility
+    haptic_dmp_learning
+    franka_cartesian_control
+  )
+
+  ament_add_gtest(test_follow_margin test/test_follow_margin.cpp)
+  target_link_libraries(test_follow_margin
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+  )
+  ament_target_dependencies(test_follow_margin
     haptic_dmp_learning
     franka_cartesian_control
   )

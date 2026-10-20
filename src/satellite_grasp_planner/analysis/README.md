@@ -137,3 +137,10 @@ part) and `t_rel_s` (= t - tau) refer to the whole window; `min_mm_senza_ultimi_
 The trajectory is the planner's (`timedApproachTrajectory`: start pose, ProDMP + SLERP, executor time grid), goal = grasp position +
 `contact_to_end_offset`. A candidate whose IK does not converge is still evaluated (only the TCP path matters) with a warning.
 `--selftest` (no URDF, no demo): synthetic hand, real fingers and satellite, known values 100 mm and 10 mm; exit 3 on mismatch.
+
+## s3_followmargin_check
+
+Riproduce con `followMargin()` i margini previsti di G16 / step 0c (13.26, 17.67, 35.00, 35.00, 20.84, 28.63 gradi, tolleranza 0.1) e stampa
+joint e istante per il confronto con `_diag_1019/g16/g16_results.csv`. Scenario e provenienza dei valori nel commento in testa a
+`analysis/s3_followmargin_check.cpp`. Da eseguire dalla radice del workspace (`--weights-dir`, `--urdf` con gli stessi default di `step0c_margins`).
+Nota: `margin_follow_rad` del landscape NON e' questa grandezza (IK statica sull'arco, non simulazione): vedi docs/S3_SPEC.md §10.8.

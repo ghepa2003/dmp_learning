@@ -235,6 +235,10 @@ Default nel codice = `S3Params` (`SP/include/…/grasp_s3_selection.hpp:36-107`)
 | `min_clearance_mm` | 2.0 mm | 2.0 (:95, commentato) | **ASSUNTO** (soglia scelta, non misurata: §10) | hpp:103, node:184 |
 | `clearance_dt_s` | 0.05 s | 0.05 (:96, commentato) | DERIVATO dal predittore validato, campionato a 20 Hz | hpp:104; `_diag_1019/interference/predict_distance.py:376` |
 | `gripper_open_m` | 0.060 m per dito | 0.060 (:97, commentato) | DERIVATO dall'apertura dell'executor; **deve coincidere** con `gripper_open_position` (il planner non può leggerlo) | hpp:107; `haptic_dmp_learning/config/params.yaml:93` (sezione `prodmp_gazebo_executor_node`; la riga 49 è lo stesso valore 0.06 ma della sezione `demo_replay_sync_orchestrator`); default del codice `prodmp_gazebo_executor_node.cpp:130` |
+| `use_margin` | false | false (:99, commentato) | ASSUNTO (vincolo disattivo di default); `true` solo con `mode=v2` (in legacy è un errore); valutazione lazy in ordine di J statico, §10.8 | hpp (S3Params), node |
+| `min_margin_deg` | 24.0° | 24.0 (:100, commentato) | **ASSUNTO**: intervallo osservato in G16 20.84–28.63° (falliti 13.26, 17.67, 20.84; riusciti 28.63, 35.00), soglia non ottimizzata (§10.8) | hpp (S3Params), node |
+| `margin_follow_s` | 3.0 s | 3.0 (:101, commentato) | DERIVATO: `post_grasp_follow_s` dell'executor (`prodmp_gazebo_executor_node.cpp:143`, default 3.0) = follow dei run G16 | hpp, node |
+| `margin_follow_dt_s` | 0.01 s | 0.01 (:102, commentato) | DERIVATO: passo di `_diag_1019/step0c_margins.cpp` (valori G16 / criterio 11); `run_rollout_follow_all.cpp` usa 0.1 | hpp, node |
 | IK `kp` | 0.5 (costante) | — | ASSUNTO (passo unitario) | eval.cpp:48-49 |
 | `kMarginTieRad` | 1e-3 (costante) | — | ASSUNTO | eval.cpp:18 |
 | `kProjectorDamping` | 1e-3 (costante) | — | ASSUNTO | eval.cpp:21 |
@@ -461,3 +465,30 @@ Tolleranza di convessità: la mesh reale ha una violazione di convessità di 0.7
 ### 10.7 Cosa non è verificato
 
 Non ho compilato né eseguito nulla (niente coal, Pinocchio né ROS in questo ambiente): né i gtest (`test_approach_clearance.cpp`, i nuovi `GraspS3ClearanceTest.*`), né il tool `s3_clearance`. I valori attesi dei test (100 mm, 10 mm, sovrapposizione, monotonia in omega) sono calcolati a mano sulla geometria e vanno confermati dall'esecuzione.
+
+### 10.8 Vincolo di margine di giunto (v2), criterio 11 — scritto, NON compilato né eseguito
+
+Stato: `follow_margin.{hpp,cpp}` (`followMargin`), `FeasibilityResult::min_margin_joint` (`kinematic_feasibility.{hpp,cpp}`), parametri `s1.use_margin`, `s1.min_margin_deg`, `s1.margin_follow_s`, `s1.margin_follow_dt_s` (§3), `grasp_s3_selection.{hpp,cpp}`, nodo, tool `analysis/s3_followmargin_check.cpp`, test `test_follow_margin.cpp`, `GraspS3MarginTest.*`. Con `s1.use_margin=false` (default) la selezione è identica: il rollout dei finalisti è stato solo spostato in lambda (stesse operazioni, stesso ordine), `followMargin` non viene chiamata. **Nessun test è stato eseguito.**
+
+**Criterio 11 (POST HOC).** Margine di giunto *misurato* ≥ 10° su [TRIGGER, AT_END + follow] (`crit11_ok` in `_diag_1019/g16/g16_results.csv`). È un criterio **post hoc**: è stato introdotto *dopo* A8 (`scaleA_A8`), per spiegare i fallimenti di G16; non faceva parte dei criteri con cui A8 era stata classificata. Il vincolo del selettore ne è la versione *predetta* (stessa finestra), con soglia diversa (sotto).
+
+**Procedura del margine predetto** (`followMargin`): è la procedura di `_diag_1019/step0c_margins.cpp`, riprodotta operazione per operazione, **non** quella di `analysis/s3_landscape.cpp:528-551`. Differenze dal landscape (`margin_follow_rad`):
+
+| | `followMargin` (G16 / step 0c) | landscape `margin_follow_rad` |
+|---|---|---|
+| Approccio | `buildApproachTrajectory` + `NullspaceBiasedResolution`, dt 0.005, nullspace `q_ref` | `checkKinematicFeasibility` (stessa simulazione, nullspace = `q_start`: `in.q0`) |
+| Follow | **simulato**: 3.0 s dal `q` di AT_END, `round(follow_s/dt)` passi di dt 0.01, bersaglio = posa a AT_END ruotata di ω·t attorno al centro (`rotatePoseAboutZ`) con twist di feed-forward (−ω r_y, ω r_x, 0 / 0, 0, ω) | **IK statica** su 7 campioni a t = j·3/6, posa ruotata, hot-start a catena, riferimento nullspace `q_start`; nessuna integrazione |
+| Margine | minimo su approccio e follow dei `q` campionati (il `q` dopo l'ultimo passo di follow non è campionato) | minimo di `margin_rollout` e dei margini dei 7 campioni IK |
+| Riferimento nullspace | `q_ref` = `rollout_q_ref` (G16: `readyPose`) per approccio **e** follow; seed = `q_start` | `q_start` per IK e rollout |
+
+Quindi i due non sono interscambiabili: i valori di G16 si riproducono solo con `followMargin`. Il landscape **non è stato modificato** (i suoi numeri non cambiano); può chiamare `followMargin` senza altre modifiche.
+
+**Convenzioni (da `step0c_margins.cpp`)**: margine di giunto = min(q − lo, hi − q) sui 7 giunti; il `q` *prima* di ogni passo è etichettato con il tempo di *fine* passo: approccio (i+1)·dt − tau (≤ 0), follow n·dt (n ≥ 1); `t_rel` è relativo a AT_END; il giunto limitante è 0-based nel codice (`fer_joint = joint + 1` nei log). Parità: 0.1° sui valori di G16 (elenco nel commento di `analysis/s3_followmargin_check.cpp`; non verificato qui).
+
+**Soglia ASSUNTA**: `min_margin_deg = 24.0°` è **ASSUNTA**, non ottimizzata né misurata. Intervallo osservato in G16 (margine predetto da `step0c_margins`): falliti 13.26 (omega −5, k1 A −178°; giunto 7, +3 s), 17.67 (omega −5, k3 A 178°; giunto 6, −7.78 s), 20.84 (A8, k3 A 171°, omega −2; da `run_rollout_follow_all` con dt_follow 0.1); riusciti 28.63 (omega −4, k0 A −163.2°) e 35.00 (omega −5, k1 A −166° e −156°; giunto 6, −24.47 s). 24 sta nel vuoto 20.84–28.63, con 5 punti: l'incertezza della soglia è l'intero vuoto. Il valore 28.63 è riportato dall'autore, nessun file di `_diag_1019/` lo registra; A8 (20.84) è calcolata con un passo di follow diverso (0.1 contro 0.01).
+
+**Selezione (lazy, in ordine di J statico)**: per ogni finalista, nell'ordine dei finalisti (J statico crescente): (1) rollout (`checkKinematicFeasibility`, w e margine su [start, tau]; semantica di `rollout_min_margin_rad` invariata); non fattibile → scartato ("rollout"); (2) `followMargin` con seed `q_start`, `q_ref` = `rollout_q_ref`, `follow_s` = `margin_follow_s`; margine < `min_margin_deg` (o NaN) → scartato ("margin"); (3) clearance se `use_clearance` → scartato ("clearance"); (4) controllo di velocità post-hoc → scartato ("velocity"). Il primo finalista che passa tutto vince; **nessun rollout** sui successivi. Nessun finalista ammissibile → `kNoCandidate` (nota con numero di rollout, scartati per margine/clearance e miglior margine, giunto e istante), nessun ripiego. Conseguenza (scelta dell'istruzione "ferma al primo ammissibile"): con `use_margin=true` **non si applica** lo spareggio per attesa nella banda `tau_j_mm` del v2 eager (richiederebbe il rollout di tutti i finalisti nella banda). Con `s1.force=true` il vincolo non scarta nulla: avvisa in `S3Result::warnings`. Log del nodo: per ogni finalista margine previsto, giunto limitante, istante, clearance, `DISCARDED(motivo)`; a fine selezione `rollouts=` e `margin_evals=`.
+
+**Costo**: il selettore passa a `followMargin` lo stato a fine approccio del rollout appena eseguito (`FeasibilityResult::q_end_post_step`, margine/giunto/passo del minimo di approccio: `FollowApproachState`), quindi l'approccio non è simulato due volte; `followMargin` senza stato (tool, test) lo ri-simula. Lo stato è identico bit a bit (stesse operazioni, `NullspaceBiasedResolution` senza stato interno); verificato solo per iscritto e dal test `ReusingTheRolloutEndStateGivesTheSameResult`, non eseguito. Tempo guadagnato non misurato.
+
+**Limiti**: il margine predetto riproduce le convenzioni di `step0c` (es. il `q` dopo l'ultimo passo non è campionato); soglia assunta; una sola demo e un solo satellite; il ramo di follow segue `post_grasp_follow_s` ma assume che l'executor co-ruoti il bersaglio come `rotatePoseAboutZ` (asse +z, altrimenti errore).
