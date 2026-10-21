@@ -56,3 +56,10 @@ slides_material/
 /install_cc/
 
 _gate_out/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+_archive_*/
+_data/
+_refactor_1021/
