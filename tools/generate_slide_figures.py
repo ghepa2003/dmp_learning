@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Setup output directory
-OUTPUT_DIR = "/home/lorenzo/thesis_ws/slides_material"
+OUTPUT_DIR = "/home/lorenzo/thesis_ws/_data/slides_material"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Set global matplotlib style for high readability on projectors
@@ -178,7 +178,7 @@ print(f"  -> Salvato: {fig2_path}\n")
 # FIGURA 3: Trajectory Overlay (Demo vs DMP vs ProDMP)
 # ==============================================================================
 print(">>> FIGURA 3: Overlay traiettoria Demo vs DMP classico vs ProDMP")
-demo_csv = "/home/lorenzo/thesis_ws/demo_raw_trajC.csv"
+demo_csv = "/home/lorenzo/thesis_ws/real_demo/demo_raw_trajC.csv"
 replay_dmp_csv = os.path.join(OUTPUT_DIR, "replay_dmp_classic_trajC.csv")
 replay_prodmp_csv = os.path.join(OUTPUT_DIR, "replay_prodmp_baseline_trajC.csv")
 

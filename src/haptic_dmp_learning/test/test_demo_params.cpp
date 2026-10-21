@@ -478,7 +478,7 @@ TEST(DemoParamsCleaning, PoseAndJointsAreCleanedIndependently) {
 TEST(DemoParamsBuild, ProductionDemoValues) {
     const char* home = std::getenv("HOME");
     const std::string root = std::string(home ? home : "/root") + "/thesis_ws/";
-    const std::string csv = root + "reach_task_baseline.csv";
+    const std::string csv = root + "real_demo/reach_task_baseline.csv";
     const std::string weights =
         root + "runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml";
     if (!std::ifstream(csv).good() || !std::ifstream(weights).good()) {
@@ -536,7 +536,7 @@ TEST(DemoParamsWriteForWeights, JointsFromDerivedCsvOrNull) {
 TEST(DemoParamsWriteForWeights, ProductionDemoAlignsWithWeightsCopy) {
     const char* home = std::getenv("HOME");
     const std::string root = std::string(home ? home : "/root") + "/thesis_ws/";
-    const std::string csv = root + "reach_task_baseline.csv";
+    const std::string csv = root + "real_demo/reach_task_baseline.csv";
     const std::string weights =
         root + "runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml";
     if (!std::ifstream(csv).good() || !std::ifstream(weights).good()) {

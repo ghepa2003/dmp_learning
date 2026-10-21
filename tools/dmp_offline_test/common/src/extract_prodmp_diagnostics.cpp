@@ -158,7 +158,7 @@ int main() {
         norm_after_l2(j) = H_scaled.col(j).norm();
     }
 
-    std::ofstream f1("/home/lorenzo/thesis_ws/slides_material/data_fig1_column_norms.csv");
+    std::ofstream f1("/home/lorenzo/thesis_ws/_data/slides_material/data_fig1_column_norms.csv");
     f1 << "col_idx,is_goal_col,norm_before_maxabs,norm_before_l2,norm_after_maxabs,norm_after_l2,scaled_applied\n";
     for (int j = 0; j < P; ++j) {
         f1 << j << "," << (j == P - 1 ? 1 : 0) << ","
@@ -192,7 +192,7 @@ int main() {
         1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0
     };
 
-    std::ofstream f2("/home/lorenzo/thesis_ws/slides_material/data_fig2_ridge_sweep_before_after.csv");
+    std::ofstream f2("/home/lorenzo/thesis_ws/_data/slides_material/data_fig2_ridge_sweep_before_after.csv");
     f2 << "ridge_lambda,rmse_prefix_mm,rmse_postfix_mm,max_abs_w_prefix,max_abs_w_postfix\n";
 
     std::cout << "\n=== FIGURA 2 KEY NUMBERS (Ridge Lambda Sweep Before/After Fix) ===\n";

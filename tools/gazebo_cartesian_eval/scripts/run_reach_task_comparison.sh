@@ -7,7 +7,7 @@ set -euo pipefail
 THESIS_WS="${THESIS_WS:-/root/thesis_ws}"
 FRANKA_WS="${FRANKA_WS:-/root/ros_workspaces/ros2/franka_ws}"
 TOOLS_DIR="$THESIS_WS/tools/gazebo_cartesian_eval"
-DMP_WEIGHTS="${1:-$THESIS_WS/real_trajA_ridge_filter.yaml}"
+DMP_WEIGHTS="${1:-$THESIS_WS/real_demo/real_trajA_ridge_filter.yaml}"
 ROLLOUT_TIMEOUT=75
 
 # Nome base della traiettoria per i file di output

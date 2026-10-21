@@ -7,7 +7,7 @@ TRANS_D_LIST=(10 20 30 50 70 89)
 FIXED_ROT_STIFF=20.0
 FIXED_ROT_DAMP=3.0
 
-WEIGHTS_YAML="/root/thesis_ws/real_trajA_ridge_filter.yaml"
+WEIGHTS_YAML="/root/thesis_ws/real_demo/real_trajA_ridge_filter.yaml"
 ROLLOUT_DURATION=70
 
 TOOLS_DIR="$HOME/thesis_ws/tools/gazebo_cartesian_eval"

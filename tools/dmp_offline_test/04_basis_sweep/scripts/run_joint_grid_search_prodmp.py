@@ -12,7 +12,7 @@ import numpy as np
 
 WORKSPACE_DIR = "/home/lorenzo/thesis_ws"
 OFFLINE_DIR = os.path.join(WORKSPACE_DIR, "tools/dmp_offline_test")
-DEMO_CSV = os.path.join(WORKSPACE_DIR, "demo_raw_trajC.csv")
+DEMO_CSV = os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajC.csv")
 EXECUTABLE = os.path.join(OFFLINE_DIR, "build/learn_and_test_prodmp")
 OUTPUT_CSV = os.path.join(OFFLINE_DIR, "plots/prodmp_joint_grid_search_trajC.csv")
 

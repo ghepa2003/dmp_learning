@@ -74,8 +74,8 @@ std::vector<CellInput> loadCellInputs(const std::string& path) {
 }
 
 int main(int argc, char** argv) {
-    std::string input_csv = "_diag_1019/g25/g25_cells_input.csv";
-    std::string output_csv = "_diag_1019/g25/g25_cells_output.csv";
+    std::string input_csv = "tests/golden/g25/g25_cells_input.csv";
+    std::string output_csv = "_gate_out/g25_cells_output.csv";
     double snap_theta_rad = -1.6727670737402633;
     double snap_t_s = 18.318;
     std::string cell_filter_str = "";

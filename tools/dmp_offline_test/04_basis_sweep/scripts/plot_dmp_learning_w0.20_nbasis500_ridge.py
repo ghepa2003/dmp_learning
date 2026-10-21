@@ -34,7 +34,7 @@ def main():
     candidate_demo_paths = [
         os.path.abspath(os.path.join(root_dir, "..", "demo_raw_trajA.csv")),
         os.path.abspath(os.path.join(root_dir, "data", "demo_raw_trajA.csv")),
-        "/home/lorenzo/thesis_ws/demo_raw_trajA.csv"
+        "/home/lorenzo/thesis_ws/real_demo/demo_raw_trajA.csv"
     ]
     demo_path = None
     for p in candidate_demo_paths:

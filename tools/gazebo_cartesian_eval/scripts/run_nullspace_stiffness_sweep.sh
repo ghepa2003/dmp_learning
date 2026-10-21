@@ -12,7 +12,7 @@ FRANKA_WS="${FRANKA_WS:-/root/ros_workspaces/ros2/franka_ws}"
 CONFIG_YAML="$FRANKA_WS/src/franka_ros2/franka_gazebo/franka_gazebo_bringup/config/franka_gazebo_controllers.yaml"
 LAUNCH_PACKAGE="franka_gazebo_bringup"
 LAUNCH_FILE="gazebo_cartesian_impedance_control_headless.launch.py"
-DMP_WEIGHTS="$THESIS_WS/real_trajA_ridge_filter.yaml"
+DMP_WEIGHTS="$THESIS_WS/real_demo/real_trajA_ridge_filter.yaml"
 LOG_SCRIPT="$THESIS_WS/tools/gazebo_cartesian_eval/scripts/log_nullspace_leak.py"
 OUTPUT_CSV="$THESIS_WS/tools/gazebo_cartesian_eval/results/nullspace_stiffness_sweep.csv"
 

@@ -28,8 +28,8 @@ BRINGUP_SHARE = os.path.join(
 )
 
 WEIGHTS_PRODMP = os.path.join(WS_ROOT, "runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml")
-WEIGHTS_DMP = os.path.join(WS_ROOT, "reach_task_baseline_nbasis200.yaml")
-ORIENTATION_PATH = os.path.join(WS_ROOT, "reach_task_baseline_nbasis200.yaml")
+WEIGHTS_DMP = os.path.join(WS_ROOT, "real_demo", "reach_task_baseline_nbasis200.yaml")
+ORIENTATION_PATH = os.path.join(WS_ROOT, "real_demo", "reach_task_baseline_nbasis200.yaml")
 
 
 def clean_processes():

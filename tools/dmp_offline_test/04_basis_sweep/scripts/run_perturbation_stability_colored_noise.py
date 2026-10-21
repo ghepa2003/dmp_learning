@@ -19,13 +19,13 @@ import matplotlib.pyplot as plt
 
 WORKSPACE_DIR = "/home/lorenzo/thesis_ws"
 EXECUTABLE = os.path.join(WORKSPACE_DIR, "tools/dmp_offline_test/build/learn_and_test_prodmp")
-SLIDES_DIR = os.path.join(WORKSPACE_DIR, "slides_material")
+SLIDES_DIR = os.path.join(WORKSPACE_DIR, "_data", "slides_material")
 os.makedirs(SLIDES_DIR, exist_ok=True)
 
 DEMOS = [
-    ("Trajectory C", os.path.join(WORKSPACE_DIR, "demo_raw_trajC.csv")),
-    ("Trajectory A", os.path.join(WORKSPACE_DIR, "demo_raw_trajA.csv")),
-    ("Reach Task", os.path.join(WORKSPACE_DIR, "reach_task_baseline.csv"))
+    ("Trajectory C", os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajC.csv")),
+    ("Trajectory A", os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajA.csv")),
+    ("Reach Task", os.path.join(WORKSPACE_DIR, "real_demo", "reach_task_baseline.csv"))
 ]
 
 LAMBDAS = [1e-12, 1e-11, 1e-10, 1e-9, 1e-7]

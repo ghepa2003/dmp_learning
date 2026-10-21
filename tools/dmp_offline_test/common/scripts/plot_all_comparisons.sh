@@ -31,10 +31,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
-WEIGHTS="${1:-$HOME/thesis_ws/live_demo_dmp_weights.yaml}"
-DEMO_RAW="${2:-$HOME/thesis_ws/live_demo_raw.csv}"
-ACTUAL_LIVE="${3:-$HOME/thesis_ws/actual_pose_live.csv}"
-ACTUAL_REPLAY="${4:-$HOME/thesis_ws/actual_pose_replay.csv}"
+WEIGHTS="${1:-$HOME/thesis_ws/real_demo/live_demo_dmp_weights.yaml}"
+DEMO_RAW="${2:-$HOME/thesis_ws/real_demo/live_demo_raw.csv}"
+ACTUAL_LIVE="${3:-$HOME/thesis_ws/real_demo/actual_pose_live.csv}"
+ACTUAL_REPLAY="${4:-$HOME/thesis_ws/real_demo/actual_pose_replay.csv}"
 
 for f in "$WEIGHTS" "$DEMO_RAW" "$ACTUAL_LIVE" "$ACTUAL_REPLAY"; do
     if [ ! -f "$f" ]; then

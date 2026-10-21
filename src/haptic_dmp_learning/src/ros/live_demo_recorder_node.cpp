@@ -68,8 +68,8 @@ LiveDemoRecorderNode::LiveDemoRecorderNode()
     // working directory at launch.
     const char* home = std::getenv("HOME");
     const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-    output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", ws_root + "/live_demo_dmp_weights.yaml");
-    output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", ws_root + "/live_demo_raw.csv");
+    output_yaml_path_ = this->declare_parameter<std::string>("output_yaml_path", ws_root + "/real_demo/live_demo_dmp_weights.yaml");
+    output_demo_csv_path_ = this->declare_parameter<std::string>("output_demo_csv_path", ws_root + "/real_demo/live_demo_raw.csv");
     // Same session path as the raw demo, suffix _joint_states (live_demo_raw.csv ->
     // live_demo_joint_states.csv). An empty value disables the joint-states CSV.
     output_joint_states_csv_path_ = this->declare_parameter<std::string>(

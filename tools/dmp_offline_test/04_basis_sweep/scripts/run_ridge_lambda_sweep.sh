@@ -33,7 +33,7 @@ fi
 # Trova demo_raw_trajA.csv
 # --------------------------------------------------------------------------
 DEMO_CSV=""
-for path in "../../demo_raw_trajA.csv" "${HOME}/thesis_ws/demo_raw_trajA.csv" "data/demo_raw_trajA.csv"; do
+for path in "../../demo_raw_trajA.csv" "${HOME}/thesis_ws/real_demo/demo_raw_trajA.csv" "data/demo_raw_trajA.csv"; do
     [ -f "$path" ] && DEMO_CSV="$path" && break
 done
 if [ -z "$DEMO_CSV" ]; then

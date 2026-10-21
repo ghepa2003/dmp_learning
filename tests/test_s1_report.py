@@ -13,7 +13,7 @@ WS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WS / "tools"))
 import s1_report  # noqa: E402
 
-AN = WS / "analysis_s1_1015"
+AN = WS / "_data" / "analysis" / "analysis_s1_1015"
 
 
 # ----------------------------------------------------------------- test puri

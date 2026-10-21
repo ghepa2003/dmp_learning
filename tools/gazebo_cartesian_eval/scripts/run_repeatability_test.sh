@@ -7,7 +7,7 @@ source /root/thesis_ws/install/setup.bash 2>/dev/null || true
 source /root/ros_workspaces/ros2/franka_ws/install/setup.bash 2>/dev/null || true
 
 WEIGHTS_PATH="/root/thesis_ws/runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml"
-ORIENTATION_PATH="/root/thesis_ws/reach_task_baseline_nbasis200.yaml"
+ORIENTATION_PATH="/root/thesis_ws/real_demo/reach_task_baseline_nbasis200.yaml"
 EVAL_DIR="/root/thesis_ws/tools/gazebo_cartesian_eval"
 
 clean_processes() {

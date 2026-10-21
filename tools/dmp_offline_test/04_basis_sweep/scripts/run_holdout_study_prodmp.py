@@ -14,8 +14,8 @@ WORKSPACE_DIR = "/home/lorenzo/thesis_ws"
 OFFLINE_DIR = os.path.join(WORKSPACE_DIR, "tools/dmp_offline_test")
 EXECUTABLE = os.path.join(OFFLINE_DIR, "build/learn_and_test_prodmp_holdout")
 
-DEMO_C = os.path.join(WORKSPACE_DIR, "demo_raw_trajC.csv")
-DEMO_A = os.path.join(WORKSPACE_DIR, "demo_raw_trajA.csv")
+DEMO_C = os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajC.csv")
+DEMO_A = os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajA.csv")
 
 PLOT_DIR = os.path.join(OFFLINE_DIR, "plots/07_holdout_prodmp")
 os.makedirs(PLOT_DIR, exist_ok=True)

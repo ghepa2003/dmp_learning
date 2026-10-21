@@ -5,7 +5,7 @@ MISSING=("150 1")
 
 FIXED_TRANS_STIFF=200.0
 FIXED_TRANS_DAMP=30.0
-WEIGHTS_YAML="/root/thesis_ws/real_trajA_ridge_filter.yaml"
+WEIGHTS_YAML="/root/thesis_ws/real_demo/real_trajA_ridge_filter.yaml"
 ROLLOUT_DURATION=70
 CONTROLLERS_YAML="/root/ros_workspaces/ros2/franka_ws/src/franka_ros2/franka_gazebo/franka_gazebo_bringup/config/franka_gazebo_controllers.yaml"
 CONTROLLERS_YAML_BACKUP="/root/thesis_ws/src/franka_gazebo_overrides/franka_gazebo_controllers.yaml"

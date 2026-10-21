@@ -44,7 +44,7 @@ fi
 
 # Target demo: Trajectory C
 DEMO_CSV=""
-for path in "../../demo_raw_trajC.csv" "${HOME}/thesis_ws/demo_raw_trajC.csv" "data/demo_raw_trajC.csv"; do
+for path in "../../demo_raw_trajC.csv" "${HOME}/thesis_ws/real_demo/demo_raw_trajC.csv" "data/demo_raw_trajC.csv"; do
     [ -f "$path" ] && DEMO_CSV="$path" && break
 done
 

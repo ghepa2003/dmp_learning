@@ -24,7 +24,7 @@ CONFIG_YAML_OVERRIDE = os.path.join(WS_ROOT, "src/franka_gazebo_overrides/franka
 CONFIG_YAML_INSTALL = os.path.join(BRINGUP_SHARE, "config/franka_gazebo_controllers.yaml")
 
 WEIGHTS_PRODMP = os.path.join(WS_ROOT, "runs/20260915_090358_fit_reach_task_baseline_prodmp/weights.yaml")
-ORIENTATION_PATH = os.path.join(WS_ROOT, "reach_task_baseline_nbasis200.yaml")
+ORIENTATION_PATH = os.path.join(WS_ROOT, "real_demo", "reach_task_baseline_nbasis200.yaml")
 
 # Override xacro: file nel repo -> file installato (percorsi di scripts/setup_franka_description_overrides.sh)
 FRANKA_DESCRIPTION_SRC = os.path.join(FRANKA_WS, "src/franka_ros2/franka_description")

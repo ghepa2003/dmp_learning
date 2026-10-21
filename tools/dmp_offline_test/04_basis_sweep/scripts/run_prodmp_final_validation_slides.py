@@ -51,15 +51,15 @@ plt.rcParams.update({
 })
 
 WORKSPACE_DIR = "/home/lorenzo/thesis_ws"
-SLIDES_DIR = os.path.join(WORKSPACE_DIR, "slides_material")
+SLIDES_DIR = os.path.join(WORKSPACE_DIR, "_data", "slides_material")
 OFFLINE_DIR = os.path.join(WORKSPACE_DIR, "tools/dmp_offline_test")
 LEARN_TEST_BIN = os.path.join(OFFLINE_DIR, "build/learn_and_test_prodmp")
 GOAL_GEN_BIN = os.path.join(OFFLINE_DIR, "06_goal_generalization/plots/build/run_prodmp_goal_generalization")
 
 DEMOS = {
-    "Trajectory C": os.path.join(WORKSPACE_DIR, "demo_raw_trajC.csv"),
-    "Trajectory A": os.path.join(WORKSPACE_DIR, "demo_raw_trajA.csv"),
-    "Reach Task": os.path.join(WORKSPACE_DIR, "reach_task_baseline.csv"),
+    "Trajectory C": os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajC.csv"),
+    "Trajectory A": os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajA.csv"),
+    "Reach Task": os.path.join(WORKSPACE_DIR, "real_demo", "reach_task_baseline.csv"),
 }
 
 COLORS = {

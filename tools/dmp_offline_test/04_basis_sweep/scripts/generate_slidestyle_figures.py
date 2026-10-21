@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 WORKSPACE_DIR = "/home/lorenzo/thesis_ws"
-SLIDES_DIR = os.path.join(WORKSPACE_DIR, "slides_material")
+SLIDES_DIR = os.path.join(WORKSPACE_DIR, "_data", "slides_material")
 os.makedirs(SLIDES_DIR, exist_ok=True)
 
 # Common clean slide aesthetic configuration
@@ -130,7 +130,7 @@ print(f"  -> Salvato: {out_fig1}\n")
 # 2. FIG 3: Trajectory Overlay (Demo vs DMP vs ProDMP)
 # ==============================================================================
 print(">>> 2. Generating fig3_trajectory_overlay_dmp_vs_prodmp_slidestyle.png...")
-demo_csv = os.path.join(WORKSPACE_DIR, "demo_raw_trajC.csv")
+demo_csv = os.path.join(WORKSPACE_DIR, "real_demo", "demo_raw_trajC.csv")
 replay_dmp_csv = os.path.join(SLIDES_DIR, "replay_dmp_classic_trajC.csv")
 replay_prodmp_csv = os.path.join(SLIDES_DIR, "replay_prodmp_baseline_trajC.csv")
 
