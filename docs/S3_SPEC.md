@@ -23,7 +23,7 @@ Abbreviazioni: `SP` = `satellite_grasp_planner`, `HDL` = `haptic_dmp_learning`. 
 | `w_trans_demo` | `wTransFromJacobian` a `demo.end_joints_rad`, `inputs:118-128` | rifiutato se `end_joints_rad` è null |
 | `tau_contact_s` | `demo.t_contact_s` o 0, `inputs:105` | |
 | `tau_launch_s` (τ) | `contact_assumed_at_end ? tau_template : tau_contact_s`, `launch:30` | |
-| `omega` (ω, con segno) | **parametro** `satellite_rotation_angular_velocity_deg_s` (`node:96-97`, `node:205`); l'odometria lo convalida soltanto (`checkOmegaConsistency`, `node:199`) | −2 deg/s = −0.0349066 rad/s |
+| `omega` (ω, con segno) | **parametro** `satellite_rotation_angular_velocity_deg_s` (`node:96-97`, `node:205`); l'odometria lo convalida soltanto (`checkOmegaConsistency`, `node:199`), con ω stimata dall'incremento dei quaternioni di due campioni consecutivi (NON da `twist.angular`: in Gazebo è d(rpy)/dt, errato per asse inclinato, G28) | −2 deg/s = −0.0349066 rad/s |
 | snapshot (θ_snap, t_snap, centro c, asse a) | `PhaseTracker` sul primo campione di odometria, `node:193-207` | `t_now_s` = `snapshot.t_s` di default (`launch:51`) |
 | `min_delay_s` (D) | parametro obbligatorio, YAML 0.05 (`config:30`); `tools/s1_run.py:433` usa **5.0** | |
 | geometria del collare | `CubeSatelliteModel::Params` da `cube_geometry.*` (`node:84-117`) | §2.1 e §3 |
@@ -254,7 +254,7 @@ Default nel codice = `S3Params` (`SP/include/…/grasp_s3_selection.hpp:36-107`)
 | `cube_geometry.wall_thickness_m` | obbligatorio | 0.009 (:45) | MISURATO (CAD) | node:91 |
 | `cube_geometry.grasp_radius_m` | opzionale | 0.068 (:42) | DERIVATO: (0.0725 + (0.0725−0.009))/2 = 0.068 (metà parete) | node:115 |
 | `cube_geometry.grasp_depth_m` | 0.0 | commentato (:43) | ASSUNTO; run: 0.0125 (d_pos 17.39 → 7.17 mm, **MISURATO** in `report_final2.txt`) | node:117 |
-| `satellite_rotation_angular_velocity_deg_s` | obbligatorio | −2.0 (:21) | impostato nel simulatore (setpoint), convalidato con tol 0.1 deg/s | node:96 |
+| `satellite_rotation_angular_velocity_deg_s` | obbligatorio | −2.0 (:21) | impostato nel simulatore (setpoint), convalidato con tol 0.1 deg/s (ω da quaternioni, 2 campioni, non da `twist.angular`) | node:96 |
 | `robot_base_world` | obbligatorio | 0 (:31) | vincolo (`checkRobotBaseWorldIsZero`): il codice assume base robot = mondo | node:93 |
 | centro satellite | obbligatorio | (0.75,0,0.35) (:20) | YAML esempio; **le campagne usano (0.70,0,0.77)** (`tools/s1_run.py:58`) | node:94 |
 

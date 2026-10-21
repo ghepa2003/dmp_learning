@@ -42,10 +42,10 @@ observation-only — it applies no force). The launch **also** starts a
 | `child_frame_id` | `<name>` (the model name) |
 | `pose.pose` | the body's **world pose** (position + orientation) |
 | `twist.twist.linear` | body **linear velocity** [m/s] |
-| `twist.twist.angular` | body **angular velocity** [rad/s] |
+| `twist.twist.angular` | **NOT** ω·a: measured in G28 it equals d(roll,pitch,yaw)/dt of the pose quaternion (R = Rz(y)Ry(p)Rx(r)); it coincides with the angular velocity only for a vertical spin axis. Estimate ω from the quaternions (`axisRateFromQuaternions`, `axis_rate` in `tools/s1_run.py`) |
 
-The twist is useful beyond pose tracking — e.g. checking the target's
-post-contact velocity in later analysis.
+The linear twist is useful beyond pose tracking — e.g. checking the target's
+post-contact velocity in later analysis (do not use `twist.angular` for tilted axes, see above).
 
 Published at **200 Hz** (`<odom_publish_frequency>`), matching this project's
 other pose streams (`/target_pose` publishers run at 200 Hz).

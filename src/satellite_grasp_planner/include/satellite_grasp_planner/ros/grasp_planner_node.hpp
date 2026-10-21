@@ -87,6 +87,16 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;
 
+    /// First accepted odometry sample (position / frame / phase already checked). omega is estimated from the
+    /// quaternion increment first -> next sample with a later stamp (twist.angular is NOT used, see
+    /// axisRateFromQuaternions); the snapshot keeps the phase and stamp of this first sample.
+    struct FirstOdomSample {
+        Eigen::Quaterniond q;
+        double stamp_s;
+        double theta_rad;
+    };
+    std::optional<FirstOdomSample> first_odom_;  // touched only by onOdom (single-threaded executor)
+
     std::atomic<bool> dispatched_{false};
     std::thread worker_;
 };

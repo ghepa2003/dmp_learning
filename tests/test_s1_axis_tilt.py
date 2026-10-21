@@ -222,19 +222,69 @@ def test_check_axis_consistent_one_different(which):
 # ------------------------------------------------------------------ twist, goal
 
 
-def test_axis_rate_alpha0_identical_to_wz():
-    for w in [(0.1, -0.2, -0.0349), (0.0, 0.0, 1.5), (3.0, 4.0, 0.0)]:
-        assert s1_run.axis_rate(w, None) == w[2]
-        assert s1_run.axis_rate(w) == w[2]
+def _qmul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz)
 
 
-@pytest.mark.parametrize("alpha,phi", [(20.0, 270.0), (7.0, 33.0), (20.0, 359.0)])
-def test_axis_rate_tilted_world_twist(alpha, phi):
+def _qrot(axis, angle):
+    u = np.asarray(axis, dtype=float) / np.linalg.norm(axis)
+    return (*(math.sin(angle / 2) * u), math.cos(angle / 2))
+
+
+# omega da quaternioni (il twist.angular dell'odometria Gazebo e' d(rpy)/dt, non omega.a: G28)
+RATE_TOL = 0.00174533   # rad/s, come omega_consistency_tol del planner
+
+
+@pytest.mark.parametrize("alpha,phi", [(20.0, 0.0), (20.0, 270.0), (7.0, 33.0), (20.0, 359.0)])
+def test_axis_rate_tilted_from_quaternions(alpha, phi):
     a = s1_run.tilt_axis(alpha, phi)
-    om = math.radians(-5.0)
-    assert abs(s1_run.axis_rate(tuple(om * a), a) - om) < 1e-15
-    # il solo wz non e' omega (era il bug da evitare)
-    assert abs(s1_run.axis_rate(tuple(om * a), None) - om) > 1e-4 * abs(om)
+    om, dt = math.radians(-2.0), 0.005
+    q0 = _qrot([0.3, -0.5, 0.2], 0.7)
+    q1 = _qmul(_qrot(a, om * dt), q0)    # incremento WORLD attorno ad a
+    assert abs(s1_run.axis_rate(q0, q1, dt, a) - om) < RATE_TOL
+    assert abs(s1_run.axis_rate(q0, q1, dt, a) - om) < 1e-9
+
+
+def test_axis_rate_regression_g28_twist_is_rpy_derivative():
+    a = s1_run.tilt_axis(20.0, 0.0)
+    om, dt = math.radians(-2.0), 0.005
+    twist = np.array([-7.34e-5, -0.011939, -0.032802])      # G28 config B, regime
+    assert abs(float(twist @ a) - (-0.030849)) < 1e-6        # vecchia proiezione
+    assert abs(float(twist @ a) - om) > RATE_TOL             # ... fallirebbe
+    q0 = _qrot([1.0, 0.0, 0.0], -0.349)
+    assert abs(s1_run.axis_rate(q0, _qmul(_qrot(a, om * dt), q0), dt, a) - om) < RATE_TOL
+
+
+def test_axis_rate_vertical_axis_same_as_wz():
+    dt = 0.01
+    for w in (-0.0349066, 0.0349066, 0.5, -1.2):
+        q0, q1 = _qrot([0, 0, 1], 0.4), _qrot([0, 0, 1], 0.4 + w * dt)
+        assert abs(s1_run.axis_rate(q0, q1, dt, None) - w) < 1e-12
+        assert s1_run.axis_rate(q0, q1, dt, None) == pytest.approx(s1_run.axis_rate(q0, q1, dt, [0, 0, 1]), abs=1e-15)
+
+
+def test_axis_rate_edge_cases():
+    a = s1_run.tilt_axis(20.0, 33.0)
+    om, dt = math.radians(-2.0), 0.005
+    q0 = _qrot([0.1, 0.2, 0.3], 1.0)
+    q1 = _qmul(_qrot(a, om * dt), q0)
+    for bad_dt in (0.0, -dt, float("nan"), float("inf")):
+        assert s1_run.axis_rate(q0, q1, bad_dt, a) is None
+    neg = lambda q: tuple(-c for c in q)
+    assert abs(s1_run.axis_rate(q0, neg(q1), dt, a) - om) < 1e-9      # segno opposto (doppia copertura)
+    assert abs(s1_run.axis_rate(neg(q0), q1, dt, a) - om) < 1e-9
+    assert abs(s1_run.axis_rate(tuple(0.25 * c for c in q0), tuple(3.0 * c for c in q1), dt, a) - om) < 1e-9
+    assert s1_run.axis_rate((0, 0, 0, 0), q1, dt, a) is None
+    assert s1_run.axis_rate(q0, (float("nan"), 0, 0, 1), dt, a) is None
+    p0, p1 = _qrot(a, math.pi - 0.5 * abs(om) * dt), _qrot(a, math.pi + 0.5 * abs(om) * dt)   # wrap a pi
+    assert abs(s1_run.axis_rate(p0, p1, dt, a) - abs(om)) < 1e-9
+    assert abs(s1_run.axis_rate(p1, p0, dt, a) + abs(om)) < 1e-9
+    assert abs(s1_run.axis_rate(q0, q0, dt, a)) < 1e-12
+    with pytest.raises(ValueError):
+        s1_run.axis_rate(q0, q1, dt, [0, 0, 0])
 
 
 def _legacy_goal_x_c(goal_xy, th, center):

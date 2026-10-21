@@ -266,33 +266,40 @@ GraspPlannerNode::~GraspPlannerNode() {
 }
 
 void GraspPlannerNode::onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg) {
-    if (dispatched_.exchange(true)) return;  // only the first sample is ever handled (one-shot v1)
+    if (dispatched_.load()) return;  // the selection is dispatched once (one-shot v1)
 
     try {
-        const Eigen::Vector3d position(msg->pose.pose.position.x, msg->pose.pose.position.y,
-                                       msg->pose.pose.position.z);
-        checkFirstOdomSample(position, msg->header.frame_id, satellite_rotation_center_);
+        const auto& qm = msg->pose.pose.orientation;
+        const Eigen::Quaterniond q(qm.w, qm.x, qm.y, qm.z);
+        const double stamp_s = rclcpp::Time(msg->header.stamp).seconds();
 
-        const auto& q = msg->pose.pose.orientation;
-        haptic_dmp_learning::core::satellite_intercept::PhaseTracker tracker(satellite_rotation_axis_,
-                                                                             satellite_q_ref_);
-        const auto phase = tracker.update(Eigen::Quaterniond(q.w, q.x, q.y, q.z));
+        if (!first_odom_) {
+            const Eigen::Vector3d position(msg->pose.pose.position.x, msg->pose.pose.position.y,
+                                           msg->pose.pose.position.z);
+            checkFirstOdomSample(position, msg->header.frame_id, satellite_rotation_center_);
+            haptic_dmp_learning::core::satellite_intercept::PhaseTracker tracker(satellite_rotation_axis_,
+                                                                                 satellite_q_ref_);
+            const auto phase = tracker.update(q);
+            first_odom_ = FirstOdomSample{q, stamp_s, phase.theta_rad};
+            return;  // omega needs a second sample (quaternion increment)
+        }
+        if (!(stamp_s > first_odom_->stamp_s)) return;  // same / older stamp: wait for a usable pair
+        dispatched_.store(true);
 
-        const Eigen::Vector3d twist_angular(msg->twist.twist.angular.x, msg->twist.twist.angular.y,
-                                            msg->twist.twist.angular.z);
-        checkOmegaConsistency(twist_angular, satellite_rotation_axis_, satellite_omega_rad_s_,
-                             omega_consistency_tol_rad_s_);
+        checkOmegaConsistency(first_odom_->q, q, stamp_s - first_odom_->stamp_s, satellite_rotation_axis_,
+                              satellite_omega_rad_s_, omega_consistency_tol_rad_s_);
 
         core::SatelliteSnapshot snapshot;
         snapshot.center = satellite_rotation_center_;
         snapshot.axis = satellite_rotation_axis_;
         snapshot.omega_rad_s = satellite_omega_rad_s_;
-        snapshot.theta_rad = phase.theta_rad;
-        snapshot.t_s = rclcpp::Time(msg->header.stamp).seconds();
+        snapshot.theta_rad = first_odom_->theta_rad;
+        snapshot.t_s = first_odom_->stamp_s;
 
         worker_ = std::thread(&GraspPlannerNode::runSelection, this, snapshot);
     } catch (const std::exception& e) {
-        RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: rejecting first odometry sample: %s", e.what());
+        dispatched_.store(true);
+        RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: rejecting the first odometry samples: %s", e.what());
         rclcpp::shutdown();
     }
 }

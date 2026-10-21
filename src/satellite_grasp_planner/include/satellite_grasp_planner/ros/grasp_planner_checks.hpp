@@ -6,6 +6,7 @@
  *        Kept free of rclcpp::Node so these checks are unit-testable without rclcpp::init().
  */
 
+#include <optional>
 #include <string>
 
 #include <Eigen/Dense>
@@ -60,10 +61,22 @@ Eigen::Quaterniond satelliteBaseOrientation(const Eigen::Vector3d& face_normal_b
 void checkFirstOdomSample(const Eigen::Vector3d& position, const std::string& frame_id,
                           const Eigen::Vector3d& center);
 
-/// @throws std::runtime_error if @p twist_angular projected onto @p axis disagrees with
-/// @p omega_rad_s by more than @p tol_rad_s.
-void checkOmegaConsistency(const Eigen::Vector3d& twist_angular, const Eigen::Vector3d& axis, double omega_rad_s,
-                           double tol_rad_s);
+/// Angular velocity [rad/s] of the body about the unit @p axis, estimated from two orientation samples (world frame,
+/// time apart @p dt_s): dq = q_curr * q_prev^-1, rotation vector of dq (shortest arc: the sign of the quaternion double
+/// cover is irrelevant), projected on the normalized @p axis, divided by @p dt_s. Both quaternions are normalized here.
+/// NOT derived from nav_msgs/Odometry twist.angular: Gazebo's OdometryPublisher fills it with d(roll,pitch,yaw)/dt of the
+/// pose quaternion (R = Rz(y) Ry(p) Rx(r)), which equals omega . a only for a vertical axis (G28, alpha = 20 deg).
+/// Unambiguous only while |omega| * dt_s < pi (the arc is taken in [0, pi]).
+/// @return std::nullopt if @p dt_s <= 0 or non-finite, or a quaternion is non-finite or has (near) zero norm.
+/// @throws std::invalid_argument if @p axis has norm <= 1e-9.
+std::optional<double> axisRateFromQuaternions(const Eigen::Quaterniond& q_prev, const Eigen::Quaterniond& q_curr,
+                                              double dt_s, const Eigen::Vector3d& axis);
+
+/// @throws std::runtime_error if the angular velocity about @p axis estimated from (@p q_prev, @p q_curr, @p dt_s)
+/// (axisRateFromQuaternions) disagrees with @p omega_rad_s by more than @p tol_rad_s.
+/// @throws std::invalid_argument if @p axis is degenerate or the pair is unusable (dt_s <= 0, non-finite / zero quaternion).
+void checkOmegaConsistency(const Eigen::Quaterniond& q_prev, const Eigen::Quaterniond& q_curr, double dt_s,
+                           const Eigen::Vector3d& axis, double omega_rad_s, double tol_rad_s);
 
 }  // namespace ros_wrapper
 }  // namespace satellite_grasp_planner

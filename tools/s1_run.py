@@ -13,7 +13,7 @@ report.json["success"], non nel codice di uscita); !=0 con UNA riga "S1_RUN FAIL
 
 --stop-cube: dopo "follow: ended" nel log dell'executor pubblica 3 volte uno Twist nullo sul topic
 cmd_vel del cubo (VelocityControl, trovato con `ign topic -l`, nessun bridge) e 1 s simulato dopo legge
-wz dall'odometria (run_meta.json: stop_cube_topic, stop_cube_sim_t, wz_after_stop_degps).
+wz dai quaternioni dell'odometria (non dal twist: vedi axis_rate) (run_meta.json: stop_cube_topic, stop_cube_sim_t, wz_after_stop_degps).
 
 Output in --outdir (default s1_runs/<tag>): bag/, *.log, run_meta.json, report.json, report.txt.
 """
@@ -194,7 +194,8 @@ def center_str(c) -> str:
 # ------------------------------------------------------------------ asse inclinato (puro; G22)
 # Fatti misurati in Gazebo: `ros_gz_sim create -R -P -Y` = angoli ESTRINSECI R = Rz(yaw) Ry(pitch) Rx(roll);
 # initial_angular (wx, wy, wz) del VelocityControl e' nel frame BODY: con spawn R_tilt.Rz(yaw) e wz = omega
-# (wx = wy = 0) il cubo ruota rigidamente attorno a a = R_tilt.z. Il twist dell'odometria e' nel frame WORLD.
+# (wx = wy = 0) il cubo ruota rigidamente attorno a a = R_tilt.z. ATTENZIONE: il twist.angular dell'odometria
+# NON e' omega.a (Gazebo: d(roll,pitch,yaw)/dt, G28); omega si stima dai quaternioni (axis_rate).
 
 AXIS_TILT_MAX_DEG = 20.0
 AXIS_NORMAL_TOL = 1e-12                  # |n.a| massimo prima di lanciare (il planner rifiuta oltre 1e-6)
@@ -349,12 +350,37 @@ def check_axis_consistent(spawn: dict, executor: dict, planner: dict, tol: float
         raise RunError(f"|n.a| = {abs(float(n @ a_spawn)):.3e} >= {AXIS_NORMAL_TOL:g}")
 
 
-def axis_rate(w_xyz, axis=None) -> float:
-    """Velocita' angolare attorno all'asse da un twist angolare WORLD. axis None (asse z, alpha = 0):
-    la componente z, identica a prima."""
-    if axis is None:
-        return w_xyz[2]
-    return float(w_xyz[0] * axis[0] + w_xyz[1] * axis[1] + w_xyz[2] * axis[2])
+def axis_rate(q_prev, q_curr, dt, axis=None):
+    """Velocita' angolare [rad/s] attorno all'asse da due quaternioni xyzw (frame WORLD) a distanza dt [s]:
+    dq = q_curr * q_prev^-1, vettore di rotazione (arco minimo: il segno della doppia copertura non conta),
+    proiettato sull'asse (None: z, alpha = 0) e diviso per dt. NON dal twist dell'odometria: Gazebo pubblica
+    twist.angular = d(roll,pitch,yaw)/dt, uguale a omega.a solo per asse verticale (G28). Quaternioni non
+    normalizzati accettati. None se dt <= 0 / non finito o un quaternione e' non finito / di norma nulla.
+    Univoca solo per |omega| dt < pi."""
+    a = np.array([0.0, 0.0, 1.0]) if axis is None else np.asarray(axis, dtype=float)
+    na = float(np.linalg.norm(a))
+    if not na > 1e-9:
+        raise ValueError("axis_rate: norma dell'asse <= 1e-9")
+    p, c = np.asarray(q_prev, dtype=float), np.asarray(q_curr, dtype=float)
+    if not (math.isfinite(dt) and dt > 0.0 and np.all(np.isfinite(p)) and np.all(np.isfinite(c))):
+        return None
+    np_, nc = float(np.linalg.norm(p)), float(np.linalg.norm(c))
+    if not (np_ > 1e-9 and nc > 1e-9):
+        return None
+    px, py, pz, pw = p / np_
+    cx, cy, cz, cw = c / nc
+    # dq = c * p^-1, p^-1 = (-px, -py, -pz, pw)
+    w = cw * pw + cx * px + cy * py + cz * pz
+    v = np.array([cw * -px + cx * pw + cy * -pz - cz * -py,
+                  cw * -py - cx * -pz + cy * pw + cz * -px,
+                  cw * -pz + cx * -py - cy * -px + cz * pw])
+    if w < 0.0:
+        w, v = -w, -v
+    s = float(np.linalg.norm(v))
+    if s < 1e-300:
+        return 0.0
+    rotvec = (2.0 * math.atan2(s, w) / s) * v
+    return float(rotvec @ (a / na)) / dt
 
 
 def arm_planner_params(arm) -> list:
@@ -535,8 +561,9 @@ def make_monitor(axis=None):
             self.sim_time = None
             self.wall_last_advance = time.time()
             self.grasp_cmd = None
-            self.cube_wz = None   # velocita' angolare del cubo attorno all'asse (z se axis None) [rad/s], da odometria
-            self.axis = axis      # asse di rotazione WORLD (None: z, alpha = 0); il twist dell'odometria e' WORLD
+            self.cube_wz = None   # velocita' angolare del cubo attorno all'asse (z se axis None) [rad/s], dai quaternioni dell'odometria
+            self.axis = axis      # asse di rotazione WORLD (None: z, alpha = 0)
+            self._prev_q = None   # (stamp_s, quat xyzw) del campione precedente
             self.create_subscription(Odometry, CUBE_ODOM_TOPIC, self._odom, 10)
             self.create_subscription(Clock, "/clock", self._on_clock, 10)
             qos = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -550,8 +577,16 @@ def make_monitor(axis=None):
             self.sim_time = t
 
         def _odom(self, msg):
-            w = msg.twist.twist.angular
-            self.cube_wz = axis_rate((w.x, w.y, w.z), self.axis)
+            # omega dai quaternioni (twist.angular di Gazebo = d(rpy)/dt, errato per asse inclinato). Stesso
+            # intervallo di un campione di prima; coppie con dt <= 0 scartate (cube_wz resta l'ultimo valido).
+            o = msg.pose.pose.orientation
+            t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            q = (o.x, o.y, o.z, o.w)
+            if self._prev_q is not None:
+                r = axis_rate(self._prev_q[1], q, t - self._prev_q[0], self.axis)
+                if r is not None:
+                    self.cube_wz = r
+            self._prev_q = (t, q)
 
         def _gc(self, msg):
             self.grasp_cmd = msg

@@ -114,14 +114,30 @@ void checkFirstOdomSample(const Eigen::Vector3d& position, const std::string& fr
     }
 }
 
-void checkOmegaConsistency(const Eigen::Vector3d& twist_angular, const Eigen::Vector3d& axis, double omega_rad_s,
-                           double tol_rad_s) {
-    if (!(axis.norm() > 1e-9)) throw std::invalid_argument("checkOmegaConsistency: axis norm <= 1e-9");
-    const double measured = twist_angular.dot(axis.normalized());
+std::optional<double> axisRateFromQuaternions(const Eigen::Quaterniond& q_prev, const Eigen::Quaterniond& q_curr,
+                                              double dt_s, const Eigen::Vector3d& axis) {
+    if (!(axis.norm() > 1e-9)) throw std::invalid_argument("axisRateFromQuaternions: axis norm <= 1e-9");
+    if (!(dt_s > 0.0) || !std::isfinite(dt_s)) return std::nullopt;
+    const double n_prev = q_prev.norm(), n_curr = q_curr.norm();
+    if (!std::isfinite(n_prev) || !std::isfinite(n_curr) || !(n_prev > 1e-9) || !(n_curr > 1e-9)) return std::nullopt;
+    Eigen::Quaterniond dq = (q_curr.normalized() * q_prev.normalized().inverse()).normalized();
+    if (dq.w() < 0.0) dq.coeffs() = -dq.coeffs();  // double cover: shortest arc, angle in [0, pi]
+    const double s = dq.vec().norm();
+    if (s < 1e-300) return 0.0;
+    const double angle = 2.0 * std::atan2(s, dq.w());
+    const Eigen::Vector3d rotvec = (angle / s) * dq.vec();
+    return rotvec.dot(axis.normalized()) / dt_s;
+}
+
+void checkOmegaConsistency(const Eigen::Quaterniond& q_prev, const Eigen::Quaterniond& q_curr, double dt_s,
+                           const Eigen::Vector3d& axis, double omega_rad_s, double tol_rad_s) {
+    const auto rate = axisRateFromQuaternions(q_prev, q_curr, dt_s, axis);
+    if (!rate) throw std::invalid_argument("checkOmegaConsistency: unusable sample pair (dt <= 0 or invalid quaternion)");
+    const double measured = *rate;
     const double err = std::fabs(measured - omega_rad_s);
     if (err > tol_rad_s) {
         std::ostringstream m;
-        m << "measured angular velocity along axis (" << measured
+        m << "angular velocity along axis estimated from the odometry quaternions (" << measured
           << " rad/s) differs from satellite_rotation_angular_velocity_deg_s-derived omega ("
           << omega_rad_s << " rad/s) by " << err << " rad/s (> " << tol_rad_s << " rad/s)";
         throw std::runtime_error(m.str());

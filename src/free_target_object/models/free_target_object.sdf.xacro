@@ -276,7 +276,8 @@
          (default plugin dir) and publishes ignition.msgs.Odometry on
          /model/$(arg name)/odometry with a real sim-time stamp and proper
          frame ids (odom_frame -> robot_base_frame). Observation only: it
-         reports the model's world pose and its linear + angular twist, and
+         reports the model's world pose and its linear + angular twist (NOTE: twist.angular is
+         d(roll,pitch,yaw)/dt, not omega.a - use the pose quaternions, G28), and
          applies no force. <dimensions>3</dimensions> is mandatory here - the
          default is 2 (planar), wrong for a free 3D body. Publish rate matches
          this project's other pose streams (/target_pose is 200 Hz). -->
