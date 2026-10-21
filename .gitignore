@@ -63,3 +63,12 @@ __pycache__/
 _archive_*/
 _data/
 _refactor_1021/
+/_diag_1019
+/analysis_s1_1013
+/analysis_s1_1015
+/bags
+/grasp_metrics_all.csv
+/landscape.csv
+/slides_material
+/traj_q6pi_1007
+/verify_prepos_1007
