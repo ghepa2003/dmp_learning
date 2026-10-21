@@ -1,0 +1,333 @@
+# runs_manifest.yaml - manifest dei run per tools/canonical_metrics.py (schema_version 1).
+# Tutti i campi sono obbligatori (kt null solo con kt_source unknown|not_applicable).
+# kt_source: yaml_commit | script_argument | inferred_from_error | unknown | not_applicable
+#   (script_argument e not_applicable ESTENDONO l'elenco richiesto: Kt passato come argomento a uno
+#    script del repo che riscrive lo yaml prima del run / controllore di velocita' senza Kt.)
+# frame_at_recording: frame controllato al momento della registrazione. Fonte: commit bf8d818
+#   (2026-08-28) porta ee_frame_name da fer_link8 a fer_hand_tcp nello yaml del repo; verificato sui
+#   dati (test_actual_pose_matches_fk_tcp): ultima riga di actual_pose == FK TCP di joint_states.
+# recorded_utc: starting_time del bag (metadata.yaml), UTC.
+# bag: cartella del bag rosbag2 (relativa alla cartella di questo file), usata per header.stamp (sim_time).
+schema_version: 1
+data_dir: gazebo_cartesian_eval/data   # relativa alla cartella di questo file
+runs:
+  # ---- 10 run della regressione (nomi da compute_scatter_analysis.py:20-31) ----
+  - run_id: reach_task_goal_1_prodmp
+    family: regression_goal
+    group: "Goal 1"
+    files:
+      target_aligned: target_aligned_reach_task_goal_1_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_1_prodmp.csv
+      joint_states: joint_states_reach_task_goal_1_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_1_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:12:20+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_1_rep2_prodmp
+    family: regression_goal
+    group: "Goal 1"
+    files:
+      target_aligned: target_aligned_reach_task_goal_1_rep2_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_1_rep2_prodmp.csv
+      joint_states: joint_states_reach_task_goal_1_rep2_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_1_rep2_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T13:19:11+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_2_prodmp
+    family: regression_goal
+    group: "Goal 2"
+    files:
+      target_aligned: target_aligned_reach_task_goal_2_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_2_prodmp.csv
+      joint_states: joint_states_reach_task_goal_2_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_2_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:13:20+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_2_rep2_prodmp
+    family: regression_goal
+    group: "Goal 2"
+    files:
+      target_aligned: target_aligned_reach_task_goal_2_rep2_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_2_rep2_prodmp.csv
+      joint_states: joint_states_reach_task_goal_2_rep2_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_2_rep2_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:46:10+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_2_rep3_prodmp
+    family: regression_goal
+    group: "Goal 2"
+    files:
+      target_aligned: target_aligned_reach_task_goal_2_rep3_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_2_rep3_prodmp.csv
+      joint_states: joint_states_reach_task_goal_2_rep3_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_2_rep3_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:49:42+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_3_prodmp
+    family: regression_goal
+    group: "Goal 3"
+    files:
+      target_aligned: target_aligned_reach_task_goal_3_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_3_prodmp.csv
+      joint_states: joint_states_reach_task_goal_3_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_3_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:14:20+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_4_prodmp
+    family: regression_goal
+    group: "Goal 4"
+    files:
+      target_aligned: target_aligned_reach_task_goal_4_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_4_prodmp.csv
+      joint_states: joint_states_reach_task_goal_4_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_4_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:16:22+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_4_rep2_prodmp
+    family: regression_goal
+    group: "Goal 4"
+    files:
+      target_aligned: target_aligned_reach_task_goal_4_rep2_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_4_rep2_prodmp.csv
+      joint_states: joint_states_reach_task_goal_4_rep2_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_4_rep2_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:50:56+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_4_rep3_prodmp
+    family: regression_goal
+    group: "Goal 4"
+    files:
+      target_aligned: target_aligned_reach_task_goal_4_rep3_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_4_rep3_prodmp.csv
+      joint_states: joint_states_reach_task_goal_4_rep3_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_4_rep3_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:58:19+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  - run_id: reach_task_goal_5_prodmp
+    family: regression_goal
+    group: "Goal 5"
+    files:
+      target_aligned: target_aligned_reach_task_goal_5_prodmp.csv
+      actual_pose: actual_pose_reach_task_goal_5_prodmp.csv
+      joint_states: joint_states_reach_task_goal_5_prodmp.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_goal_5_prodmp
+    kt: 200
+    kt_source: inferred_from_error
+    kt_note: "Kt non registrato: lo script di registrazione (run_single_goal_test.sh) non imposta i gain. Stima dalla sola grandezza dell'errore: err_pos_to_target_at_t_settle_1e4 = 4.63-7.37 mm, come i run Kt=200 (4.05-8.26 mm) e non i Kt=2000 (0.58-0.90 mm). NON VERIFICATO."
+    recorded_utc: "2026-09-15T12:17:22+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp dal 2026-08-28; yaml del container al 2026-09-15 NON VERIFICATO"
+  # ---- 8 run di fase (run_satellite_rotation_experiment.py stage_b / stage_b_kt200) ----
+  - run_id: reach_task_satellite_rot_phase30
+    family: satellite_phase
+    phase_deg: 30
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase30.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase30.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase30.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase30
+    kt: 2000
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:339 (stage_b, kt=2000.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:40:59+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase90
+    family: satellite_phase
+    phase_deg: 90
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase90.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase90.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase90.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase90
+    kt: 2000
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:339 (stage_b, kt=2000.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:42:36+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase180
+    family: satellite_phase
+    phase_deg: 180
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase180.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase180.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase180.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase180
+    kt: 2000
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:339 (stage_b, kt=2000.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:44:10+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase270
+    family: satellite_phase
+    phase_deg: 270
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase270.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase270.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase270.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase270
+    kt: 2000
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:339 (stage_b, kt=2000.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:45:46+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase30_kt200
+    family: satellite_phase
+    phase_deg: 30
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase30_kt200.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase30_kt200.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase30_kt200.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase30_kt200
+    kt: 200
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:358 (stage_b_kt200, kt=200.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:55:40+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase90_kt200
+    family: satellite_phase
+    phase_deg: 90
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase90_kt200.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase90_kt200.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase90_kt200.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase90_kt200
+    kt: 200
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:358 (stage_b_kt200, kt=200.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:57:15+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase180_kt200
+    family: satellite_phase
+    phase_deg: 180
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase180_kt200.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase180_kt200.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase180_kt200.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase180_kt200
+    kt: 200
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:358 (stage_b_kt200, kt=200.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T10:58:52+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_satellite_rot_phase270_kt200
+    family: satellite_phase
+    phase_deg: 270
+    files:
+      target_aligned: target_aligned_reach_task_satellite_rot_phase270_kt200.csv
+      actual_pose: actual_pose_reach_task_satellite_rot_phase270_kt200.csv
+      joint_states: joint_states_reach_task_satellite_rot_phase270_kt200.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_satellite_rot_phase270_kt200
+    kt: 200
+    kt_source: script_argument
+    kt_note: "run_satellite_rotation_experiment.py:358 (stage_b_kt200, kt=200.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-18T11:00:25+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  # ---- baseline dell'audit ----
+  - run_id: reach_task_baseline_velocity_delay1
+    family: baseline
+    files:
+      target_aligned: target_aligned_reach_task_baseline_velocity_delay1.csv
+      actual_pose: actual_pose_reach_task_baseline_velocity_delay1.csv
+      joint_states: joint_states_reach_task_baseline_velocity_delay1.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_baseline_velocity_delay1
+    kt: null
+    kt_source: not_applicable
+    kt_note: "controllore di velocita' (velocity_cartesian_controller): nessun Kt."
+    recorded_utc: "2026-09-14T15:08:52+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp; script di registrazione NON nel repo"
+  - run_id: reach_task_baseline_impedance_kt200_delay1
+    family: baseline
+    files:
+      target_aligned: target_aligned_reach_task_baseline_impedance_kt200_delay1.csv
+      actual_pose: actual_pose_reach_task_baseline_impedance_kt200_delay1.csv
+      joint_states: joint_states_reach_task_baseline_impedance_kt200_delay1.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_baseline_impedance_kt200_delay1
+    kt: null
+    kt_source: unknown
+    kt_note: "il nome del file dice kt200 ma lo script di registrazione non e' nel repo."
+    recorded_utc: "2026-09-14T15:12:51+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp; script di registrazione NON nel repo"
+  - run_id: reach_task_baseline_impedance_kt2000_delay1
+    family: baseline
+    files:
+      target_aligned: target_aligned_reach_task_baseline_impedance_kt2000_delay1.csv
+      actual_pose: actual_pose_reach_task_baseline_impedance_kt2000_delay1.csv
+      joint_states: joint_states_reach_task_baseline_impedance_kt2000_delay1.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_baseline_impedance_kt2000_delay1
+    kt: null
+    kt_source: unknown
+    kt_note: "il nome del file dice kt2000 ma lo script di registrazione non e' nel repo."
+    recorded_utc: "2026-09-14T15:16:22+00:00"
+    frame_at_recording: tcp
+    frame_source: "yaml del repo a fer_hand_tcp; script di registrazione NON nel repo"
+  - run_id: reach_task_baseline_replay_prodmp_kt200_delay1
+    family: baseline
+    files:
+      target_aligned: target_aligned_reach_task_baseline_replay_prodmp_kt200_delay1.csv
+      actual_pose: actual_pose_reach_task_baseline_replay_prodmp_kt200_delay1.csv
+      joint_states: joint_states_reach_task_baseline_replay_prodmp_kt200_delay1.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_baseline_replay_prodmp_kt200_delay1
+    kt: 200
+    kt_source: script_argument
+    kt_note: "run_prodmp_kt2000_eval.py:290-291 (kt=200.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-17T15:56:44+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
+  - run_id: reach_task_baseline_replay_prodmp_kt2000_delay1
+    family: baseline
+    files:
+      target_aligned: target_aligned_reach_task_baseline_replay_prodmp_kt2000_delay1.csv
+      actual_pose: actual_pose_reach_task_baseline_replay_prodmp_kt2000_delay1.csv
+      joint_states: joint_states_reach_task_baseline_replay_prodmp_kt2000_delay1.csv
+    bag: gazebo_cartesian_eval/bags/reach_task_baseline_replay_prodmp_kt2000_delay1
+    kt: 2000
+    kt_source: script_argument
+    kt_note: "run_prodmp_kt2000_eval.py:290-291 (kt=2000.0); lo script riscrive lo yaml prima del run."
+    recorded_utc: "2026-09-17T15:58:22+00:00"
+    frame_at_recording: tcp
+    frame_source: "lo script copia lo yaml del repo (fer_hand_tcp) nel container prima di ogni run"
