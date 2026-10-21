@@ -64,3 +64,13 @@ _archive_*/
 _data/
 _refactor_1021/
 /results/
+
+# Symlink a directory dati in _data/
+/tools/gazebo_cartesian_eval/bags
+/tools/gazebo_cartesian_eval/data
+/tools/gazebo_cartesian_eval/plots
+/tools/gazebo_cartesian_eval/results
+/tools/dmp_offline_test/data
+/tools/dmp_offline_test/weights
+/tools/dmp_offline_test/plots
+
