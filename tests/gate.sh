@@ -83,12 +83,7 @@ if [ "${MODE_CLEAN}" -eq 1 ]; then
     BUILD_CMD="colcon build --packages-select ${PACKAGES} --cmake-clean-first --cmake-force-configure --event-handlers console_cohesion+"
     docker exec franka bash -c "source /root/env_thesis.sh && cd /root/thesis_ws && ${BUILD_CMD}" 2>&1 | tee _gate_out/clean_build.log || fail_gate "(a) colcon build --clean"
 
-    INCRIMINATED="$(grep -inE "warning:|CMake Warning|--- stderr" _gate_out/clean_build.log || true)"
-    if [ -n "${INCRIMINATED}" ]; then
-        echo "ERRORE: Rilevati warning o blocchi stderr nel log di clean build:"
-        echo "${INCRIMINATED}"
-        fail_gate "(a) colcon build --clean (warning/stderr rilevati)"
-    fi
+    python3 tests/gate_check_build_log.py _gate_out/clean_build.log || fail_gate "(a) colcon build --clean (warning o stderr non ammessi)"
 else
     docker exec franka bash -c "source /root/env_thesis.sh && cd /root/thesis_ws && \
       colcon build --packages-select ${PACKAGES}" || fail_gate "(a) colcon build"
