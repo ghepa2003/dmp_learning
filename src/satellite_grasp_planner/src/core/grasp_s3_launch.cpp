@@ -8,7 +8,7 @@
 namespace satellite_grasp_planner {
 namespace core {
 
-GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot,
+GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot_at_acquisition,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s, S3Result* s3_result_out,
                                        std::vector<S3EvalRecord>* eval_log,
@@ -16,11 +16,11 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
   if (!std::isfinite(min_delay_s) || min_delay_s < 0.0) {
     throw std::invalid_argument("planGraspAndLaunchS1: min_delay_s must be finite and >= 0.");
   }
-  if (snapshot.omega_rad_s == 0.0) {
+  if (snapshot_at_acquisition.omega_rad_s == 0.0) {
     throw std::invalid_argument("planGraspAndLaunchS1: snapshot_at_acquisition.omega_rad_s is zero.");
   }
-  if (snapshot.omega_rad_s != in.omega_rad_s || snapshot.center != in.cube_params.center_world ||
-      snapshot.axis != in.cube_params.axis_world) {
+  if (snapshot_at_acquisition.omega_rad_s != in.omega_rad_s || snapshot_at_acquisition.center != in.cube_params.center_world ||
+      snapshot_at_acquisition.axis != in.cube_params.axis_world) {
     throw std::invalid_argument(
         "planGraspAndLaunchS1: snapshot_at_acquisition does not match the snapshot 'in' was built from "
         "(omega_rad_s/center/axis differ) - pass the ACQUISITION snapshot.");
@@ -45,8 +45,8 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
   ctx.contact_to_end_offset = in.contact_to_end_offset;
   ctx.tau_contact_s = in.tau_contact_s;
   ctx.tau_launch_s = tau_launch_s;
-  ctx.snapshot = snapshot;
-  ctx.t_now_s = t_now_override_s.value_or(snapshot.t_s);
+  ctx.snapshot = snapshot_at_acquisition;
+  ctx.t_now_s = t_now_override_s.value_or(snapshot_at_acquisition.t_s);
   ctx.min_delay_s = min_delay_s;
   ctx.eval_log = eval_log;
   if (s3.use_clearance) {
@@ -77,8 +77,8 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
   const Eigen::Quaterniond q_goal = goalOrientation(c.eval);
   const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
 
-  const double t_now_s = t_now_override_s.value_or(snapshot.t_s + elapsed_s);
-  out.launch = planLaunch(snapshot, t_now_s, c.eval.theta_rad, tau_launch_s, min_delay_s);
+  const double t_now_s = t_now_override_s.value_or(snapshot_at_acquisition.t_s + elapsed_s);
+  out.launch = planLaunch(snapshot_at_acquisition, t_now_s, c.eval.theta_rad, tau_launch_s, min_delay_s);
   out.goal_position = goal;
   out.goal_orientation = q_goal;
   out.k = c.eval.k;

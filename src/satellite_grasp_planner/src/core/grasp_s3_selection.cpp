@@ -65,90 +65,90 @@ bool lessCost(const S3Candidate& a, const S3Candidate& b) {
 
 }  // namespace
 
-void validateS3Params(const S3Params& p) {
+void validateS3Params(const S3Params& params) {
   auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
-  if (!pos(p.length_scale_m) || !pos(p.angle_scale_rad) || !pos(p.theta_step_deg) ||
-      !pos(p.theta_refine_step_deg) || !pos(p.r_trust_m) || !pos(p.delta_v_max_m_s)) {
+  if (!pos(params.length_scale_m) || !pos(params.angle_scale_rad) || !pos(params.theta_step_deg) ||
+      !pos(params.theta_refine_step_deg) || !pos(params.r_trust_m) || !pos(params.delta_v_max_m_s)) {
     throw std::invalid_argument("selectGraspS3: scales, steps, r_trust_m and delta_v_max_m_s must be finite and > 0.");
   }
-  if (!(p.orientation_weight >= 0.0) || !std::isfinite(p.orientation_weight) ||
-      !(p.epsilon_wait_per_s >= 0.0) || !std::isfinite(p.epsilon_wait_per_s)) {
+  if (!(params.orientation_weight >= 0.0) || !std::isfinite(params.orientation_weight) ||
+      !(params.epsilon_wait_per_s >= 0.0) || !std::isfinite(params.epsilon_wait_per_s)) {
     throw std::invalid_argument("selectGraspS3: orientation_weight and epsilon_wait_per_s must be finite and >= 0.");
   }
-  if (!std::isfinite(p.w_hat_min) || !std::isfinite(p.margin_min_rad)) {
+  if (!std::isfinite(params.w_hat_min) || !std::isfinite(params.margin_min_rad)) {
     throw std::invalid_argument("selectGraspS3: w_hat_min and margin_min_rad must be finite.");
   }
-  if (p.max_posthoc_candidates < 0) throw std::invalid_argument("selectGraspS3: max_posthoc_candidates < 0.");
-  if (!std::isfinite(p.posthoc_cluster_deg) || p.posthoc_cluster_deg < 0.0) {
+  if (params.max_posthoc_candidates < 0) throw std::invalid_argument("selectGraspS3: max_posthoc_candidates < 0.");
+  if (!std::isfinite(params.posthoc_cluster_deg) || params.posthoc_cluster_deg < 0.0) {
     throw std::invalid_argument("selectGraspS3: posthoc_cluster_deg must be finite and >= 0.");
   }
-  if (p.force_flip < -1 || p.force_flip > 1) {
+  if (params.force_flip < -1 || params.force_flip > 1) {
     throw std::invalid_argument("selectGraspS3: force_flip must be -1, 0 or 1.");
   }
-  (void)parseBranchRule(p.branch_rule);     // throws std::invalid_argument for an unknown value, no fallback
-  const S3Mode mode = parseS3Mode(p.mode);  // throws for an unknown value, no fallback
-  if (!(std::isfinite(p.kappa_w_mm) && p.kappa_w_mm >= 0.0)) {
+  (void)parseBranchRule(params.branch_rule);     // throws std::invalid_argument for an unknown value, no fallback
+  const S3Mode mode = parseS3Mode(params.mode);  // throws for an unknown value, no fallback
+  if (!(std::isfinite(params.kappa_w_mm) && params.kappa_w_mm >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: kappa_w must be finite and >= 0.");
   }
-  if (!(std::isfinite(p.kappa_t_mm_s) && p.kappa_t_mm_s >= 0.0)) {
+  if (!(std::isfinite(params.kappa_t_mm_s) && params.kappa_t_mm_s >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: kappa_t must be finite and >= 0.");
   }
-  if (!(std::isfinite(p.tau_j_mm) && p.tau_j_mm >= 0.0)) {
+  if (!(std::isfinite(params.tau_j_mm) && params.tau_j_mm >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: tau_j_mm must be finite and >= 0.");
   }
-  if (p.finalists_n < 1) throw std::invalid_argument("selectGraspS3: finalists_n must be >= 1.");
-  if (!(std::isfinite(p.min_clearance_mm) && p.min_clearance_mm >= 0.0)) {
+  if (params.finalists_n < 1) throw std::invalid_argument("selectGraspS3: finalists_n must be >= 1.");
+  if (!(std::isfinite(params.min_clearance_mm) && params.min_clearance_mm >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: s1.min_clearance_mm must be finite and >= 0.");
   }
-  validateClearanceParams(ClearanceParams{p.clearance_dt_s, p.gripper_open_m});  // s1.clearance_dt_s, s1.gripper_open_m
-  if (p.use_clearance && mode != S3Mode::kV2) {
+  validateClearanceParams(ClearanceParams{params.clearance_dt_s, params.gripper_open_m});  // s1.clearance_dt_s, s1.gripper_open_m
+  if (params.use_clearance && mode != S3Mode::kV2) {
     throw std::invalid_argument(
         "selectGraspS3: s1.use_clearance=true is only defined in s1.mode=v2 (the constraint acts on the v2 finalists).");
   }
-  if (!(std::isfinite(p.min_margin_deg) && p.min_margin_deg >= 0.0)) {
+  if (!(std::isfinite(params.min_margin_deg) && params.min_margin_deg >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: s1.min_margin_deg must be finite and >= 0.");
   }
-  if (!(std::isfinite(p.margin_follow_s) && p.margin_follow_s >= 0.0)) {
+  if (!(std::isfinite(params.margin_follow_s) && params.margin_follow_s >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: s1.margin_follow_s must be finite and >= 0.");
   }
-  if (!(std::isfinite(p.margin_follow_dt_s) && p.margin_follow_dt_s > 0.0)) {
+  if (!(std::isfinite(params.margin_follow_dt_s) && params.margin_follow_dt_s > 0.0)) {
     throw std::invalid_argument("selectGraspS3: s1.margin_follow_dt_s must be finite and > 0.");
   }
-  if (p.use_margin && mode != S3Mode::kV2) {
+  if (params.use_margin && mode != S3Mode::kV2) {
     throw std::invalid_argument(
         "selectGraspS3: s1.use_margin=true is only defined in s1.mode=v2 (the constraint acts on the v2 finalists).");
   }
-  if (!(std::isfinite(p.max_start_goal_deg) && p.max_start_goal_deg >= 0.0 && p.max_start_goal_deg <= 180.0)) {
+  if (!(std::isfinite(params.max_start_goal_deg) && params.max_start_goal_deg >= 0.0 && params.max_start_goal_deg <= 180.0)) {
     throw std::invalid_argument("selectGraspS3: max_start_goal_deg must be finite and in [0, 180].");
   }
-  if (mode == S3Mode::kV2 && p.rollout_q_ref.empty()) {
+  if (mode == S3Mode::kV2 && params.rollout_q_ref.empty()) {
     throw std::invalid_argument(
         "selectGraspS3: mode 'v2' requires rollout_q_ref (s1.rollout_q_ref: 7 values, the controller's nullspace "
         "target); there is no default.");
   }
-  if (!p.rollout_q_ref.empty() && p.rollout_q_ref.size() != static_cast<std::size_t>(RobotModel::kNumJoints)) {
+  if (!params.rollout_q_ref.empty() && params.rollout_q_ref.size() != static_cast<std::size_t>(RobotModel::kNumJoints)) {
     throw std::invalid_argument("selectGraspS3: rollout_q_ref must have exactly 7 values (got " +
-                                std::to_string(p.rollout_q_ref.size()) + ").");
+                                std::to_string(params.rollout_q_ref.size()) + ").");
   }
-  for (double v : p.rollout_q_ref) {
+  for (double v : params.rollout_q_ref) {
     if (!std::isfinite(v)) throw std::invalid_argument("selectGraspS3: rollout_q_ref must be finite.");
   }
-  if (!p.force && p.force_flip != -1) {
+  if (!params.force && params.force_flip != -1) {
     throw std::invalid_argument("selectGraspS3: force_flip requires force = true.");
   }
-  if (p.force) {
-    if (p.force_k < 0 || p.force_k > 3) {
+  if (params.force) {
+    if (params.force_k < 0 || params.force_k > 3) {
       throw std::invalid_argument("selectGraspS3: force_k must be in 0..3.");
     }
-    if (!std::isfinite(p.force_theta_deg) || p.force_theta_deg < -180.0 || p.force_theta_deg > 180.0) {
+    if (!std::isfinite(params.force_theta_deg) || params.force_theta_deg < -180.0 || params.force_theta_deg > 180.0) {
       throw std::invalid_argument("selectGraspS3: force_theta_deg must be finite and in [-180, 180].");
     }
-    if (!std::isfinite(p.force_psi_deg) || std::abs(p.force_psi_deg) > 8.0) {
+    if (!std::isfinite(params.force_psi_deg) || std::abs(params.force_psi_deg) > 8.0) {
       throw std::invalid_argument("selectGraspS3: |force_psi_deg| must be finite and <= 8.");
     }
   }
-  if (!(p.ik.max_iter > 0) || !pos(p.ik.pos_tol_m) || !pos(p.ik.ori_tol_rad) || !pos(p.ik.max_step_rad) ||
-      !pos(p.ik.damping) || !(std::isfinite(p.ik.nullspace_gain) && p.ik.nullspace_gain >= 0.0)) {
+  if (!(params.ik.max_iter > 0) || !pos(params.ik.pos_tol_m) || !pos(params.ik.ori_tol_rad) || !pos(params.ik.max_step_rad) ||
+      !pos(params.ik.damping) || !(std::isfinite(params.ik.nullspace_gain) && params.ik.nullspace_gain >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: invalid IkParams.");
   }
 }
@@ -858,6 +858,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
 
   // ---- outputs ----
   const std::size_t n_ranked = std::min(kRankedSize, accepted.size());
+  // n_ranked <= accepted.size() by construction (std::min); with an empty `accepted` n_ranked == 0 and assign(begin, begin) is
+  // valid. cppcheck reports containerOutOfBounds here because it does not propagate std::min (false positive).
   res.ranked.assign(accepted.begin(), accepted.begin() + static_cast<std::ptrdiff_t>(n_ranked));
   if (v2) {  // finalists that passed the rollout, by J
     std::vector<const S3FinalistRecord*> fs;

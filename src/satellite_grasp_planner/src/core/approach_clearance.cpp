@@ -144,9 +144,9 @@ std::string describeHandMesh(const HandMesh& mesh) {
   return o.str();
 }
 
-HandMesh makeBoxHandMesh(const Eigen::Vector3d& h) {
+HandMesh makeBoxHandMesh(const Eigen::Vector3d& half_extents) {
   HandMesh m;
-  for (int i = 0; i < 8; ++i) m.points.emplace_back((i & 1 ? h.x() : -h.x()), (i & 2 ? h.y() : -h.y()), (i & 4 ? h.z() : -h.z()));
+  for (int i = 0; i < 8; ++i) m.points.emplace_back((i & 1 ? half_extents.x() : -half_extents.x()), (i & 2 ? half_extents.y() : -half_extents.y()), (i & 4 ? half_extents.z() : -half_extents.z()));
   // vertex index = x_bit + 2 y_bit + 4 z_bit; two triangles per face, outward (counter-clockwise from outside)
   const std::size_t f[12][3] = {{0, 2, 1}, {1, 2, 3}, {4, 5, 6}, {5, 7, 6}, {0, 1, 4}, {1, 5, 4}, {2, 6, 3}, {3, 6, 7}, {0, 4, 2}, {2, 4, 6}, {1, 3, 5}, {3, 7, 5}};
   for (const auto& t : f) m.triangles.push_back({t[0], t[1], t[2]});
@@ -172,7 +172,7 @@ void validateClearanceParams(const ClearanceParams& p) {
   }
 }
 
-ApproachClearanceModel::ApproachClearanceModel(const CubeSatelliteModel::Params& cube, const HandMesh& hand_mesh)
+ApproachClearanceModel::ApproachClearanceModel(const CubeSatelliteModel::Params& cube, const HandMesh& hand)
     : impl_(std::make_unique<Impl>()) {
   Impl& m = *impl_;
   m.cube = cube;
@@ -186,7 +186,7 @@ ApproachClearanceModel::ApproachClearanceModel(const CubeSatelliteModel::Params&
   }
 
   // ---- hand: the collision mesh as is (checked convex and outward-oriented), no hull computation ----
-  HandMesh mesh = hand_mesh;
+  HandMesh mesh = hand;
   validateHandMesh(mesh);
   m.hand.geom = makeCoalConvex(mesh);
   double r = 0.0;

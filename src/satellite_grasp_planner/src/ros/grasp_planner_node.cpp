@@ -357,9 +357,7 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
         if (!f.rollout_done) continue;
         char jbuf[32];
-        if (!f.rollout_done) {
-          std::snprintf(jbuf, sizeof(jbuf), "n/v");
-        } else if (f.rollout_feasible) {
+        if (f.rollout_feasible) {
           std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
         } else {
           std::snprintf(jbuf, sizeof(jbuf), "n/a");
