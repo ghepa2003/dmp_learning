@@ -29,9 +29,8 @@ constexpr double kRolloutViolTolRad = 1e-4;  // same as the max_joint_violation_
 constexpr GraspPointId kAllK[4] = {GraspPointId::kP0, GraspPointId::kP90, GraspPointId::kP180,
                                    GraspPointId::kP270};
 
-void validateCtx(const S3Params& p, const S3Context& ctx) {
+void validateCtx(const S3Context& ctx) {
   auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
-  (void)p;
   if (!ctx.prodmp_template) throw std::invalid_argument("selectGraspS3: ctx.prodmp_template is null.");
   if (!pos(ctx.tau_launch_s)) throw std::invalid_argument("selectGraspS3: ctx.tau_launch_s must be > 0.");
   if (ctx.snapshot.omega_rad_s == 0.0) throw std::invalid_argument("selectGraspS3: omega is zero.");
@@ -270,7 +269,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
                        const RobotModel::JointVector& q_start, const DemoReference& demo,
                        const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
   validateS3Params(params);
-  validateCtx(params, ctx);
+  validateCtx(ctx);
   const BranchRule branch_rule = parseBranchRule(params.branch_rule);
   const bool v2 = parseS3Mode(params.mode) == S3Mode::kV2;
   RobotModel::JointVector q_rollout_ref = RobotModel::JointVector::Zero();
@@ -330,7 +329,6 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       c.reject_reason = "start_goal";
     } else {
       c.passes_constraints = true;
-      res.max_w_hat_passing = std::max(res.max_w_hat_passing, c.eval.w_hat);
       c.wait_s = planLaunch(ctx.snapshot, ctx.t_now_s, theta, ctx.tau_launch_s, ctx.min_delay_s).delay_s;
       c.cost = c.d + params.epsilon_wait_per_s * c.wait_s;
     }
@@ -546,7 +544,6 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       rec.accepted_index = g.idx;
       rec.d_mm = g.d_mm;
       rec.w_static = c.w_full_static;
-      rec.j_static = g.j_static;
       rec.t_wait_s = c.wait_s;
       rec.start_goal_deg = c.eval.dist_to_demo.ori_rad * kRad2Deg;
       return rec;
@@ -560,7 +557,6 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       ++res.rollouts_done;
       rec.rollout_done = true;
       rec.rollout_feasible = fr.feasible;
-      rec.rollout_max_violation_rad = fr.max_joint_violation_rad;
       rec.rollout_min_margin_rad = fr.min_joint_margin_rad;
       if (fr.min_margin_joint >= 0 && fr.min_margin_step >= 0) {  // something was simulated
         rec.rollout_end.q_end = fr.q_end_post_step;
@@ -645,7 +641,6 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       f.clearance_mm = cr.min_mm_no_tail;
       f.clearance_pair = cr.pair_no_tail.str();
       f.clearance_t_rel_s = cr.t_rel_no_tail_s;
-      f.clearance_full_mm = cr.min_mm;
       f.clearance_rejected = !(cr.min_mm_no_tail >= params.min_clearance_mm);
       return cr.min_mm_no_tail;
     };

@@ -121,17 +121,9 @@ FeasibilityResult checkKinematicFeasibility(
       const double above = step.q(j) - hi(j);
       if (std::max(below, above) > max_viol) {  // strictly: only real violations are recorded
         res.worst_joint = j;
-        res.worst_step = static_cast<int>(i);
-        res.worst_joint_value_rad = step.q(j);
-        res.worst_joint_limit_rad = (below >= above) ? lo(j) : hi(j);
       }
       max_viol = std::max({max_viol, below, above});
     }
-  }
-  if (res.worst_step >= 0) {
-    res.worst_step_fraction =
-        steps.size() > 1 ? static_cast<double>(res.worst_step) / static_cast<double>(steps.size() - 1)
-                         : 0.0;
   }
   res.max_joint_violation_rad = max_viol;
   res.min_joint_margin_rad = min_margin;
@@ -139,7 +131,6 @@ FeasibilityResult checkKinematicFeasibility(
   res.min_margin_step = min_margin_step;
   res.q_end_post_step = q_post;
   res.q_final = steps.back().q;
-  res.w_trans_final = steps.back().w_trans;
 
   robot_model->update(steps.back().q, RobotModel::JointVector::Zero());
   res.pos_err_final_mm = (robot_model->eePosition() - target_position).norm() * 1000.0;

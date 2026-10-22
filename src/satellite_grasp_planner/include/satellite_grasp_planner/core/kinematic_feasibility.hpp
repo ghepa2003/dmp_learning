@@ -23,15 +23,9 @@ struct FeasibilityResult {
   /// Joint configuration at the last simulated Step (left default-zero if nothing was simulated).
   franka_cartesian_control::core::RobotModel::JointVector q_final =
       franka_cartesian_control::core::RobotModel::JointVector::Zero();
-  /// Step::w_trans (translational manipulability) of the last simulated Step.
-  double w_trans_final = 0.0;
   /// Diagnostics of the WORST joint-limit violation (the one giving max_joint_violation_rad).
   /// All stay at their defaults when there is no violation.
-  int worst_joint = -1;                ///< joint index 0-6 (fer_joint1..7)
-  int worst_step = -1;                 ///< simulated Step index of the worst violation
-  double worst_step_fraction = 0.0;    ///< worst_step / (n_steps - 1)
-  double worst_joint_value_rad = 0.0;  ///< q of that joint at that Step
-  double worst_joint_limit_rad = 0.0;  ///< the limit that was exceeded
+  int worst_joint = -1;  ///< joint index 0-6 (fer_joint1..7)
   /// min over all simulated Steps and joints of min(q - lower, upper - q) [rad]; negative if a limit is
   /// exceeded. DIAGNOSTIC ONLY (does not influence `feasible`); 0.0 if nothing was simulated.
   double min_joint_margin_rad = 0.0;

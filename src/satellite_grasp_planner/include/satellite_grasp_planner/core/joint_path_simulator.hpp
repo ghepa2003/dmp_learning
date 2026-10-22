@@ -66,8 +66,6 @@ class MinNormDlsResolution : public RedundancyResolutionStrategy {
       const RobotModel::JointVector& q,
       const RobotModel::JointVector& q0) const override;
 
-  const VelocityIkSolver::Params& ikParams() const { return ik_params_; }
-
  private:
   VelocityIkSolver::Params ik_params_;
   VelocityIkSolver ik_solver_;
@@ -108,8 +106,6 @@ class NullspaceBiasedResolution : public RedundancyResolutionStrategy {
       const CartesianSample& target,
       const RobotModel::JointVector& q,
       const RobotModel::JointVector& q0) const override;
-
-  const Params& params() const { return params_; }
 
  private:
   Params params_;
@@ -159,21 +155,13 @@ class JointPathSimulator {
 
   /**
    * @brief Same as simulate(trajectory, q0) but with the seed of the Euler integration (@p q_seed) decoupled from the
-   *        nullspace posture target passed to the strategy (@p q_ref). simulate(trajectory, q0) is exactly
-   *        simulate(trajectory, q0, q0) (same operations, bit-identical).
-   */
-  std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
-                             const RobotModel::JointVector& q_ref) const;
-
-  /**
-   * @brief simulate(trajectory, q_seed, q_ref) that also returns the joint configuration AFTER the last integration step
-   *        (steps.back().q is the configuration BEFORE it). @p q_after_last_step may be nullptr (then it is exactly the 3-argument
-   *        overload, which delegates here). Empty trajectory: set to @p q_seed.
+   *        nullspace posture target passed to the strategy (@p q_ref), and also returning the joint configuration AFTER
+   *        the last integration step (steps.back().q is the configuration BEFORE it). @p q_after_last_step may be nullptr.
+   *        Empty trajectory: set to @p q_seed. simulate(trajectory, q0) is exactly
+   *        simulate(trajectory, q0, q0, nullptr) (same operations, bit-identical).
    */
   std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
                              const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const;
-
-  const Params& params() const { return params_; }
 
  private:
   std::shared_ptr<RobotModel> robot_model_;

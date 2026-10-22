@@ -113,13 +113,7 @@ JointPathSimulator::JointPathSimulator(std::shared_ptr<RobotModel> robot_model,
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0) const {
-  return simulate(trajectory, q0, q0);
-}
-
-std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
-    const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
-    const RobotModel::JointVector& q_ref) const {
-  return simulate(trajectory, q0, q_ref, nullptr);
+  return simulate(trajectory, q0, q0, nullptr);
 }
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(

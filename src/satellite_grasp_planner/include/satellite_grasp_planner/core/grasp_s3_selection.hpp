@@ -195,7 +195,6 @@ struct S3FinalistRecord {
   int accepted_index = -1;  ///< index in the accepted list at the time of the finalist stage (internal)
   double d_mm = 0.0;
   double w_static = 0.0;
-  double j_static = 0.0;
   bool rollout_done = false;
   bool rollout_feasible = false;
   double w_rollout = 0.0;  ///< w_full(q_final of the rollout)
@@ -204,7 +203,6 @@ struct S3FinalistRecord {
   double start_goal_deg = 0.0;      ///< chosen branch vs FK(q_start)
   double rollout_pos_err_mm = 0.0;  ///< final pose error of the rollout vs the goal
   double rollout_ori_err_deg = 0.0;
-  double rollout_max_violation_rad = 0.0;
   double rollout_min_margin_rad = 0.0;  ///< min joint margin along the rollout
   /// End state of the rollout (q after the last step, margin/joint/time of its approach minimum), handed to followMargin() so
   /// it does not re-simulate the approach. Valid iff rollout_end_valid.
@@ -217,7 +215,6 @@ struct S3FinalistRecord {
   double clearance_mm = 0.0;        ///< ClearanceResult::min_mm_no_tail, the value the constraint uses
   std::string clearance_pair;       ///< ClearancePair::str() of that minimum
   double clearance_t_rel_s = 0.0;   ///< its time relative to contact (t - tau, <= 0)
-  double clearance_full_mm = 0.0;   ///< ClearanceResult::min_mm over the whole window (informative)
   // ---- joint-margin constraint (filled only if S3Params::use_margin and the finalist reached that stage: lazy) ----
   bool margin_done = false;
   bool margin_rejected = false;  ///< evaluated and below min_margin_deg
@@ -253,7 +250,6 @@ struct S3Result {
   std::vector<S3Candidate> ranked;          ///< first 20 constraint-passing candidates by cost (post-hoc annotated)
   std::array<S3Candidate, 4> best_per_k;    ///< best of each k (a rejected one, with its reason, if none passes)
   int evaluations = 0;                      ///< evaluateGraspPose calls
-  double max_w_hat_passing = 0.0;           ///< max w_hat over ALL constraint-passing candidates (not just ranked)
   int posthoc_checks = 0;                   ///< candidates examined by the post-hoc stage
   double posthoc_dv_m_s = 0.0;              ///< |v_target - v_ee| of the chosen candidate (0 if not checked)
   double posthoc_min_margin_rad = 0.0;      ///< min joint margin along the path of the chosen one (0 if not checked)
