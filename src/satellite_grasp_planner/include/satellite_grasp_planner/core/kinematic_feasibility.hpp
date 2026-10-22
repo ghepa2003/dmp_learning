@@ -96,8 +96,8 @@ FeasibilityResult checkKinematicFeasibility(
     const std::shared_ptr<franka_cartesian_control::core::RobotModel>& robot_model,
     const franka_cartesian_control::core::RobotModel::JointVector& q0 =
         franka_cartesian_control::core::RobotModel::readyPose(),
-    double dt = 0.005,
-    double max_joint_violation_tol_rad = 1e-4,
+    double dt = kDefaultSimDtS,
+    double max_joint_violation_tol_rad = kDefaultJointViolationTolRad,
     const std::optional<franka_cartesian_control::core::RobotModel::JointVector>& q_ref = std::nullopt);
 
 }  // namespace core

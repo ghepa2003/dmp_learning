@@ -268,6 +268,10 @@ struct S3Result {
 /// @throws std::invalid_argument.
 void validateS3Params(const S3Params& params);
 
+/// Circular distance of two thetas [rad], in [0, pi]: fmod(|a - b|, 2*pi), folded to 2*pi - d above pi. Used by the
+/// post-hoc cluster rule of selectGraspS3 and by analysis/s3_landscape.cpp (--selftest) to replay it.
+double thetaDistRad(double a, double b);
+
 /// d = sqrt(d_pos^2/l^2 + orientation_weight * ori^2/angle_scale^2). @throws std::invalid_argument for
 /// non-positive/non-finite scales or a negative weight.
 double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double orientation_weight,

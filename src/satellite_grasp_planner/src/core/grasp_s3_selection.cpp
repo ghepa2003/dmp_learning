@@ -23,15 +23,15 @@ namespace {
 using haptic_dmp_learning::core::GraspPointId;
 
 constexpr std::size_t kRankedSize = 20;
-constexpr double kDt = 0.005;                // same step as kinematic_feasibility.hpp (dt default)
-constexpr double kRolloutViolTolRad = 1e-4;  // same as the max_joint_violation_tol_rad default of checkKinematicFeasibility
 constexpr GraspPointId kAllK[4] = {GraspPointId::kP0, GraspPointId::kP90, GraspPointId::kP180,
                                    GraspPointId::kP270};
 
+/// Finite and strictly positive.
+bool isFinitePositive(double v) { return std::isfinite(v) && v > 0.0; }
+
 void validateCtx(const S3Context& ctx) {
-  auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
   if (!ctx.prodmp_template) throw std::invalid_argument("selectGraspS3: ctx.prodmp_template is null.");
-  if (!pos(ctx.tau_launch_s)) throw std::invalid_argument("selectGraspS3: ctx.tau_launch_s must be > 0.");
+  if (!isFinitePositive(ctx.tau_launch_s)) throw std::invalid_argument("selectGraspS3: ctx.tau_launch_s must be > 0.");
   if (ctx.snapshot.omega_rad_s == 0.0) throw std::invalid_argument("selectGraspS3: omega is zero.");
   if (!std::isfinite(ctx.min_delay_s) || ctx.min_delay_s < 0.0) {
     throw std::invalid_argument("selectGraspS3: min_delay_s must be finite and >= 0.");
@@ -49,14 +49,6 @@ std::string rejectMaskToString(unsigned mask) {
   return s.empty() ? "none" : s;
 }
 
-/// Circular distance of two thetas, in [0, pi].
-double thetaDistRad(double a, double b) {
-  const double kPi = haptic_dmp_learning::core::kPi;
-  double d = std::fmod(std::abs(a - b), 2.0 * kPi);
-  if (d > kPi) d = 2.0 * kPi - d;
-  return d;
-}
-
 bool lessCost(const S3Candidate& a, const S3Candidate& b) {
   if (a.cost != b.cost) return a.cost < b.cost;
   if (a.eval.k != b.eval.k) return static_cast<int>(a.eval.k) < static_cast<int>(b.eval.k);
@@ -65,10 +57,16 @@ bool lessCost(const S3Candidate& a, const S3Candidate& b) {
 
 }  // namespace
 
+double thetaDistRad(double a, double b) {
+  const double kPi = haptic_dmp_learning::core::kPi;
+  double d = std::fmod(std::abs(a - b), 2.0 * kPi);
+  if (d > kPi) d = 2.0 * kPi - d;
+  return d;
+}
+
 void validateS3Params(const S3Params& params) {
-  auto pos = [](double v) { return std::isfinite(v) && v > 0.0; };
-  if (!pos(params.length_scale_m) || !pos(params.angle_scale_rad) || !pos(params.theta_step_deg) ||
-      !pos(params.theta_refine_step_deg) || !pos(params.r_trust_m) || !pos(params.delta_v_max_m_s)) {
+  if (!isFinitePositive(params.length_scale_m) || !isFinitePositive(params.angle_scale_rad) || !isFinitePositive(params.theta_step_deg) ||
+      !isFinitePositive(params.theta_refine_step_deg) || !isFinitePositive(params.r_trust_m) || !isFinitePositive(params.delta_v_max_m_s)) {
     throw std::invalid_argument("selectGraspS3: scales, steps, r_trust_m and delta_v_max_m_s must be finite and > 0.");
   }
   if (!(params.orientation_weight >= 0.0) || !std::isfinite(params.orientation_weight) ||
@@ -111,7 +109,7 @@ void validateS3Params(const S3Params& params) {
   if (!(std::isfinite(params.margin_follow_s) && params.margin_follow_s >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: s1.margin_follow_s must be finite and >= 0.");
   }
-  if (!(std::isfinite(params.margin_follow_dt_s) && params.margin_follow_dt_s > 0.0)) {
+  if (!isFinitePositive(params.margin_follow_dt_s)) {
     throw std::invalid_argument("selectGraspS3: s1.margin_follow_dt_s must be finite and > 0.");
   }
   if (params.use_margin && mode != S3Mode::kV2) {
@@ -147,16 +145,16 @@ void validateS3Params(const S3Params& params) {
       throw std::invalid_argument("selectGraspS3: |force_psi_deg| must be finite and <= 8.");
     }
   }
-  if (!(params.ik.max_iter > 0) || !pos(params.ik.pos_tol_m) || !pos(params.ik.ori_tol_rad) || !pos(params.ik.max_step_rad) ||
-      !pos(params.ik.damping) || !(std::isfinite(params.ik.nullspace_gain) && params.ik.nullspace_gain >= 0.0)) {
+  if (!(params.ik.max_iter > 0) || !isFinitePositive(params.ik.pos_tol_m) || !isFinitePositive(params.ik.ori_tol_rad) || !isFinitePositive(params.ik.max_step_rad) ||
+      !isFinitePositive(params.ik.damping) || !(std::isfinite(params.ik.nullspace_gain) && params.ik.nullspace_gain >= 0.0)) {
     throw std::invalid_argument("selectGraspS3: invalid IkParams.");
   }
 }
 
 double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double orientation_weight,
                   double angle_scale_rad) {
-  if (!(std::isfinite(length_scale_m) && length_scale_m > 0.0 && std::isfinite(angle_scale_rad) &&
-        angle_scale_rad > 0.0 && std::isfinite(orientation_weight) && orientation_weight >= 0.0)) {
+  if (!(isFinitePositive(length_scale_m) && isFinitePositive(angle_scale_rad) &&
+        std::isfinite(orientation_weight) && orientation_weight >= 0.0)) {
     throw std::invalid_argument("s3Distance: scales must be finite and > 0, weight finite and >= 0.");
   }
   const double a = d_pos_m / length_scale_m;
@@ -422,8 +420,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     prodmp_at_contact->setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
     prodmp_at_contact->setGoal(p0 + delta_g_demo);
     const double tau_contact = ctx.tau_contact_s > 0.0 ? ctx.tau_contact_s : ctx.prodmp_template->tau();
-    const int n_steps = std::max(1, static_cast<int>(std::ceil(tau_contact / kDt - 1e-9)));
-    for (int i = 0; i < n_steps; ++i) prodmp_at_contact->step(kDt);
+    const int n_steps = std::max(1, static_cast<int>(std::ceil(tau_contact / kDefaultSimDtS - 1e-9)));
+    for (int i = 0; i < n_steps; ++i) prodmp_at_contact->step(kDefaultSimDtS);
   }
   const std::shared_ptr<RobotModel> robot_ptr(&robot, [](RobotModel*) {});  // non-owning
 
@@ -433,9 +431,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
   auto inCluster = [&](const S3Candidate& c) {
     for (const auto& kt : checked) {
       if (kt.first != static_cast<int>(c.eval.k)) continue;
-      double dth = std::fmod(std::abs(c.eval.theta_rad - kt.second), 2.0 * kPi);
-      if (dth > kPi) dth = 2.0 * kPi - dth;
-      if (dth < cluster_rad) return true;
+      if (thetaDistRad(c.eval.theta_rad, kt.second) < cluster_rad) return true;
     }
     return false;
   };
@@ -551,7 +547,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       const S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
       const Eigen::Quaterniond orient = goalOrientation(c.eval);
       const FeasibilityResult fr = checkKinematicFeasibility(
-          *ctx.prodmp_template, c.eval.pose.position_world, orient, robot_ptr, q_start, kDt, kRolloutViolTolRad,
+          *ctx.prodmp_template, c.eval.pose.position_world, orient, robot_ptr, q_start, kDefaultSimDtS, kDefaultJointViolationTolRad,
           q_rollout_ref);
       ++res.rollouts_done;
       rec.rollout_done = true;
@@ -561,7 +557,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         rec.rollout_end.q_end = fr.q_end_post_step;
         rec.rollout_end.min_margin_rad = fr.min_joint_margin_rad;
         rec.rollout_end.joint = fr.min_margin_joint;
-        rec.rollout_end.t_rel_s = static_cast<double>(fr.min_margin_step + 1) * kDt - ctx.prodmp_template->tau();
+        rec.rollout_end.t_rel_s = static_cast<double>(fr.min_margin_step + 1) * kDefaultSimDtS - ctx.prodmp_template->tau();
         rec.rollout_end_valid = true;
       }
       rec.rollout_pos_err_mm = fr.pos_err_final_mm;
@@ -582,7 +578,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       const S3Candidate& c = accepted[static_cast<std::size_t>(rec.accepted_index)];
       FollowMarginParams fp;
       fp.follow_s = params.margin_follow_s;
-      fp.dt_approach_s = kDt;
+      fp.dt_approach_s = kDefaultSimDtS;
       fp.dt_follow_s = params.margin_follow_dt_s;
       const FollowMarginResult fm = followMargin(
           *ctx.prodmp_template, c.eval.pose.position_world, goalOrientation(c.eval), ctx.snapshot.center,
@@ -623,7 +619,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       const std::vector<ApproachSample> traj =
           timedApproachTrajectory(*ctx.prodmp_template, p0, quat0,
                                   cand.eval.pose.position_world + ctx.contact_to_end_offset,
-                                  goalOrientation(cand.eval), kDt);
+                                  goalOrientation(cand.eval), kDefaultSimDtS);
       ClearanceQuery q;
       q.trajectory = &traj;
       q.tau_s = ctx.prodmp_template->tau();

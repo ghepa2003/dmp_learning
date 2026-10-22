@@ -452,8 +452,8 @@ int main(int argc, char** argv) {
     pd.setGoal(in.p0 + in.delta_g_demo);
     {
       const double tc = in.tau_contact_s > 0.0 ? in.tau_contact_s : in.prodmp_template.tau();
-      const int n = std::max(1, static_cast<int>(std::ceil(tc / 0.005 - 1e-9)));
-      for (int i = 0; i < n; ++i) pd.step(0.005);
+      const int n = std::max(1, static_cast<int>(std::ceil(tc / kDefaultSimDtS - 1e-9)));
+      for (int i = 0; i < n; ++i) pd.step(kDefaultSimDtS);
     }
 
     // ---- collar frame / approach axis checks (psi = 0 construction) ----
@@ -556,8 +556,8 @@ int main(int argc, char** argv) {
         RobotModel::JointVector q_prev = bs.q;
         const RotatablePose base{ev.pose.position_world, bs.orientation};
         for (std::size_t j = 1; j < t_follow.size(); ++j) {
-          const RotatablePose pj = s3_landscape::rotateAboutSatelliteAxis(
-              snap.center, snap.axis, base, snap.omega_rad_s, t_follow[j]);
+          const RotatablePose pj = haptic_dmp_learning::core::rotatePoseAboutAxis(
+              snap.center, snap.axis, base, snap.omega_rad_s * t_follow[j]);
           const IkResult ik = solvePoseIk(robot, pj.position, pj.orientation, q_prev, in.q0, s3.ik);
           if (!ik.converged) {
             ok = false;
@@ -756,9 +756,7 @@ int main(int argc, char** argv) {
             bool covered = false;
             for (const auto& e : res.posthoc_log) {
               if (e.k != pass[q]->k) continue;
-              double dth = std::fmod(std::abs(e.theta_rad - pass[q]->theta_rad), 2.0 * kPi);
-              if (dth > kPi) dth = 2.0 * kPi - dth;
-              if (dth < s3.posthoc_cluster_deg * kPi / 180.0 || bits(e.theta_rad) == bits(pass[q]->theta_rad)) {
+              if (thetaDistRad(e.theta_rad, pass[q]->theta_rad) < s3.posthoc_cluster_deg * kPi / 180.0 || bits(e.theta_rad) == bits(pass[q]->theta_rad)) {
                 covered = true;
                 break;
               }

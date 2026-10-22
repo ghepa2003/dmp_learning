@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
     const Eigen::Quaterniond quat0 = robot.eeOrientation();
     const Eigen::Vector3d goal = det.eval.pose.position_world + in.contact_to_end_offset;
     const std::vector<ApproachSample> traj =
-        timedApproachTrajectory(in.prodmp_template, p0, quat0, goal, goalOrientation(det.eval), 0.005);
+        timedApproachTrajectory(in.prodmp_template, p0, quat0, goal, goalOrientation(det.eval), kDefaultSimDtS);
     const double tau = in.prodmp_template.tau();
 
     // ---- hand mesh (once), then the clearance ----

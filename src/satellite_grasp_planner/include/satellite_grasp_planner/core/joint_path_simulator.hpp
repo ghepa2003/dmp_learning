@@ -12,6 +12,13 @@
 namespace satellite_grasp_planner {
 namespace core {
 
+/// Integration step [s] of the offline approach simulation (default of JointPathSimulator::Params::dt,
+/// checkKinematicFeasibility, FollowMarginParams::dt_approach_s; step of the selector's rollout).
+constexpr double kDefaultSimDtS = 0.005;
+/// Tolerance [rad] by which a simulated joint may leave its limits before the path counts as infeasible
+/// (default max_joint_violation_tol_rad of checkKinematicFeasibility; the selector's rollout uses the same).
+constexpr double kDefaultJointViolationTolRad = 1e-4;
+
 using franka_cartesian_control::core::RobotModel;
 using franka_cartesian_control::core::VelocityIkSolver;
 
@@ -129,7 +136,7 @@ std::shared_ptr<RedundancyResolutionStrategy> createStrategyForController(
 class JointPathSimulator {
  public:
   struct Params {
-    double dt = 0.005;                                       ///< integration step (s); matches control_rate_hz_=200 default
+    double dt = kDefaultSimDtS;                              ///< integration step (s); matches control_rate_hz_=200 default
     std::shared_ptr<RedundancyResolutionStrategy> strategy;  ///< Redundancy resolution strategy
   };
 

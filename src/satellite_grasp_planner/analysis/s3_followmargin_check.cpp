@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
                                                : haptic_dmp_learning::core::applyRoll(pose.orientation_nominal_world, M_PI);
     FollowMarginParams fp;
     fp.follow_s = 3.0;
-    fp.dt_approach_s = 0.005;
+    fp.dt_approach_s = kDefaultSimDtS;
     fp.dt_follow_s = r.dt_follow_s;
     const FollowMarginResult fm = followMargin(in.prodmp_template, pose.position_world, ori, snap.center, snap.axis,
                                                r.omega_deg_s * M_PI / 180.0, in.robot, q_seed, q_ref, fp);

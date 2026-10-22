@@ -5,7 +5,8 @@
 // Follow arc: after AT_END the executor co-rotates the grasp target with the satellite
 // (haptic_dmp_learning/core/pose_rotation.hpp: rotatePoseAboutAxis, position' = c + R(axis, a)(p - c),
 // orientation' = R(axis, a) * orientation). The tool samples that arc at t_j = j * follow_s / (n - 1), j = 0..n-1, with
-// angle a_j = omega * t_j (omega signed). No rotation formula is rewritten here: rotatePoseAboutAxis is used as is.
+// angle a_j = omega * t_j (omega signed). No rotation formula is rewritten here: the caller (s3_landscape.cpp) uses
+// rotatePoseAboutAxis directly with the angle omega * t_j.
 
 #include <cmath>
 #include <stdexcept>
@@ -26,14 +27,6 @@ inline std::vector<double> followSampleTimes(double follow_s, int n) {
   std::vector<double> t(static_cast<std::size_t>(n));
   for (int j = 0; j < n; ++j) t[static_cast<std::size_t>(j)] = follow_s * static_cast<double>(j) / (n - 1);
   return t;
-}
-
-/// Grasp pose rotated by omega * t about the satellite axis (any direction) through @p center, as the executor's
-/// post-grasp follow (core::rotatePoseAboutAxis). @throws std::invalid_argument for a zero / non-finite axis.
-inline haptic_dmp_learning::core::RotatablePose rotateAboutSatelliteAxis(
-    const Eigen::Vector3d& center, const Eigen::Vector3d& axis,
-    const haptic_dmp_learning::core::RotatablePose& pose, double omega_rad_s, double t_s) {
-  return haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, pose, omega_rad_s * t_s);
 }
 
 }  // namespace s3_landscape

@@ -47,15 +47,15 @@ using satellite_grasp_planner::core::NullspaceBiasedResolution;
 
 namespace {
 
-constexpr double kViolTolRad = 1e-4;  // checkKinematicFeasibility: max_joint_violation_tol_rad default
+constexpr double kViolTolRad = satellite_grasp_planner::core::kDefaultJointViolationTolRad;  // checkKinematicFeasibility default
 
 struct Args {
   std::string weights, qdmp_weights, demo_params, urdf, out;
   std::vector<double> q_meas, goal_xyzw, p_goal, psi_ref_xyzw;
   Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
   double omega_deg_s = std::numeric_limits<double>::quiet_NaN();
-  double dt = 0.02;       // output / profile step [s]
-  double sim_dt = 0.005;  // integration step [s] (planner: checkKinematicFeasibility dt default)
+  double dt = 0.02;                                               // output / profile step [s]
+  double sim_dt = satellite_grasp_planner::core::kDefaultSimDtS;  // integration step [s] (planner: checkKinematicFeasibility dt default)
 };
 
 Args parseArgs(int argc, char** argv) {

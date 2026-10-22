@@ -197,18 +197,18 @@ TEST(S3LandscapeLog, FollowArcMatchesRotatePoseAboutZ) {
   pose.position = Eigen::Vector3d(2.0, 0.0, 0.7);
   pose.orientation = Eigen::Quaterniond::Identity();
   // known case: omega = pi/2 rad/s, t = 1 s -> +90 deg about z through the centre: (2,0) -> (1,1)
-  const RotatablePose r = s3_landscape::rotateAboutSatelliteAxis(center, axis, pose, M_PI / 2.0, 1.0);
+  const RotatablePose r = haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, pose, M_PI / 2.0 * 1.0);
   EXPECT_NEAR((r.position - Eigen::Vector3d(1.0, 1.0, 0.7)).norm(), 0.0, 1e-12);
   EXPECT_NEAR(r.orientation.angularDistance(Eigen::Quaterniond(Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()))), 0.0, 1e-12);
   // identical to the executor's function for a generic case
   const double omega = -2.0 * M_PI / 180.0, t = 2.0;
-  const RotatablePose a = s3_landscape::rotateAboutSatelliteAxis(center, axis, pose, omega, t);
+  const RotatablePose a = haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, pose, omega * t);
   const RotatablePose b = haptic_dmp_learning::core::rotatePoseAboutZ(center, pose, omega * t);
   EXPECT_EQ((a.position - b.position).norm(), 0.0);
   EXPECT_EQ(a.orientation.angularDistance(b.orientation), 0.0);
   // a non-vertical axis is accepted (rotatePoseAboutAxis); only a zero axis is rejected
-  EXPECT_NO_THROW(s3_landscape::rotateAboutSatelliteAxis(center, Eigen::Vector3d::UnitX(), pose, omega, t));
-  EXPECT_THROW(s3_landscape::rotateAboutSatelliteAxis(center, Eigen::Vector3d::Zero(), pose, omega, t), std::invalid_argument);
+  EXPECT_NO_THROW(haptic_dmp_learning::core::rotatePoseAboutAxis(center, Eigen::Vector3d::UnitX(), pose, omega * t));
+  EXPECT_THROW(haptic_dmp_learning::core::rotatePoseAboutAxis(center, Eigen::Vector3d::Zero(), pose, omega * t), std::invalid_argument);
   const auto ts = s3_landscape::followSampleTimes(3.0, 7);
   ASSERT_EQ(ts.size(), 7u);
   EXPECT_DOUBLE_EQ(ts.front(), 0.0);

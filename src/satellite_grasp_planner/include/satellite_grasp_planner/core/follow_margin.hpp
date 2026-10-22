@@ -30,9 +30,9 @@ namespace satellite_grasp_planner {
 namespace core {
 
 struct FollowMarginParams {
-  double follow_s = 0.0;         ///< duration of the simulated follow after AT_END [s], finite and >= 0; the caller always sets it (G16: 3.0)
-  double dt_approach_s = 0.005;  ///< integration step of the approach (as checkKinematicFeasibility and kDt of the selector)
-  double dt_follow_s = 0.01;     ///< integration step of the follow (step0c_margins.cpp: 0.01; run_rollout_follow_all.cpp: 0.1)
+  double follow_s = 0.0;                  ///< duration of the simulated follow after AT_END [s], finite and >= 0; the caller always sets it (G16: 3.0)
+  double dt_approach_s = kDefaultSimDtS;  ///< integration step of the approach (as checkKinematicFeasibility and the selector)
+  double dt_follow_s = 0.01;              ///< integration step of the follow (step0c_margins.cpp: 0.01; run_rollout_follow_all.cpp: 0.1)
 };
 
 struct FollowMarginResult {
