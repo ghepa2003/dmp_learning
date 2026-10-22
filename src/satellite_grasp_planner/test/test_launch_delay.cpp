@@ -1,11 +1,11 @@
-// Pure tests for launchDelay (no ROS). See core/launch_delay.hpp.
+// Pure tests for launchDelay (no ROS). See core/launch_plan.hpp.
 
 #include <gtest/gtest.h>
 
 #include <stdexcept>
 
 #include "haptic_dmp_learning/core/math_utils.hpp"
-#include "satellite_grasp_planner/core/launch_delay.hpp"
+#include "satellite_grasp_planner/core/launch_plan.hpp"
 
 using haptic_dmp_learning::core::degToRad;
 using satellite_grasp_planner::core::launchDelay;

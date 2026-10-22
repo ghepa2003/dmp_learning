@@ -34,7 +34,6 @@ add_library(${PROJECT_NAME}_core
   src/core/follow_margin.cpp
   src/core/joint_path_simulator.cpp
   src/core/kinematic_feasibility.cpp
-  src/core/launch_delay.cpp
   src/core/launch_plan.cpp
   src/core/selection_inputs.cpp
   src/core/start_state.cpp

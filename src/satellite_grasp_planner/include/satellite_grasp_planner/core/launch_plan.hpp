@@ -33,6 +33,13 @@ struct LaunchPlan {
   double phase_at_contact_rad = 0.0;
 };
 
+/// Delay [s] before launch so that the contact happens at phase theta_star:
+/// t = (theta_star - theta_now)/omega - tau_contact, omega SIGNED (clockwise rotation: omega < 0
+/// and theta decreases in time), reduced modulo the period T = 2*pi/|omega| into
+/// [min_delay_s, min_delay_s + T). @throws std::invalid_argument if omega == 0.
+double launchDelay(double theta_now_rad, double theta_star_rad, double omega_rad_s,
+                   double tau_contact_s, double min_delay_s = 0.0);
+
 /// Plans the launch so that contact happens at phase theta_star: theta_now = phaseAt(at_launch,
 /// t_now), delay = launchDelay(theta_now, theta_star, omega, tau_contact, min_delay), launch_time =
 /// t_now + delay, contact_time = launch_time + tau_contact, phase_at_contact = phaseAt(at_launch,
