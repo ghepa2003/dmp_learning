@@ -73,13 +73,13 @@ ProDMP loadProDmpFromYaml(const std::string& filepath, QuaternionDMP& qdmp_out,
  * after construction - see applyProDmpFeatureConfig() below.
  */
 struct ProDmpFeatureConfig {
-    int num_basis = 20;
-    double ridge_lambda = 1e-9;
-    bool position_filter_enabled = false;
-    double position_filter_window_sec = 0.20;
-    /// See ProDMP::setFixGoalToDemoEndpoint(): false (default) = goal estimated
-    /// jointly with the shape weights, same behaviour as before this flag existed.
-    bool fix_goal_to_demo_endpoint = false;
+  int num_basis = 20;
+  double ridge_lambda = 1e-9;
+  bool position_filter_enabled = false;
+  double position_filter_window_sec = 0.20;
+  /// See ProDMP::setFixGoalToDemoEndpoint(): false (default) = goal estimated
+  /// jointly with the shape weights, same behaviour as before this flag existed.
+  bool fix_goal_to_demo_endpoint = false;
 };
 
 /**

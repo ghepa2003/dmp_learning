@@ -18,9 +18,9 @@ namespace core {
 /// omega is negative there.
 inline Eigen::Vector3d surfaceVelocity(const CubeSatelliteModel& satellite, GraspPointId k,
                                        double theta_rad, double omega_rad_s) {
-    const Eigen::Vector3d r = satellite.graspPoseAt(k, theta_rad).position_world -
-                              satellite.cubeCenterWorld();
-    return (omega_rad_s * satellite.axisWorld()).cross(r);
+  const Eigen::Vector3d r = satellite.graspPoseAt(k, theta_rad).position_world -
+                            satellite.cubeCenterWorld();
+  return (omega_rad_s * satellite.axisWorld()).cross(r);
 }
 
 }  // namespace core

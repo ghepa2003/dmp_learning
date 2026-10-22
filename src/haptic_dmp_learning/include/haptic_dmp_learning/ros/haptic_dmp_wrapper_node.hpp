@@ -12,7 +12,7 @@
 #include "haptic_dmp_learning/core/demonstration_recorder.hpp"
 #include "haptic_dmp_learning/core/dmp.hpp"
 #include "haptic_dmp_learning/core/joint_states_csv_io.hpp"
-#include "haptic_dmp_learning/core/quaternion_dmp.hpp" 
+#include "haptic_dmp_learning/core/quaternion_dmp.hpp"
 
 namespace haptic_dmp_learning {
 namespace ros_wrapper {
@@ -30,59 +30,59 @@ namespace ros_wrapper {
  *      and serializes learned parameters to YAML.
  */
 class HapticDmpWrapperNode : public rclcpp::Node {
-public:
-    HapticDmpWrapperNode();
+ public:
+  HapticDmpWrapperNode();
 
-private:
-    void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-    void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
-    void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
+ private:
+  void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+  void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
+  void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
 
-    void startRecording();
-    void stopRecordingAndLearn();
-    void saveJointStates();
-    void saveDemoToCsv(const std::string& path) const;
+  void startRecording();
+  void stopRecordingAndLearn();
+  void saveJointStates();
+  void saveDemoToCsv(const std::string& path) const;
 
-    // ROS interfaces
-    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
+  // ROS interfaces
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
 
-    // Core mathematical objects
-    core::DemonstrationRecorder recorder_;
-    core::DMP dmp_;
-    core::QuaternionDMP quat_dmp_;
+  // Core mathematical objects
+  core::DemonstrationRecorder recorder_;
+  core::DMP dmp_;
+  core::QuaternionDMP quat_dmp_;
 
-    // /joint_states buffered during the recording interval (same start/stop as the Cartesian demo)
-    std::vector<core::joint_states_csv_io::JointStateSample> joint_state_samples_;
-    std::size_t joint_states_skipped_ = 0;  ///< messages lacking one of fer_joint1..7
+  // /joint_states buffered during the recording interval (same start/stop as the Cartesian demo)
+  std::vector<core::joint_states_csv_io::JointStateSample> joint_state_samples_;
+  std::size_t joint_states_skipped_ = 0;  ///< messages lacking one of fer_joint1..7
 
-    // State machine tracking
-    bool recording_;
-    rclcpp::Time record_start_time_;
-    std::vector<int32_t> prev_buttons_;  ///< Stores previous joy button state for rising-edge detection
+  // State machine tracking
+  bool recording_;
+  rclcpp::Time record_start_time_;
+  std::vector<int32_t> prev_buttons_;  ///< Stores previous joy button state for rising-edge detection
 
-    // Quaternion double-cover continuity. The Geomagic Touch driver sometimes
-    // reports a physically identical rotation as -q, a representation sign flip
-    // that becomes a ~pi jump in QuaternionDMP's log-map increments. A negative
-    // dot product between consecutive raw orientations is such a transition:
-    // toggle a running sign and apply it to every later sample so the recorded
-    // track stays continuous. Compared raw-to-raw so the count is the number of
-    // transitions, not the number of negated samples.
-    bool has_last_orientation_ = false;
-    Eigen::Quaterniond last_corrected_orientation_ = Eigen::Quaterniond::Identity();
-    bool quat_negate_parity_ = false;
-    std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
+  // Quaternion double-cover continuity. The Geomagic Touch driver sometimes
+  // reports a physically identical rotation as -q, a representation sign flip
+  // that becomes a ~pi jump in QuaternionDMP's log-map increments. A negative
+  // dot product between consecutive raw orientations is such a transition:
+  // toggle a running sign and apply it to every later sample so the recorded
+  // track stays continuous. Compared raw-to-raw so the count is the number of
+  // transitions, not the number of negated samples.
+  bool has_last_orientation_ = false;
+  Eigen::Quaterniond last_corrected_orientation_ = Eigen::Quaterniond::Identity();
+  bool quat_negate_parity_ = false;
+  std::size_t quat_sign_flips_corrected_ = 0;  ///< transitions this recording
 
-    // ROS Parameters
-    std::string pose_topic_;  ///< master pose input topic (declared, not remap-dependent)
-    std::string output_yaml_path_;
-    std::string output_demo_csv_path_;
-    std::string joint_states_topic_;
-    std::string output_joint_states_csv_path_;
-    int n_basis_;
-    double alpha_x_, alpha_z_, beta_z_;
-    std::string feature_flags_path_;
+  // ROS Parameters
+  std::string pose_topic_;  ///< master pose input topic (declared, not remap-dependent)
+  std::string output_yaml_path_;
+  std::string output_demo_csv_path_;
+  std::string joint_states_topic_;
+  std::string output_joint_states_csv_path_;
+  int n_basis_;
+  double alpha_x_, alpha_z_, beta_z_;
+  std::string feature_flags_path_;
 };
 
 }  // namespace ros_wrapper

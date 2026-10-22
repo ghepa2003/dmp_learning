@@ -52,137 +52,138 @@ namespace ros_wrapper {
  *     calibration are replayed); it is not generated.
  */
 class DemoReplaySyncOrchestratorNode : public rclcpp::Node {
-public:
-    DemoReplaySyncOrchestratorNode();
-    ~DemoReplaySyncOrchestratorNode() override;
+ public:
+  DemoReplaySyncOrchestratorNode();
+  ~DemoReplaySyncOrchestratorNode() override;
 
-    bool failed() const { return failed_; }
+  bool failed() const { return failed_; }
 
-private:
-    enum class Mode { kDemo, kReplay };
-    enum class Phase {
-        kCheckClock,
-        kLaunchRecording,   // demo only
-        kWaitButtonStart,   // demo only
-        kSpawnTarget,
-        kWaitOdom,
-        kWaitSync,
-        kEmitStartSeed,     // demo only
-        kEmitStartEdge,     // demo only
-        kLaunchReplay,      // replay only
-        kRunning,
-        kDone,
-        kError
-    };
+ private:
+  enum class Mode { kDemo,
+                    kReplay };
+  enum class Phase {
+    kCheckClock,
+    kLaunchRecording,  // demo only
+    kWaitButtonStart,  // demo only
+    kSpawnTarget,
+    kWaitOdom,
+    kWaitSync,
+    kEmitStartSeed,  // demo only
+    kEmitStartEdge,  // demo only
+    kLaunchReplay,   // replay only
+    kRunning,
+    kDone,
+    kError
+  };
 
-    // Orchestration --------------------------------------------------------
-    void tick();
-    void fatal(const std::string& why);
+  // Orchestration --------------------------------------------------------
+  void tick();
+  void fatal(const std::string& why);
 
-    // Subscriptions ------------------------------------------------------
-    void clockCallback(const rosgraph_msgs::msg::Clock::SharedPtr msg);
-    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
-    void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
+  // Subscriptions ------------------------------------------------------
+  void clockCallback(const rosgraph_msgs::msg::Clock::SharedPtr msg);
+  void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+  void buttonsCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
 
-    // Helpers ------------------------------------------------------------
-    std::string generateRunId() const;
-    void publishSyncedButtons(int b0, int b1);
-    void publishGripperTrigger();
-    // Shared by the legacy buttons[0] path and the single-button sequencer.
-    void startRequested();       // spawn target + sync window (recording_ = true)
-    void stopRequested();        // republish [0,1] on the synced topic, phase -> kDone
-    // Trigger Joy {0,0,1} + timed gripper close ramp (legacy SPACE and 2nd press).
-    void triggerGraspClosure(const char* source);
-    // One press (stylus edge or SPACE) of the single button, through the sequencer.
-    void handleButtonPress(const char* source);
-    void logSequencerTransition(const char* why, core::button_sequencer::State from,
-                                core::button_sequencer::State to) const;
-    void checkKeyboard();
-    void gripperRampTick();
-    pid_t launchChild(const std::vector<std::string>& argv, const std::string& tag);
-    void stopChildren();
-    std::string weightsPathForRunId() const;
-    std::string prodmpWeightsPathForRunId() const;
-    std::string demoCsvPathForRunId() const;
-    std::string graspMonitorParamsPath() const;
-    std::string hapticDmpParamsPath() const;
+  // Helpers ------------------------------------------------------------
+  std::string generateRunId() const;
+  void publishSyncedButtons(int b0, int b1);
+  void publishGripperTrigger();
+  // Shared by the legacy buttons[0] path and the single-button sequencer.
+  void startRequested();  // spawn target + sync window (recording_ = true)
+  void stopRequested();   // republish [0,1] on the synced topic, phase -> kDone
+  // Trigger Joy {0,0,1} + timed gripper close ramp (legacy SPACE and 2nd press).
+  void triggerGraspClosure(const char* source);
+  // One press (stylus edge or SPACE) of the single button, through the sequencer.
+  void handleButtonPress(const char* source);
+  void logSequencerTransition(const char* why, core::button_sequencer::State from,
+                              core::button_sequencer::State to) const;
+  void checkKeyboard();
+  void gripperRampTick();
+  pid_t launchChild(const std::vector<std::string>& argv, const std::string& tag);
+  void stopChildren();
+  std::string weightsPathForRunId() const;
+  std::string prodmpWeightsPathForRunId() const;
+  std::string demoCsvPathForRunId() const;
+  std::string graspMonitorParamsPath() const;
+  std::string hapticDmpParamsPath() const;
 
-    // Parameters
-    Mode mode_;
-    std::string run_id_;
-    double clock_wait_timeout_sec_;
-    double odom_wait_timeout_sec_;
-    double sync_delay_sec_;
-    std::string target_name_;
-    double tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_;
-    double tsx_, tsy_, tsz_, tmass_;  // free_target_object box size + mass
-    double target_yaw_;               // forwarded to free_target_object (yaw) [rad]
-    std::string demo_csv_path_;       // forwarded to demo_replay_sync.launch.py when non-empty
-    bool target_with_collar_;         // forwarded to free_target_object (with_collar)
-    bool target_collar_collision_;    // forwarded to free_target_object (collar_collision)
-    std::string buttons_topic_;
-    std::string buttons_synced_topic_;
-    // "legacy" | "single_button" (see class doc). Only meaningful in demo mode.
-    bool single_button_ = true;
-    int button_index_ = 0;
-    bool use_csv_playback_;
-    // Anchored /target_pose of the recorder (demo mode); forwarded to demo_replay_sync.launch.py.
-    bool anchor_enabled_ = false;
-    std::vector<double> anchor_position_m_;
-    std::vector<double> anchor_orientation_xyzw_;
-    double hard_force_limit_n_;  // forwarded to grasp_state_machine (replay)
-    // Forwarded to dmp_gazebo_executor_node (replay): whether it waits for /
-    // retargets to the live target odometry, and the topic + timeout it uses.
-    bool target_odom_required_;
-    std::string target_odom_topic_;
-    double target_odom_timeout_sec_;
-    // Movement-primitive formulation for the replay executor: "dmp" (default,
-    // behaviour unchanged) launches dmp_gazebo_executor_node; "prodmp" launches
-    // the twin prodmp_gazebo_executor_node. Any other value is fail-loud.
-    std::string mp_formulation_;
-    // Gripper close ramp (see core/gripper_ramp.hpp); defaults reproduce the
-    // previous single-step endpoints (0.06 = open, 0.0 = closed).
-    double gripper_open_position_;
-    double gripper_closed_position_;
-    double gripper_close_ramp_duration_sec_;
+  // Parameters
+  Mode mode_;
+  std::string run_id_;
+  double clock_wait_timeout_sec_;
+  double odom_wait_timeout_sec_;
+  double sync_delay_sec_;
+  std::string target_name_;
+  double tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_;
+  double tsx_, tsy_, tsz_, tmass_;  // free_target_object box size + mass
+  double target_yaw_;               // forwarded to free_target_object (yaw) [rad]
+  std::string demo_csv_path_;       // forwarded to demo_replay_sync.launch.py when non-empty
+  bool target_with_collar_;         // forwarded to free_target_object (with_collar)
+  bool target_collar_collision_;    // forwarded to free_target_object (collar_collision)
+  std::string buttons_topic_;
+  std::string buttons_synced_topic_;
+  // "legacy" | "single_button" (see class doc). Only meaningful in demo mode.
+  bool single_button_ = true;
+  int button_index_ = 0;
+  bool use_csv_playback_;
+  // Anchored /target_pose of the recorder (demo mode); forwarded to demo_replay_sync.launch.py.
+  bool anchor_enabled_ = false;
+  std::vector<double> anchor_position_m_;
+  std::vector<double> anchor_orientation_xyzw_;
+  double hard_force_limit_n_;  // forwarded to grasp_state_machine (replay)
+  // Forwarded to dmp_gazebo_executor_node (replay): whether it waits for /
+  // retargets to the live target odometry, and the topic + timeout it uses.
+  bool target_odom_required_;
+  std::string target_odom_topic_;
+  double target_odom_timeout_sec_;
+  // Movement-primitive formulation for the replay executor: "dmp" (default,
+  // behaviour unchanged) launches dmp_gazebo_executor_node; "prodmp" launches
+  // the twin prodmp_gazebo_executor_node. Any other value is fail-loud.
+  std::string mp_formulation_;
+  // Gripper close ramp (see core/gripper_ramp.hpp); defaults reproduce the
+  // previous single-step endpoints (0.06 = open, 0.0 = closed).
+  double gripper_open_position_;
+  double gripper_closed_position_;
+  double gripper_close_ramp_duration_sec_;
 
-    // ROS interfaces
-    rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr clock_sub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
-    rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr buttons_synced_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
-    // One-shot event: the SPACE-triggered gripper close ramp has finished, i.e.
-    // the fingers have reached gripper_closed_position_ and real grasp contact
-    // (if any) now exists. grasp_force_calibration_node captures force on this.
-    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
-    rclcpp::TimerBase::SharedPtr tick_timer_;
-    rclcpp::TimerBase::SharedPtr gripper_init_timer_;
-    rclcpp::TimerBase::SharedPtr keyboard_timer_;
-    rclcpp::TimerBase::SharedPtr gripper_ramp_timer_;  // dedicated, self-cancelling
+  // ROS interfaces
+  rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr clock_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr buttons_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr buttons_synced_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
+  // One-shot event: the SPACE-triggered gripper close ramp has finished, i.e.
+  // the fingers have reached gripper_closed_position_ and real grasp contact
+  // (if any) now exists. grasp_force_calibration_node captures force on this.
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
+  rclcpp::TimerBase::SharedPtr tick_timer_;
+  rclcpp::TimerBase::SharedPtr gripper_init_timer_;
+  rclcpp::TimerBase::SharedPtr keyboard_timer_;
+  rclcpp::TimerBase::SharedPtr gripper_ramp_timer_;  // dedicated, self-cancelling
 
-    // State
-    Phase phase_ = Phase::kCheckClock;
-    bool failed_ = false;
-    std::chrono::steady_clock::time_point node_start_;
-    std::chrono::steady_clock::time_point phase_entered_;
-    std::chrono::steady_clock::time_point gripper_ramp_start_;
+  // State
+  Phase phase_ = Phase::kCheckClock;
+  bool failed_ = false;
+  std::chrono::steady_clock::time_point node_start_;
+  std::chrono::steady_clock::time_point phase_entered_;
+  std::chrono::steady_clock::time_point gripper_ramp_start_;
 
-    bool clock_seen_ = false;
-    double last_clock_sec_ = 0.0;
+  bool clock_seen_ = false;
+  double last_clock_sec_ = 0.0;
 
-    bool odom_seen_ = false;
-    double t0_sim_ = 0.0;
+  bool odom_seen_ = false;
+  double t0_sim_ = 0.0;
 
-    std::vector<int32_t> prev_buttons_;
-    bool recording_ = false;
+  std::vector<int32_t> prev_buttons_;
+  bool recording_ = false;
 
-    bool gripper_trigger_sent_ = false;
-    core::button_sequencer::ButtonSequencer sequencer_;  // single_button scheme only
-    bool termios_modified_ = false;
-    struct termios orig_termios_{};
+  bool gripper_trigger_sent_ = false;
+  core::button_sequencer::ButtonSequencer sequencer_;  // single_button scheme only
+  bool termios_modified_ = false;
+  struct termios orig_termios_ {};
 
-    std::vector<std::pair<pid_t, std::string>> children_;
+  std::vector<std::pair<pid_t, std::string>> children_;
 };
 
 }  // namespace ros_wrapper

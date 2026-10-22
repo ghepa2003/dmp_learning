@@ -29,20 +29,20 @@ static_assert(si::kGraspStatusPosthocFailed == GraspCommand::STATUS_POSTHOC_FAIL
 /// Copies the fields the executor uses (position only: goal orientation, wrist_flip, k, provisional_delay_s and
 /// the candidate diagnostics are not read). header.stamp -> seconds via rclcpp::Time.
 inline si::GraspCommandInputs toGraspCommandInputs(const GraspCommand& msg) {
-    si::GraspCommandInputs in;
-    in.status = msg.status;
-    in.frame_id = msg.header.frame_id;
-    in.stamp_s = rclcpp::Time(msg.header.stamp).seconds();
-    in.goal_position = Eigen::Vector3d(msg.goal_pose.position.x, msg.goal_pose.position.y, msg.goal_pose.position.z);
-    in.start_position = Eigen::Vector3d(msg.start_position.x, msg.start_position.y, msg.start_position.z);
-    in.theta_star_rad = msg.theta_star_rad;
-    in.omega_rad_s = msg.omega_rad_s;
-    in.contact_time_s = msg.contact_time_s;
-    in.snapshot_theta_rad = msg.snapshot_theta_rad;
-    in.snapshot_t_s = msg.snapshot_t_s;
-    in.weights_sha256 = msg.weights_sha256;
-    in.evaluations = msg.evaluations;
-    return in;
+  si::GraspCommandInputs in;
+  in.status = msg.status;
+  in.frame_id = msg.header.frame_id;
+  in.stamp_s = rclcpp::Time(msg.header.stamp).seconds();
+  in.goal_position = Eigen::Vector3d(msg.goal_pose.position.x, msg.goal_pose.position.y, msg.goal_pose.position.z);
+  in.start_position = Eigen::Vector3d(msg.start_position.x, msg.start_position.y, msg.start_position.z);
+  in.theta_star_rad = msg.theta_star_rad;
+  in.omega_rad_s = msg.omega_rad_s;
+  in.contact_time_s = msg.contact_time_s;
+  in.snapshot_theta_rad = msg.snapshot_theta_rad;
+  in.snapshot_t_s = msg.snapshot_t_s;
+  in.weights_sha256 = msg.weights_sha256;
+  in.evaluations = msg.evaluations;
+  return in;
 }
 
 }  // namespace ros_wrapper

@@ -40,23 +40,23 @@ inline constexpr double kFrameOffsetAngleRad = M_PI / 2.0;
 
 /// Rotation axis of the mounting offset, in the Geomagic base frame.
 inline const Eigen::Vector3d& frameOffsetAxis() {
-    static const Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
-    return axis;
+  static const Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
+  return axis;
 }
 
 /// Quaternion of the fixed omni_base -> fer_link0 rotation R_z(+90 deg).
 /// Derived once from kFrameOffsetAngleRad / frameOffsetAxis(); every other
 /// function in this file is expressed through it.
 inline const Eigen::Quaterniond& frameOffsetQuaternion() {
-    static const Eigen::Quaterniond q_offset(
-        Eigen::AngleAxisd(kFrameOffsetAngleRad, frameOffsetAxis()));
-    return q_offset;
+  static const Eigen::Quaterniond q_offset(
+      Eigen::AngleAxisd(kFrameOffsetAngleRad, frameOffsetAxis()));
+  return q_offset;
 }
 
 /// Re-express a position given in the Geomagic base frame (omni_base) in the
 /// Franka base frame (fer_link0).
 inline Eigen::Vector3d rotatePosition(const Eigen::Vector3d& p_geomagic) {
-    return frameOffsetQuaternion() * p_geomagic;
+  return frameOffsetQuaternion() * p_geomagic;
 }
 
 /// Re-express an orientation given in the Geomagic base frame (omni_base) in
@@ -64,7 +64,7 @@ inline Eigen::Vector3d rotatePosition(const Eigen::Vector3d& p_geomagic) {
 /// (not q_offset (x) q (x) q_offset^-1): this restates the frame the
 /// orientation is written in, it does not rotate a vector by it.
 inline Eigen::Quaterniond rotateOrientation(const Eigen::Quaterniond& q_geomagic) {
-    return frameOffsetQuaternion() * q_geomagic;
+  return frameOffsetQuaternion() * q_geomagic;
 }
 
 }  // namespace frame_correction

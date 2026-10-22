@@ -20,12 +20,12 @@ namespace s3_landscape {
 
 /// n >= 2 equally spaced times in [0, follow_s]. @throws std::invalid_argument for n < 2 or follow_s < 0.
 inline std::vector<double> followSampleTimes(double follow_s, int n) {
-    if (n < 2 || !(follow_s >= 0.0) || !std::isfinite(follow_s)) {
-        throw std::invalid_argument("followSampleTimes: n >= 2 and finite follow_s >= 0 required.");
-    }
-    std::vector<double> t(static_cast<std::size_t>(n));
-    for (int j = 0; j < n; ++j) t[static_cast<std::size_t>(j)] = follow_s * static_cast<double>(j) / (n - 1);
-    return t;
+  if (n < 2 || !(follow_s >= 0.0) || !std::isfinite(follow_s)) {
+    throw std::invalid_argument("followSampleTimes: n >= 2 and finite follow_s >= 0 required.");
+  }
+  std::vector<double> t(static_cast<std::size_t>(n));
+  for (int j = 0; j < n; ++j) t[static_cast<std::size_t>(j)] = follow_s * static_cast<double>(j) / (n - 1);
+  return t;
 }
 
 /// Grasp pose rotated by omega * t about the satellite axis (any direction) through @p center, as the executor's
@@ -33,7 +33,7 @@ inline std::vector<double> followSampleTimes(double follow_s, int n) {
 inline haptic_dmp_learning::core::RotatablePose rotateAboutSatelliteAxis(
     const Eigen::Vector3d& center, const Eigen::Vector3d& axis,
     const haptic_dmp_learning::core::RotatablePose& pose, double omega_rad_s, double t_s) {
-    return haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, pose, omega_rad_s * t_s);
+  return haptic_dmp_learning::core::rotatePoseAboutAxis(center, axis, pose, omega_rad_s * t_s);
 }
 
 }  // namespace s3_landscape

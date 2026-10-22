@@ -43,69 +43,69 @@ namespace core {
  *      tau_cmd = tau_prev + clamp(tau_d - tau_prev, -delta_tau_max, +delta_tau_max)
  */
 class CartesianImpedanceSolver {
-public:
-    using JointVector = RobotModel::JointVector;
-    using Matrix6d = Eigen::Matrix<double, 6, 6>;
-    using Vector6d = Eigen::Matrix<double, 6, 1>;
+ public:
+  using JointVector = RobotModel::JointVector;
+  using Matrix6d = Eigen::Matrix<double, 6, 6>;
+  using Vector6d = Eigen::Matrix<double, 6, 1>;
 
-    struct Params {
-        // Task-space compliance gains (N/m and Nm/rad)
-        double translational_stiffness = 2000.0;  ///< Cartesian linear stiffness (N/m)
-        double rotational_stiffness = 150.0;      ///< Cartesian angular stiffness (Nm/rad)
-        double translational_damping = 89.0;      ///< Cartesian linear damping (Ns/m)
-        double rotational_damping = 7.0;          ///< Cartesian angular damping (Nms/rad)
+  struct Params {
+    // Task-space compliance gains (N/m and Nm/rad)
+    double translational_stiffness = 2000.0;  ///< Cartesian linear stiffness (N/m)
+    double rotational_stiffness = 150.0;      ///< Cartesian angular stiffness (Nm/rad)
+    double translational_damping = 89.0;      ///< Cartesian linear damping (Ns/m)
+    double rotational_damping = 7.0;          ///< Cartesian angular damping (Nms/rad)
 
-        // Nullspace posture compliance gains
-        double nullspace_stiffness = 0.2;          ///< Uniform nullspace stiffness (Nm/rad)
-        double joint1_nullspace_stiffness = 100.0; ///< Pre-multiplier for joint 1 nullspace stiffness
-        // Default matches the deployed value in src/franka_gazebo_overrides/franka_gazebo_controllers.yaml.
-        double nullspace_pinv_damping = 0.02;      ///< Regularization lambda for (J^T)^# pseudo-inverse
+    // Nullspace posture compliance gains
+    double nullspace_stiffness = 0.2;           ///< Uniform nullspace stiffness (Nm/rad)
+    double joint1_nullspace_stiffness = 100.0;  ///< Pre-multiplier for joint 1 nullspace stiffness
+    // Default matches the deployed value in src/franka_gazebo_overrides/franka_gazebo_controllers.yaml.
+    double nullspace_pinv_damping = 0.02;  ///< Regularization lambda for (J^T)^# pseudo-inverse
 
-        // Actuator safety
-        double delta_tau_max = 1.0;                ///< Maximum torque rate limit per cycle (Nm/cycle)
-        bool compensate_gravity_internally = false; ///< True if gravity torque should be added explicitly
-    };
+    // Actuator safety
+    double delta_tau_max = 1.0;                  ///< Maximum torque rate limit per cycle (Nm/cycle)
+    bool compensate_gravity_internally = false;  ///< True if gravity torque should be added explicitly
+  };
 
-    CartesianImpedanceSolver();
-    explicit CartesianImpedanceSolver(const Params& params);
+  CartesianImpedanceSolver();
+  explicit CartesianImpedanceSolver(const Params& params);
 
-    /// @brief Sets desired joint equilibrium configuration for nullspace posture control.
-    void setNullspaceTarget(const JointVector& q_d_nullspace) { q_d_nullspace_ = q_d_nullspace; }
-    const JointVector& nullspaceTarget() const { return q_d_nullspace_; }
+  /// @brief Sets desired joint equilibrium configuration for nullspace posture control.
+  void setNullspaceTarget(const JointVector& q_d_nullspace) { q_d_nullspace_ = q_d_nullspace; }
+  const JointVector& nullspaceTarget() const { return q_d_nullspace_; }
 
-    /// @brief Returns the nullspace joint torque computed during the last computeTorque() call.
-    /// Diagnostic accessor only — does not affect the commanded torque output.
-    const JointVector& lastNullspaceTorque() const { return tau_nullspace_last_; }
+  /// @brief Returns the nullspace joint torque computed during the last computeTorque() call.
+  /// Diagnostic accessor only — does not affect the commanded torque output.
+  const JointVector& lastNullspaceTorque() const { return tau_nullspace_last_; }
 
-    /// @brief Returns the sensorless contact wrench estimate computed during the last computeTorque() call.
-    /// Diagnostic accessor only — does not affect the commanded torque output. See DESIGN_NOTES.md.
-    const Vector6d& lastEstimatedContactWrench() const { return estimated_contact_wrench_last_; }
+  /// @brief Returns the sensorless contact wrench estimate computed during the last computeTorque() call.
+  /// Diagnostic accessor only — does not affect the commanded torque output. See DESIGN_NOTES.md.
+  const Vector6d& lastEstimatedContactWrench() const { return estimated_contact_wrench_last_; }
 
-    /**
-     * @brief Computes commanded joint torques for the current control cycle.
-     * @param model Updated robot kinematic and dynamic model.
-     * @param err Cartesian pose error (target - current).
-     * @param q Current joint positions (rad).
-     * @param dq Current joint velocities (rad/s).
-     * @param tau_prev Commanded torque from previous cycle (for rate saturation).
-     * @return JointVector Commanded joint torque vector (Nm, 7x1).
-     */
-    JointVector computeTorque(const RobotModel& model, const CartesianError& err,
-                               const JointVector& q, const JointVector& dq,
-                               const JointVector& tau_prev);
+  /**
+   * @brief Computes commanded joint torques for the current control cycle.
+   * @param model Updated robot kinematic and dynamic model.
+   * @param err Cartesian pose error (target - current).
+   * @param q Current joint positions (rad).
+   * @param dq Current joint velocities (rad/s).
+   * @param tau_prev Commanded torque from previous cycle (for rate saturation).
+   * @return JointVector Commanded joint torque vector (Nm, 7x1).
+   */
+  JointVector computeTorque(const RobotModel& model, const CartesianError& err,
+                            const JointVector& q, const JointVector& dq,
+                            const JointVector& tau_prev);
 
-    const Params& params() const { return params_; }
-    void setParams(const Params& p) { params_ = p; }
+  const Params& params() const { return params_; }
+  void setParams(const Params& p) { params_ = p; }
 
-private:
-    Params params_;
-    JointVector q_d_nullspace_ = JointVector::Zero();
-    JointVector tau_nullspace_last_ = JointVector::Zero();
-    Vector6d estimated_contact_wrench_last_ = Vector6d::Zero();
+ private:
+  Params params_;
+  JointVector q_d_nullspace_ = JointVector::Zero();
+  JointVector tau_nullspace_last_ = JointVector::Zero();
+  Vector6d estimated_contact_wrench_last_ = Vector6d::Zero();
 
-    Matrix6d stiffnessMatrix() const;
-    Matrix6d dampingMatrix() const;
-    JointVector saturateTorqueRate(const JointVector& tau_calc, const JointVector& tau_prev) const;
+  Matrix6d stiffnessMatrix() const;
+  Matrix6d dampingMatrix() const;
+  JointVector saturateTorqueRate(const JointVector& tau_calc, const JointVector& tau_prev) const;
 };
 
 }  // namespace core

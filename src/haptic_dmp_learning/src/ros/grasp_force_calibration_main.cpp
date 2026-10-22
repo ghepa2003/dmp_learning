@@ -9,16 +9,16 @@
  * spinning a misconfigured node.
  */
 int main(int argc, char** argv) {
-    rclcpp::init(argc, argv);
-    try {
-        auto node = std::make_shared<haptic_dmp_learning::ros_wrapper::GraspForceCalibrationNode>();
-        rclcpp::spin(node);
-    } catch (const std::exception& e) {
-        RCLCPP_FATAL(rclcpp::get_logger("grasp_force_calibration_node"),
-                     "Fatal initialization error: %s", e.what());
-        rclcpp::shutdown();
-        return 1;
-    }
+  rclcpp::init(argc, argv);
+  try {
+    auto node = std::make_shared<haptic_dmp_learning::ros_wrapper::GraspForceCalibrationNode>();
+    rclcpp::spin(node);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("grasp_force_calibration_node"),
+                 "Fatal initialization error: %s", e.what());
     rclcpp::shutdown();
-    return 0;
+    return 1;
+  }
+  rclcpp::shutdown();
+  return 0;
 }

@@ -21,10 +21,10 @@ using franka_cartesian_control::core::VelocityIkSolver;
 /// callers are responsible for expressing candidates in that
 /// frame already.
 struct CartesianSample {
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
-    Eigen::Vector3d linear_velocity = Eigen::Vector3d::Zero();
-    Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+  Eigen::Vector3d linear_velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
 };
 
 /**
@@ -32,22 +32,22 @@ struct CartesianSample {
  *        during offline forward joint-path simulation.
  */
 class RedundancyResolutionStrategy {
-public:
-    virtual ~RedundancyResolutionStrategy() = default;
+ public:
+  virtual ~RedundancyResolutionStrategy() = default;
 
-    /**
-     * @brief Computes commanded joint velocity dq for a simulation step.
-     * @param model Updated robot model at current configuration q (FK + Jacobian).
-     * @param target Desired Cartesian sample (target pose + feedforward twist).
-     * @param q Current joint configuration.
-     * @param q0 Initial / ready joint configuration (used as nullspace posture target).
-     * @return Commanded joint velocity dq (7x1).
-     */
-    virtual RobotModel::JointVector computeJointVelocity(
-        const RobotModel& model,
-        const CartesianSample& target,
-        const RobotModel::JointVector& q,
-        const RobotModel::JointVector& q0) const = 0;
+  /**
+   * @brief Computes commanded joint velocity dq for a simulation step.
+   * @param model Updated robot model at current configuration q (FK + Jacobian).
+   * @param target Desired Cartesian sample (target pose + feedforward twist).
+   * @param q Current joint configuration.
+   * @param q0 Initial / ready joint configuration (used as nullspace posture target).
+   * @return Commanded joint velocity dq (7x1).
+   */
+  virtual RobotModel::JointVector computeJointVelocity(
+      const RobotModel& model,
+      const CartesianSample& target,
+      const RobotModel::JointVector& q,
+      const RobotModel::JointVector& q0) const = 0;
 };
 
 /**
@@ -56,21 +56,21 @@ public:
  *        Reuses VelocityIkSolver verbatim; matches CartesianVelocityController.
  */
 class MinNormDlsResolution : public RedundancyResolutionStrategy {
-public:
-    MinNormDlsResolution();
-    explicit MinNormDlsResolution(const VelocityIkSolver::Params& ik_params);
+ public:
+  MinNormDlsResolution();
+  explicit MinNormDlsResolution(const VelocityIkSolver::Params& ik_params);
 
-    RobotModel::JointVector computeJointVelocity(
-        const RobotModel& model,
-        const CartesianSample& target,
-        const RobotModel::JointVector& q,
-        const RobotModel::JointVector& q0) const override;
+  RobotModel::JointVector computeJointVelocity(
+      const RobotModel& model,
+      const CartesianSample& target,
+      const RobotModel::JointVector& q,
+      const RobotModel::JointVector& q0) const override;
 
-    const VelocityIkSolver::Params& ikParams() const { return ik_params_; }
+  const VelocityIkSolver::Params& ikParams() const { return ik_params_; }
 
-private:
-    VelocityIkSolver::Params ik_params_;
-    VelocityIkSolver ik_solver_;
+ private:
+  VelocityIkSolver::Params ik_params_;
+  VelocityIkSolver ik_solver_;
 };
 
 /**
@@ -80,40 +80,40 @@ private:
  *        Matches CartesianImpedanceController's posture regulation behavior.
  */
 class NullspaceBiasedResolution : public RedundancyResolutionStrategy {
-public:
-    struct Params {
-        VelocityIkSolver::Params ik_params;  ///< Primary task DLS params (default lambda = 0.05, kp = 1.0)
-        /// @brief Proportional nullspace convergence rate (s^-1).
-        /// Physically derived from the impedance controller's critically-damped nullspace PD law:
-        ///   tau_null = N^T * [ K_null * (q0 - q) - 2 * sqrt(K_null) * dq ]
-        /// In 1st-order velocity kinematics (D * dq + K * (q - q0) = 0):
-        ///   k_ns = K_null / D_null = K_null / (2 * sqrt(K_null)) = 0.5 * sqrt(K_null)
-        /// For K_null = 0.2 Nm/rad: k_ns = 0.5 * sqrt(0.2) = 0.2236 s^-1.
-        double nullspace_gain = 0.2236;
+ public:
+  struct Params {
+    VelocityIkSolver::Params ik_params;  ///< Primary task DLS params (default lambda = 0.05, kp = 1.0)
+    /// @brief Proportional nullspace convergence rate (s^-1).
+    /// Physically derived from the impedance controller's critically-damped nullspace PD law:
+    ///   tau_null = N^T * [ K_null * (q0 - q) - 2 * sqrt(K_null) * dq ]
+    /// In 1st-order velocity kinematics (D * dq + K * (q - q0) = 0):
+    ///   k_ns = K_null / D_null = K_null / (2 * sqrt(K_null)) = 0.5 * sqrt(K_null)
+    /// For K_null = 0.2 Nm/rad: k_ns = 0.5 * sqrt(0.2) = 0.2236 s^-1.
+    double nullspace_gain = 0.2236;
 
-        /// @brief Multiplier for joint 1 yaw posture stiffness.
-        /// Derived from joint1_nullspace_stiffness = 100 in torque control:
-        ///   scale = sqrt(100) = 10.0.
-        double joint1_nullspace_gain_scale = 10.0;
+    /// @brief Multiplier for joint 1 yaw posture stiffness.
+    /// Derived from joint1_nullspace_stiffness = 100 in torque control:
+    ///   scale = sqrt(100) = 10.0.
+    double joint1_nullspace_gain_scale = 10.0;
 
-        /// @brief Damping lambda for nullspace projector pseudo-inverse (J^T)^#.
-        double nullspace_damping = 0.05;
-    };
+    /// @brief Damping lambda for nullspace projector pseudo-inverse (J^T)^#.
+    double nullspace_damping = 0.05;
+  };
 
-    NullspaceBiasedResolution();
-    explicit NullspaceBiasedResolution(const Params& params);
+  NullspaceBiasedResolution();
+  explicit NullspaceBiasedResolution(const Params& params);
 
-    RobotModel::JointVector computeJointVelocity(
-        const RobotModel& model,
-        const CartesianSample& target,
-        const RobotModel::JointVector& q,
-        const RobotModel::JointVector& q0) const override;
+  RobotModel::JointVector computeJointVelocity(
+      const RobotModel& model,
+      const CartesianSample& target,
+      const RobotModel::JointVector& q,
+      const RobotModel::JointVector& q0) const override;
 
-    const Params& params() const { return params_; }
+  const Params& params() const { return params_; }
 
-private:
-    Params params_;
-    VelocityIkSolver ik_solver_;
+ private:
+  Params params_;
+  VelocityIkSolver ik_solver_;
 };
 
 /**
@@ -130,54 +130,54 @@ std::shared_ptr<RedundancyResolutionStrategy> createStrategyForController(
  *        would follow along a candidate Cartesian trajectory.
  */
 class JointPathSimulator {
-public:
-    struct Params {
-        double dt = 0.005;  ///< integration step (s); matches control_rate_hz_=200 default
-        std::shared_ptr<RedundancyResolutionStrategy> strategy;  ///< Redundancy resolution strategy
-    };
+ public:
+  struct Params {
+    double dt = 0.005;                                       ///< integration step (s); matches control_rate_hz_=200 default
+    std::shared_ptr<RedundancyResolutionStrategy> strategy;  ///< Redundancy resolution strategy
+  };
 
-    explicit JointPathSimulator(std::shared_ptr<RobotModel> robot_model);
-    JointPathSimulator(std::shared_ptr<RobotModel> robot_model, const Params& params);
+  explicit JointPathSimulator(std::shared_ptr<RobotModel> robot_model);
+  JointPathSimulator(std::shared_ptr<RobotModel> robot_model, const Params& params);
 
-    /// @brief One simulated instant: joint configuration plus the
-    /// translational manipulability at that configuration.
-    struct Step {
-        RobotModel::JointVector q;
-        double w_trans = 0.0;
-    };
+  /// @brief One simulated instant: joint configuration plus the
+  /// translational manipulability at that configuration.
+  struct Step {
+    RobotModel::JointVector q;
+    double w_trans = 0.0;
+  };
 
-    /**
-     * @brief Simulates the joint path along a full Cartesian trajectory.
-     * @param trajectory Time-ordered desired Cartesian samples (pose +
-     *                   feedforward twist), sampled at Params::dt.
-     * @param q0 Initial joint configuration seeding the Euler integration.
-     * @return One Step per input sample, same length/order as trajectory;
-     *         output[0].q == q0 (evaluated, not integrated).
-     */
-    std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory,
-                                const RobotModel::JointVector& q0) const;
+  /**
+   * @brief Simulates the joint path along a full Cartesian trajectory.
+   * @param trajectory Time-ordered desired Cartesian samples (pose +
+   *                   feedforward twist), sampled at Params::dt.
+   * @param q0 Initial joint configuration seeding the Euler integration.
+   * @return One Step per input sample, same length/order as trajectory;
+   *         output[0].q == q0 (evaluated, not integrated).
+   */
+  std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory,
+                             const RobotModel::JointVector& q0) const;
 
-    /**
-     * @brief Same as simulate(trajectory, q0) but with the seed of the Euler integration (@p q_seed) decoupled from the
-     *        nullspace posture target passed to the strategy (@p q_ref). simulate(trajectory, q0) is exactly
-     *        simulate(trajectory, q0, q0) (same operations, bit-identical).
-     */
-    std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
-                               const RobotModel::JointVector& q_ref) const;
+  /**
+   * @brief Same as simulate(trajectory, q0) but with the seed of the Euler integration (@p q_seed) decoupled from the
+   *        nullspace posture target passed to the strategy (@p q_ref). simulate(trajectory, q0) is exactly
+   *        simulate(trajectory, q0, q0) (same operations, bit-identical).
+   */
+  std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
+                             const RobotModel::JointVector& q_ref) const;
 
-    /**
-     * @brief simulate(trajectory, q_seed, q_ref) that also returns the joint configuration AFTER the last integration step
-     *        (steps.back().q is the configuration BEFORE it). @p q_after_last_step may be nullptr (then it is exactly the 3-argument
-     *        overload, which delegates here). Empty trajectory: set to @p q_seed.
-     */
-    std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
-                               const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const;
+  /**
+   * @brief simulate(trajectory, q_seed, q_ref) that also returns the joint configuration AFTER the last integration step
+   *        (steps.back().q is the configuration BEFORE it). @p q_after_last_step may be nullptr (then it is exactly the 3-argument
+   *        overload, which delegates here). Empty trajectory: set to @p q_seed.
+   */
+  std::vector<Step> simulate(const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q_seed,
+                             const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const;
 
-    const Params& params() const { return params_; }
+  const Params& params() const { return params_; }
 
-private:
-    std::shared_ptr<RobotModel> robot_model_;
-    Params params_;
+ private:
+  std::shared_ptr<RobotModel> robot_model_;
+  Params params_;
 };
 
 }  // namespace core

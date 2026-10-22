@@ -41,35 +41,35 @@ namespace core {
 namespace demo_params {
 
 struct SatelliteAtDemo {
-    Eigen::Vector3d center_m = Eigen::Vector3d::Zero();
-    Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
-    double omega_rad_s = 0.0;
-    GraspPointId grasp_point = GraspPointId::kP0;
-    double phase_at_contact_rad = 0.0;
+  Eigen::Vector3d center_m = Eigen::Vector3d::Zero();
+  Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
+  double omega_rad_s = 0.0;
+  GraspPointId grasp_point = GraspPointId::kP0;
+  double phase_at_contact_rad = 0.0;
 };
 
 struct FitInfo {
-    int num_basis = 0;
-    double ridge_lambda = 0.0;
-    double position_filter_window_s = 0.0;
-    bool fix_goal_to_demo_endpoint = false;
+  int num_basis = 0;
+  double ridge_lambda = 0.0;
+  double position_filter_window_s = 0.0;
+  bool fix_goal_to_demo_endpoint = false;
 };
 
 struct DemoParams {
-    int format_version = 1;
-    std::string weights_file;    ///< name relative to the folder of the demo-params file
-    std::string weights_sha256;  ///< 64 lowercase hex characters
-    double tau_s = 0.0;
-    std::optional<double> t_contact_s;  ///< relative to the first sample, like tau
-    Eigen::Vector3d delta_g_demo_m = Eigen::Vector3d::Zero();
-    Eigen::Vector3d contact_to_end_offset_m = Eigen::Vector3d::Zero();
-    /// Start position in the DEMO frame (only a rotation w.r.t. the Geomagic, no translation): NOT
-    /// the robot position; the optimizer's p0 comes from the robot kinematics.
-    Eigen::Vector3d start_position_demo_frame_m = Eigen::Vector3d::Zero();
-    std::optional<std::array<double, 7>> start_joints_rad;
-    std::optional<std::array<double, 7>> end_joints_rad;
-    std::optional<SatelliteAtDemo> satellite_at_demo;
-    FitInfo fit;
+  int format_version = 1;
+  std::string weights_file;    ///< name relative to the folder of the demo-params file
+  std::string weights_sha256;  ///< 64 lowercase hex characters
+  double tau_s = 0.0;
+  std::optional<double> t_contact_s;  ///< relative to the first sample, like tau
+  Eigen::Vector3d delta_g_demo_m = Eigen::Vector3d::Zero();
+  Eigen::Vector3d contact_to_end_offset_m = Eigen::Vector3d::Zero();
+  /// Start position in the DEMO frame (only a rotation w.r.t. the Geomagic, no translation): NOT
+  /// the robot position; the optimizer's p0 comes from the robot kinematics.
+  Eigen::Vector3d start_position_demo_frame_m = Eigen::Vector3d::Zero();
+  std::optional<std::array<double, 7>> start_joints_rad;
+  std::optional<std::array<double, 7>> end_joints_rad;
+  std::optional<SatelliteAtDemo> satellite_at_demo;
+  FitInfo fit;
 };
 
 /// Max fraction (per series: pose, joint states) of samples buildFromDemo() may discard for
@@ -80,8 +80,8 @@ inline constexpr double kMaxDiscardedTimestampFraction = 0.20;
 /// series has non-increasing timestamps (the ProDMP fit silently drops such samples, so callers may
 /// want to treat this case differently from real errors). Derives from std::invalid_argument.
 class NonIncreasingTimestampsError : public std::invalid_argument {
-public:
-    using std::invalid_argument::invalid_argument;
+ public:
+  using std::invalid_argument::invalid_argument;
 };
 
 /// Builds the parameters from a recorded demo (raw samples, in time order). Pose samples and joint

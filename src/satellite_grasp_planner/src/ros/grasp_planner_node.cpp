@@ -22,439 +22,441 @@ namespace ros_wrapper {
 namespace {
 
 Eigen::Vector3d toVector3(const std::vector<double>& v, const char* name) {
-    if (v.size() != 3) {
-        throw std::invalid_argument(std::string(name) + " must have exactly 3 elements");
-    }
-    return Eigen::Vector3d(v[0], v[1], v[2]);
+  if (v.size() != 3) {
+    throw std::invalid_argument(std::string(name) + " must have exactly 3 elements");
+  }
+  return Eigen::Vector3d(v[0], v[1], v[2]);
 }
 
 /// x, y, z, w - same order and validation as prodmp_gazebo_executor_node's satellite_q_ref (the YAML
 /// section is shared between the two nodes).
 Eigen::Quaterniond toQuaternion(const std::vector<double>& v, const char* name) {
-    if (v.size() != 4) {
-        throw std::invalid_argument(std::string(name) + " must have exactly 4 elements (x, y, z, w)");
-    }
-    const Eigen::Quaterniond q(v[3], v[0], v[1], v[2]);
-    const double n = q.norm();
-    if (!(std::fabs(n - 1.0) <= 1e-6)) {
-        throw std::invalid_argument(std::string(name) + " norm must be 1 +/- 1e-6");
-    }
-    return q.normalized();
+  if (v.size() != 4) {
+    throw std::invalid_argument(std::string(name) + " must have exactly 4 elements (x, y, z, w)");
+  }
+  const Eigen::Quaterniond q(v[3], v[0], v[1], v[2]);
+  const double n = q.norm();
+  if (!(std::fabs(n - 1.0) <= 1e-6)) {
+    throw std::invalid_argument(std::string(name) + " norm must be 1 +/- 1e-6");
+  }
+  return q.normalized();
 }
 
 }  // namespace
 
 GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
-    // --- use_sim_time / sim clock (fail loud - see class doc comment) ---
-    // rclcpp::Node auto-declares "use_sim_time" itself (it drives the node's Clock); declaring it
-    // again would throw ParameterAlreadyDeclaredException - read it back instead, same as
-    // prodmp_gazebo_executor_node.cpp does.
-    const bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
-    if (!use_sim_time) {
-        throw std::invalid_argument("grasp_planner_node requires use_sim_time=true");
+  // --- use_sim_time / sim clock (fail loud - see class doc comment) ---
+  // rclcpp::Node auto-declares "use_sim_time" itself (it drives the node's Clock); declaring it
+  // again would throw ParameterAlreadyDeclaredException - read it back instead, same as
+  // prodmp_gazebo_executor_node.cpp does.
+  const bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
+  if (!use_sim_time) {
+    throw std::invalid_argument("grasp_planner_node requires use_sim_time=true");
+  }
+  if (!this->get_clock()->ros_time_is_active()) {
+    throw std::invalid_argument("grasp_planner_node: ROS (sim) time is not active on the node clock");
+  }
+
+  // --- mandatory parameters, NO defaults, fail loud ---
+  // Declared by TYPE ONLY (no default value): an unset one comes back PARAMETER_NOT_SET, named
+  // explicitly in the exception (same pattern as prodmp_gazebo_executor_node::setupContinuous()'s
+  // opt_double/opt_string/opt_vec).
+  auto missing = [](const char* name) -> void {
+    throw std::invalid_argument(std::string("mandatory parameter '") + name + "' was not provided");
+  };
+  auto require_string = [this, &missing](const char* name) {
+    const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_STRING);
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
+    return v.get<std::string>();
+  };
+  auto require_double = [this, &missing](const char* name) {
+    const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
+    return v.get<double>();
+  };
+  auto require_vec = [this, &missing](const char* name) {
+    const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
+    return v.get<std::vector<double>>();
+  };
+
+  demo_params_path_ = require_string("demo_params_path");
+  // urdf_path: optional. Unset or empty -> $HOME/thesis_ws/fer_flat_effort.urdf, the default of s3_clearance / s3_landscape.
+  // The SAME path feeds RobotModel (buildSelectionInputs), the start-state override and the fer_hand collision mesh
+  // (s1.use_clearance): there is no second URDF parameter.
+  {
+    const auto v = this->declare_parameter("urdf_path", rclcpp::ParameterType::PARAMETER_STRING);
+    urdf_path_ = v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET ? std::string() : v.get<std::string>();
+    if (urdf_path_.empty()) {
+      const char* home = std::getenv("HOME");
+      urdf_path_ = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
+      RCLCPP_INFO(this->get_logger(), "grasp_planner_node: urdf_path not set, using default %s", urdf_path_.c_str());
     }
-    if (!this->get_clock()->ros_time_is_active()) {
-        throw std::invalid_argument("grasp_planner_node: ROS (sim) time is not active on the node clock");
+  }
+  min_delay_s_ = require_double("min_delay_s");
+
+  cube_geometry_.center_world = toVector3(require_vec("cube_geometry.center_world"), "cube_geometry.center_world");
+  cube_geometry_.axis_world = toVector3(require_vec("cube_geometry.axis_world"), "cube_geometry.axis_world");
+  cube_geometry_.cube_side_m = require_double("cube_geometry.cube_side_m");
+  cube_geometry_.standoff_m = require_double("cube_geometry.standoff_m");
+  cube_geometry_.collar_radius_m = require_double("cube_geometry.collar_radius_m");
+  cube_geometry_.face_normal_body =
+      toVector3(require_vec("cube_geometry.face_normal_body"), "cube_geometry.face_normal_body");
+  cube_geometry_.wall_thickness_m = require_double("cube_geometry.wall_thickness_m");
+
+  robot_base_world_ = toVector3(require_vec("robot_base_world"), "robot_base_world");
+  satellite_rotation_center_ = toVector3(require_vec("satellite_rotation_center"), "satellite_rotation_center");
+  satellite_rotation_axis_ = toVector3(require_vec("satellite_rotation_axis"), "satellite_rotation_axis");
+  const double omega_deg_s = require_double("satellite_rotation_angular_velocity_deg_s");
+  satellite_omega_rad_s_ = haptic_dmp_learning::core::degToRad(omega_deg_s);
+  satellite_q_ref_ = toQuaternion(require_vec("satellite_q_ref"), "satellite_q_ref");
+  const std::string odom_topic = require_string("satellite_odom_topic");
+  const double omega_tol_deg_s = require_double("omega_consistency_tol_deg_per_s");
+  omega_consistency_tol_rad_s_ = haptic_dmp_learning::core::degToRad(omega_tol_deg_s);
+
+  // --- optional parameters ---
+  const double q_ref_tol_deg = this->declare_parameter<double>("q_ref_consistency_tol_deg", 0.5);
+  const double robot_base_world_tol_m = this->declare_parameter<double>("robot_base_world_tol_m", 1e-6);
+  grasp_command_topic_ = this->declare_parameter<std::string>("grasp_command_topic", "/grasp_command");
+
+  // Declared by type only, so "not set" (keep the default) is distinguishable from any value.
+  auto opt_double = [this](const char* name) -> std::optional<double> {
+    const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) return std::nullopt;
+    return v.get<double>();
+  };
+  // Optional: unset => grasp points at collar_radius_m (CubeSatelliteModel::Params default).
+  cube_geometry_.grasp_radius_m = opt_double("cube_geometry.grasp_radius_m");
+  // Depth of the contact point inside the collar from the rim [m]; default 0 = on the rim.
+  cube_geometry_.grasp_depth_m = this->declare_parameter<double>("cube_geometry.grasp_depth_m", 0.0);
+
+  // Optional start configuration: 7 values in fer_joint1..7 order. Empty (default) = readyPose (previous
+  // behaviour). Validated here, at startup, against the joint limits of the URDF at urdf_path.
+  {
+    const auto values = this->declare_parameter<std::vector<double>>(core::kStartJointsParameterName,
+                                                                     std::vector<double>{});
+    if (!values.empty()) start_state_ = core::makeStartStateFromOverride(values, urdf_path_);
+  }
+
+  // Selection (selectGraspS3): parameters s1.*, all optional.
+  {
+    core::S3Params& p = s3_params_;
+    auto dbl = [this](const char* name, double def) { return this->declare_parameter<double>(name, def); };
+    auto bol = [this](const char* name, bool def) { return this->declare_parameter<bool>(name, def); };
+    p.length_scale_m = dbl("s1.length_scale_m", p.length_scale_m);
+    p.orientation_weight = dbl("s1.orientation_weight", p.orientation_weight);
+    p.angle_scale_rad = dbl("s1.angle_scale_rad", p.angle_scale_rad);
+    p.epsilon_wait_per_s = dbl("s1.epsilon_wait_per_s", p.epsilon_wait_per_s);
+    p.w_hat_min = dbl("s1.w_hat_min", p.w_hat_min);
+    p.margin_min_rad = dbl("s1.margin_min_rad", p.margin_min_rad);
+    p.r_trust_m = dbl("s1.r_trust_m", p.r_trust_m);
+    p.delta_v_max_m_s = dbl("s1.delta_v_max_m_s", p.delta_v_max_m_s);
+    p.theta_step_deg = dbl("s1.theta_step_deg", p.theta_step_deg);
+    p.theta_refine_step_deg = dbl("s1.theta_refine_step_deg", p.theta_refine_step_deg);
+    p.posthoc_path_check = bol("s1.posthoc_path_check", p.posthoc_path_check);
+    p.posthoc_velocity_check = bol("s1.posthoc_velocity_check", p.posthoc_velocity_check);
+    p.posthoc_cluster_deg = dbl("s1.posthoc_cluster_deg", p.posthoc_cluster_deg);
+    p.ik.pos_tol_m = dbl("s1.ik.pos_tol_m", p.ik.pos_tol_m);
+    p.ik.ori_tol_rad = dbl("s1.ik.ori_tol_rad", p.ik.ori_tol_rad);
+    p.ik.damping = dbl("s1.ik.damping", p.ik.damping);
+    p.ik.nullspace_gain = dbl("s1.ik.nullspace_gain", p.ik.nullspace_gain);
+    p.ik.max_step_rad = dbl("s1.ik.max_step_rad", p.ik.max_step_rad);
+    // Forced candidate (test mode, see S3Params::force). Validated by validateS3Params below: no fallback values.
+    p.force = bol("s1.force", p.force);
+    const int64_t force_k = this->declare_parameter<int64_t>("s1.force_k", p.force_k);
+    if (force_k < std::numeric_limits<int>::min() || force_k > std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("parameter s1.force_k out of range (must be 0..3)");
     }
-
-    // --- mandatory parameters, NO defaults, fail loud ---
-    // Declared by TYPE ONLY (no default value): an unset one comes back PARAMETER_NOT_SET, named
-    // explicitly in the exception (same pattern as prodmp_gazebo_executor_node::setupContinuous()'s
-    // opt_double/opt_string/opt_vec).
-    auto missing = [](const char* name) -> void {
-        throw std::invalid_argument(std::string("mandatory parameter '") + name + "' was not provided");
-    };
-    auto require_string = [this, &missing](const char* name) {
-        const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_STRING);
-        if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
-        return v.get<std::string>();
-    };
-    auto require_double = [this, &missing](const char* name) {
-        const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
-        if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
-        return v.get<double>();
-    };
-    auto require_vec = [this, &missing](const char* name) {
-        const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
-        if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) missing(name);
-        return v.get<std::vector<double>>();
-    };
-
-    demo_params_path_ = require_string("demo_params_path");
-    // urdf_path: optional. Unset or empty -> $HOME/thesis_ws/fer_flat_effort.urdf, the default of s3_clearance / s3_landscape.
-    // The SAME path feeds RobotModel (buildSelectionInputs), the start-state override and the fer_hand collision mesh
-    // (s1.use_clearance): there is no second URDF parameter.
-    {
-        const auto v = this->declare_parameter("urdf_path", rclcpp::ParameterType::PARAMETER_STRING);
-        urdf_path_ = v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET ? std::string() : v.get<std::string>();
-        if (urdf_path_.empty()) {
-            const char* home = std::getenv("HOME");
-            urdf_path_ = std::string(home ? home : "/root") + "/thesis_ws/fer_flat_effort.urdf";
-            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: urdf_path not set, using default %s", urdf_path_.c_str());
-        }
+    p.force_k = static_cast<int>(force_k);
+    p.force_theta_deg = dbl("s1.force_theta_deg", p.force_theta_deg);
+    p.force_psi_deg = dbl("s1.force_psi_deg", p.force_psi_deg);
+    p.force_ignore_constraints = bol("s1.force_ignore_constraints", p.force_ignore_constraints);
+    const int64_t force_flip = this->declare_parameter<int64_t>("s1.force_flip", p.force_flip);
+    if (force_flip < -1 || force_flip > 1) {
+      throw std::invalid_argument("parameter s1.force_flip out of range (must be -1, 0 or 1)");
     }
-    min_delay_s_ = require_double("min_delay_s");
-
-    cube_geometry_.center_world = toVector3(require_vec("cube_geometry.center_world"), "cube_geometry.center_world");
-    cube_geometry_.axis_world = toVector3(require_vec("cube_geometry.axis_world"), "cube_geometry.axis_world");
-    cube_geometry_.cube_side_m = require_double("cube_geometry.cube_side_m");
-    cube_geometry_.standoff_m = require_double("cube_geometry.standoff_m");
-    cube_geometry_.collar_radius_m = require_double("cube_geometry.collar_radius_m");
-    cube_geometry_.face_normal_body =
-        toVector3(require_vec("cube_geometry.face_normal_body"), "cube_geometry.face_normal_body");
-    cube_geometry_.wall_thickness_m = require_double("cube_geometry.wall_thickness_m");
-
-    robot_base_world_ = toVector3(require_vec("robot_base_world"), "robot_base_world");
-    satellite_rotation_center_ = toVector3(require_vec("satellite_rotation_center"), "satellite_rotation_center");
-    satellite_rotation_axis_ = toVector3(require_vec("satellite_rotation_axis"), "satellite_rotation_axis");
-    const double omega_deg_s = require_double("satellite_rotation_angular_velocity_deg_s");
-    satellite_omega_rad_s_ = haptic_dmp_learning::core::degToRad(omega_deg_s);
-    satellite_q_ref_ = toQuaternion(require_vec("satellite_q_ref"), "satellite_q_ref");
-    const std::string odom_topic = require_string("satellite_odom_topic");
-    const double omega_tol_deg_s = require_double("omega_consistency_tol_deg_per_s");
-    omega_consistency_tol_rad_s_ = haptic_dmp_learning::core::degToRad(omega_tol_deg_s);
-
-    // --- optional parameters ---
-    const double q_ref_tol_deg = this->declare_parameter<double>("q_ref_consistency_tol_deg", 0.5);
-    const double robot_base_world_tol_m = this->declare_parameter<double>("robot_base_world_tol_m", 1e-6);
-    grasp_command_topic_ = this->declare_parameter<std::string>("grasp_command_topic", "/grasp_command");
-
-    // Declared by type only, so "not set" (keep the default) is distinguishable from any value.
-    auto opt_double = [this](const char* name) -> std::optional<double> {
-        const auto v = this->declare_parameter(name, rclcpp::ParameterType::PARAMETER_DOUBLE);
-        if (v.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) return std::nullopt;
-        return v.get<double>();
-    };
-    // Optional: unset => grasp points at collar_radius_m (CubeSatelliteModel::Params default).
-    cube_geometry_.grasp_radius_m = opt_double("cube_geometry.grasp_radius_m");
-    // Depth of the contact point inside the collar from the rim [m]; default 0 = on the rim.
-    cube_geometry_.grasp_depth_m = this->declare_parameter<double>("cube_geometry.grasp_depth_m", 0.0);
-
-    // Optional start configuration: 7 values in fer_joint1..7 order. Empty (default) = readyPose (previous
-    // behaviour). Validated here, at startup, against the joint limits of the URDF at urdf_path.
-    {
-        const auto values = this->declare_parameter<std::vector<double>>(core::kStartJointsParameterName,
-                                                                         std::vector<double>{});
-        if (!values.empty()) start_state_ = core::makeStartStateFromOverride(values, urdf_path_);
+    p.force_flip = static_cast<int>(force_flip);
+    // Wrist-branch rule ("margin" | "rotation"), validated by validateS3Params below: unknown value = startup error.
+    p.branch_rule = this->declare_parameter<std::string>("s1.branch_rule", p.branch_rule);
+    // Mode v2 (see S3Params::mode). "legacy" (default) ignores every parameter below. Validated by validateS3Params.
+    p.mode = this->declare_parameter<std::string>("s1.mode", p.mode);
+    p.max_start_goal_deg = dbl("s1.max_start_goal_deg", p.max_start_goal_deg);
+    const int64_t finalists_n = this->declare_parameter<int64_t>("s1.finalists_n", p.finalists_n);
+    if (finalists_n < 1 || finalists_n > std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("parameter s1.finalists_n out of range (must be >= 1)");
     }
-
-    // Selection (selectGraspS3): parameters s1.*, all optional.
-    {
-        core::S3Params& p = s3_params_;
-        auto dbl = [this](const char* name, double def) { return this->declare_parameter<double>(name, def); };
-        auto bol = [this](const char* name, bool def) { return this->declare_parameter<bool>(name, def); };
-        p.length_scale_m = dbl("s1.length_scale_m", p.length_scale_m);
-        p.orientation_weight = dbl("s1.orientation_weight", p.orientation_weight);
-        p.angle_scale_rad = dbl("s1.angle_scale_rad", p.angle_scale_rad);
-        p.epsilon_wait_per_s = dbl("s1.epsilon_wait_per_s", p.epsilon_wait_per_s);
-        p.w_hat_min = dbl("s1.w_hat_min", p.w_hat_min);
-        p.margin_min_rad = dbl("s1.margin_min_rad", p.margin_min_rad);
-        p.r_trust_m = dbl("s1.r_trust_m", p.r_trust_m);
-        p.delta_v_max_m_s = dbl("s1.delta_v_max_m_s", p.delta_v_max_m_s);
-        p.theta_step_deg = dbl("s1.theta_step_deg", p.theta_step_deg);
-        p.theta_refine_step_deg = dbl("s1.theta_refine_step_deg", p.theta_refine_step_deg);
-        p.posthoc_path_check = bol("s1.posthoc_path_check", p.posthoc_path_check);
-        p.posthoc_velocity_check = bol("s1.posthoc_velocity_check", p.posthoc_velocity_check);
-        p.posthoc_cluster_deg = dbl("s1.posthoc_cluster_deg", p.posthoc_cluster_deg);
-        p.ik.pos_tol_m = dbl("s1.ik.pos_tol_m", p.ik.pos_tol_m);
-        p.ik.ori_tol_rad = dbl("s1.ik.ori_tol_rad", p.ik.ori_tol_rad);
-        p.ik.damping = dbl("s1.ik.damping", p.ik.damping);
-        p.ik.nullspace_gain = dbl("s1.ik.nullspace_gain", p.ik.nullspace_gain);
-        p.ik.max_step_rad = dbl("s1.ik.max_step_rad", p.ik.max_step_rad);
-        // Forced candidate (test mode, see S3Params::force). Validated by validateS3Params below: no fallback values.
-        p.force = bol("s1.force", p.force);
-        const int64_t force_k = this->declare_parameter<int64_t>("s1.force_k", p.force_k);
-        if (force_k < std::numeric_limits<int>::min() || force_k > std::numeric_limits<int>::max()) {
-            throw std::invalid_argument("parameter s1.force_k out of range (must be 0..3)");
-        }
-        p.force_k = static_cast<int>(force_k);
-        p.force_theta_deg = dbl("s1.force_theta_deg", p.force_theta_deg);
-        p.force_psi_deg = dbl("s1.force_psi_deg", p.force_psi_deg);
-        p.force_ignore_constraints = bol("s1.force_ignore_constraints", p.force_ignore_constraints);
-        const int64_t force_flip = this->declare_parameter<int64_t>("s1.force_flip", p.force_flip);
-        if (force_flip < -1 || force_flip > 1) {
-            throw std::invalid_argument("parameter s1.force_flip out of range (must be -1, 0 or 1)");
-        }
-        p.force_flip = static_cast<int>(force_flip);
-        // Wrist-branch rule ("margin" | "rotation"), validated by validateS3Params below: unknown value = startup error.
-        p.branch_rule = this->declare_parameter<std::string>("s1.branch_rule", p.branch_rule);
-        // Mode v2 (see S3Params::mode). "legacy" (default) ignores every parameter below. Validated by validateS3Params.
-        p.mode = this->declare_parameter<std::string>("s1.mode", p.mode);
-        p.max_start_goal_deg = dbl("s1.max_start_goal_deg", p.max_start_goal_deg);
-        const int64_t finalists_n = this->declare_parameter<int64_t>("s1.finalists_n", p.finalists_n);
-        if (finalists_n < 1 || finalists_n > std::numeric_limits<int>::max()) {
-            throw std::invalid_argument("parameter s1.finalists_n out of range (must be >= 1)");
-        }
-        p.finalists_n = static_cast<int>(finalists_n);
-        p.rollout_q_ref = this->declare_parameter<std::vector<double>>("s1.rollout_q_ref", p.rollout_q_ref);
-        p.use_w = bol("s1.use_w", p.use_w);
-        p.kappa_w_mm = dbl("s1.kappa_w", p.kappa_w_mm);
-        p.kappa_t_mm_s = dbl("s1.kappa_t", p.kappa_t_mm_s);
-        p.tau_j_mm = dbl("s1.tau_j_mm", p.tau_j_mm);
-        // Clearance constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
-        p.use_clearance = bol("s1.use_clearance", p.use_clearance);
-        p.min_clearance_mm = dbl("s1.min_clearance_mm", p.min_clearance_mm);
-        p.clearance_dt_s = dbl("s1.clearance_dt_s", p.clearance_dt_s);
-        p.gripper_open_m = dbl("s1.gripper_open_m", p.gripper_open_m);
-        // Joint-margin constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
-        p.use_margin = bol("s1.use_margin", p.use_margin);
-        p.min_margin_deg = dbl("s1.min_margin_deg", p.min_margin_deg);
-        p.margin_follow_s = dbl("s1.margin_follow_s", p.margin_follow_s);
-        p.margin_follow_dt_s = dbl("s1.margin_follow_dt_s", p.margin_follow_dt_s);
-        const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
-        const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
-        if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
-            max_posthoc > std::numeric_limits<int>::max()) {
-            throw std::invalid_argument("parameters s1.ik.max_iter (>= 1) / s1.max_posthoc_candidates (>= 0) out of range");
-        }
-        p.ik.max_iter = static_cast<int>(max_iter);
-        p.max_posthoc_candidates = static_cast<int>(max_posthoc);
-        core::validateS3Params(p);  // fail at startup, not after the first odometry sample
-        if (core::parseS3Mode(p.mode) == core::S3Mode::kV2 && p.branch_rule == "margin") {
-            RCLCPP_WARN(this->get_logger(),
-                        "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
-                        "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
-        }
-        if (p.use_margin) {
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: s1.use_margin=true min_margin_deg=%.3f (ASSUMED; G16 observed 20.84-28.63) "
-                        "margin_follow_s=%.3f margin_follow_dt_s=%.4f; lazy evaluation in J_static order, the wait tie-break "
-                        "(tau_j_mm) is not applied",
-                        p.min_margin_deg, p.margin_follow_s, p.margin_follow_dt_s);
-        }
-        if (p.use_clearance) {
-            // fer_hand collision mesh from the URDF (checked closed and convex), built once here (a missing mesh is a startup error).
-            core::HandMesh hand_mesh;
-            try {
-                hand_mesh = core::loadHandCollisionMesh(urdf_path_);
-            } catch (const std::exception& e) {
-                throw std::invalid_argument(std::string("s1.use_clearance=true: cannot load the fer_hand collision mesh: ") +
-                                            e.what());
-            }
-            clearance_model_ = std::make_shared<core::ApproachClearanceModel>(cube_geometry_, hand_mesh);
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: s1.use_clearance=true min_clearance_mm=%.3f (ASSUMED) clearance_dt_s=%.3f "
-                        "gripper_open_m=%.4f (must equal the executor's gripper_open_position)",
-                        p.min_clearance_mm, p.clearance_dt_s, p.gripper_open_m);
-            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeHandMesh(hand_mesh).c_str());
-        }
+    p.finalists_n = static_cast<int>(finalists_n);
+    p.rollout_q_ref = this->declare_parameter<std::vector<double>>("s1.rollout_q_ref", p.rollout_q_ref);
+    p.use_w = bol("s1.use_w", p.use_w);
+    p.kappa_w_mm = dbl("s1.kappa_w", p.kappa_w_mm);
+    p.kappa_t_mm_s = dbl("s1.kappa_t", p.kappa_t_mm_s);
+    p.tau_j_mm = dbl("s1.tau_j_mm", p.tau_j_mm);
+    // Clearance constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+    p.use_clearance = bol("s1.use_clearance", p.use_clearance);
+    p.min_clearance_mm = dbl("s1.min_clearance_mm", p.min_clearance_mm);
+    p.clearance_dt_s = dbl("s1.clearance_dt_s", p.clearance_dt_s);
+    p.gripper_open_m = dbl("s1.gripper_open_m", p.gripper_open_m);
+    // Joint-margin constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+    p.use_margin = bol("s1.use_margin", p.use_margin);
+    p.min_margin_deg = dbl("s1.min_margin_deg", p.min_margin_deg);
+    p.margin_follow_s = dbl("s1.margin_follow_s", p.margin_follow_s);
+    p.margin_follow_dt_s = dbl("s1.margin_follow_dt_s", p.margin_follow_dt_s);
+    const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
+    const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
+    if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
+        max_posthoc > std::numeric_limits<int>::max()) {
+      throw std::invalid_argument("parameters s1.ik.max_iter (>= 1) / s1.max_posthoc_candidates (>= 0) out of range");
     }
+    p.ik.max_iter = static_cast<int>(max_iter);
+    p.max_posthoc_candidates = static_cast<int>(max_posthoc);
+    core::validateS3Params(p);  // fail at startup, not after the first odometry sample
+    if (core::parseS3Mode(p.mode) == core::S3Mode::kV2 && p.branch_rule == "margin") {
+      RCLCPP_WARN(this->get_logger(),
+                  "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
+                  "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
+    }
+    if (p.use_margin) {
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1.use_margin=true min_margin_deg=%.3f (ASSUMED; G16 observed 20.84-28.63) "
+                  "margin_follow_s=%.3f margin_follow_dt_s=%.4f; lazy evaluation in J_static order, the wait tie-break "
+                  "(tau_j_mm) is not applied",
+                  p.min_margin_deg, p.margin_follow_s, p.margin_follow_dt_s);
+    }
+    if (p.use_clearance) {
+      // fer_hand collision mesh from the URDF (checked closed and convex), built once here (a missing mesh is a startup error).
+      core::HandMesh hand_mesh;
+      try {
+        hand_mesh = core::loadHandCollisionMesh(urdf_path_);
+      } catch (const std::exception& e) {
+        throw std::invalid_argument(std::string("s1.use_clearance=true: cannot load the fer_hand collision mesh: ") +
+                                    e.what());
+      }
+      clearance_model_ = std::make_shared<core::ApproachClearanceModel>(cube_geometry_, hand_mesh);
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1.use_clearance=true min_clearance_mm=%.3f (ASSUMED) clearance_dt_s=%.3f "
+                  "gripper_open_m=%.4f (must equal the executor's gripper_open_position)",
+                  p.min_clearance_mm, p.clearance_dt_s, p.gripper_open_m);
+      RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeHandMesh(hand_mesh).c_str());
+    }
+  }
 
-    // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
-    checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
-    checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
-    checkCubeCenterMatchesRotationCenter(cube_geometry_.center_world, satellite_rotation_center_);
-    // q_ref is relative to the theta = 0 orientation of the satellite (identity for a vertical axis and face normal +x).
-    checkQRefOnAxis(satellite_q_ref_, satellite_rotation_axis_, q_ref_tol_deg,
-                    satelliteBaseOrientation(cube_geometry_.face_normal_body, satellite_rotation_axis_));
+  // --- startup validation (pure functions, see grasp_planner_checks.hpp) ---
+  checkRobotBaseWorldIsZero(robot_base_world_, robot_base_world_tol_m);
+  checkCubeAxisMatchesRotationAxis(cube_geometry_.axis_world, satellite_rotation_axis_);
+  checkCubeCenterMatchesRotationCenter(cube_geometry_.center_world, satellite_rotation_center_);
+  // q_ref is relative to the theta = 0 orientation of the satellite (identity for a vertical axis and face normal +x).
+  checkQRefOnAxis(satellite_q_ref_, satellite_rotation_axis_, q_ref_tol_deg,
+                  satelliteBaseOrientation(cube_geometry_.face_normal_body, satellite_rotation_axis_));
 
-    // --- publisher (QoS: reliable, transient_local, depth 1 - one-shot retained command) ---
-    pub_ = this->create_publisher<satellite_grasp_msgs::msg::GraspCommand>(
-        grasp_command_topic_, rclcpp::QoS(1).reliable().transient_local());
+  // --- publisher (QoS: reliable, transient_local, depth 1 - one-shot retained command) ---
+  pub_ = this->create_publisher<satellite_grasp_msgs::msg::GraspCommand>(
+      grasp_command_topic_, rclcpp::QoS(1).reliable().transient_local());
 
-    // --- subscription (first sample only, see onOdom) ---
-    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        odom_topic, rclcpp::QoS(10).reliable(),
-        std::bind(&GraspPlannerNode::onOdom, this, std::placeholders::_1));
+  // --- subscription (first sample only, see onOdom) ---
+  odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      odom_topic, rclcpp::QoS(10).reliable(),
+      std::bind(&GraspPlannerNode::onOdom, this, std::placeholders::_1));
 
-    RCLCPP_INFO(this->get_logger(), "grasp_planner_node: ready, waiting for the first sample on '%s' (start configuration: %s).",
-                odom_topic.c_str(), start_state_ ? start_state_->source.c_str() : "readyPose / demo_params default");
+  RCLCPP_INFO(this->get_logger(), "grasp_planner_node: ready, waiting for the first sample on '%s' (start configuration: %s).",
+              odom_topic.c_str(), start_state_ ? start_state_->source.c_str() : "readyPose / demo_params default");
 }
 
 GraspPlannerNode::~GraspPlannerNode() {
-    if (worker_.joinable()) worker_.join();
+  if (worker_.joinable()) worker_.join();
 }
 
 void GraspPlannerNode::onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg) {
-    if (dispatched_.load()) return;  // the selection is dispatched once (one-shot v1)
+  if (dispatched_.load()) return;  // the selection is dispatched once (one-shot v1)
 
-    try {
-        const auto& qm = msg->pose.pose.orientation;
-        const Eigen::Quaterniond q(qm.w, qm.x, qm.y, qm.z);
-        const double stamp_s = rclcpp::Time(msg->header.stamp).seconds();
+  try {
+    const auto& qm = msg->pose.pose.orientation;
+    const Eigen::Quaterniond q(qm.w, qm.x, qm.y, qm.z);
+    const double stamp_s = rclcpp::Time(msg->header.stamp).seconds();
 
-        if (!first_odom_) {
-            const Eigen::Vector3d position(msg->pose.pose.position.x, msg->pose.pose.position.y,
-                                           msg->pose.pose.position.z);
-            checkFirstOdomSample(position, msg->header.frame_id, satellite_rotation_center_);
-            haptic_dmp_learning::core::satellite_intercept::PhaseTracker tracker(satellite_rotation_axis_,
-                                                                                 satellite_q_ref_);
-            const auto phase = tracker.update(q);
-            first_odom_ = FirstOdomSample{q, stamp_s, phase.theta_rad};
-            return;  // omega needs a second sample (quaternion increment)
-        }
-        if (!(stamp_s > first_odom_->stamp_s)) return;  // same / older stamp: wait for a usable pair
-        dispatched_.store(true);
-
-        checkOmegaConsistency(first_odom_->q, q, stamp_s - first_odom_->stamp_s, satellite_rotation_axis_,
-                              satellite_omega_rad_s_, omega_consistency_tol_rad_s_);
-
-        core::SatelliteSnapshot snapshot;
-        snapshot.center = satellite_rotation_center_;
-        snapshot.axis = satellite_rotation_axis_;
-        snapshot.omega_rad_s = satellite_omega_rad_s_;
-        snapshot.theta_rad = first_odom_->theta_rad;
-        snapshot.t_s = first_odom_->stamp_s;
-
-        worker_ = std::thread(&GraspPlannerNode::runSelection, this, snapshot);
-    } catch (const std::exception& e) {
-        dispatched_.store(true);
-        RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: rejecting the first odometry samples: %s", e.what());
-        rclcpp::shutdown();
+    if (!first_odom_) {
+      const Eigen::Vector3d position(msg->pose.pose.position.x, msg->pose.pose.position.y,
+                                     msg->pose.pose.position.z);
+      checkFirstOdomSample(position, msg->header.frame_id, satellite_rotation_center_);
+      haptic_dmp_learning::core::satellite_intercept::PhaseTracker tracker(satellite_rotation_axis_,
+                                                                           satellite_q_ref_);
+      const auto phase = tracker.update(q);
+      first_odom_ = FirstOdomSample{q, stamp_s, phase.theta_rad};
+      return;  // omega needs a second sample (quaternion increment)
     }
+    if (!(stamp_s > first_odom_->stamp_s)) return;  // same / older stamp: wait for a usable pair
+    dispatched_.store(true);
+
+    checkOmegaConsistency(first_odom_->q, q, stamp_s - first_odom_->stamp_s, satellite_rotation_axis_,
+                          satellite_omega_rad_s_, omega_consistency_tol_rad_s_);
+
+    core::SatelliteSnapshot snapshot;
+    snapshot.center = satellite_rotation_center_;
+    snapshot.axis = satellite_rotation_axis_;
+    snapshot.omega_rad_s = satellite_omega_rad_s_;
+    snapshot.theta_rad = first_odom_->theta_rad;
+    snapshot.t_s = first_odom_->stamp_s;
+
+    worker_ = std::thread(&GraspPlannerNode::runSelection, this, snapshot);
+  } catch (const std::exception& e) {
+    dispatched_.store(true);
+    RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: rejecting the first odometry samples: %s", e.what());
+    rclcpp::shutdown();
+  }
 }
 
 void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
-    try {
-        core::SelectionInputs in =
-            core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, start_state_);
-        RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
+  try {
+    core::SelectionInputs in =
+        core::buildSelectionInputs(demo_params_path_, urdf_path_, snapshot, cube_geometry_, start_state_);
+    RCLCPP_INFO(this->get_logger(), "grasp_planner_node: %s", core::describeStartState(in).c_str());
 
-        if (s3_params_.force) {
-            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: FORCED k=%d theta=%.4f deg psi=%.4f deg force_flip=%s "
-                        "(ignore_constraints=%s)",
-                        s3_params_.force_k, s3_params_.force_theta_deg, s3_params_.force_psi_deg,
-                        s3_params_.force_flip < 0 ? "auto(-1)" : (s3_params_.force_flip ? "1 (branch B)" : "0 (branch A)"),
-                        s3_params_.force_ignore_constraints ? "true" : "false");
-        }
-        const bool v2 = core::parseS3Mode(s3_params_.mode) == core::S3Mode::kV2;
-        if (v2) {
-            std::ostringstream q;
-            for (std::size_t i = 0; i < s3_params_.rollout_q_ref.size(); ++i) q << (i ? ", " : "") << s3_params_.rollout_q_ref[i];
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: s1.mode=v2 branch_rule=%s use_w=%s kappa_w=%.3f mm kappa_t=%.3f mm/s tau_j=%.3f mm "
-                        "finalists_n=%d max_start_goal_deg=%.2f r_trust_m=%.3f posthoc_cluster_deg=%.2f rollout_q_ref=[%s] "
-                        "(w_hat_min and margin_min_rad NOT applied)",
-                        s3_params_.branch_rule.c_str(), s3_params_.use_w ? "true" : "false", s3_params_.kappa_w_mm,
-                        s3_params_.kappa_t_mm_s, s3_params_.tau_j_mm, s3_params_.finalists_n, s3_params_.max_start_goal_deg,
-                        s3_params_.r_trust_m, s3_params_.posthoc_cluster_deg, q.str().c_str());
-        }
-        core::S3Result s3_result;
-        const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
-            in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
-            /*eval_log=*/nullptr, clearance_model_.get());
-        RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: s1 status=%d evaluations=%d rollouts=%d margin_evals=%d posthoc_checks=%d dv=%.3g m/s "
-                    "path_margin=%.3f rad%s%s",
-                    static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.rollouts_done,
-                    s3_result.margin_evals_done, s3_result.posthoc_checks,
-                    s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
-                    s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
-        if (v2) {
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
-                        "start_goal_deg rollout_err_mm rollout_err_deg%s",
-                        s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
-            // ALL finalists that were evaluated (rollout done), numbered by their J_static rank; the ones after the winner of the
-            // lazy use_margin flow were never evaluated and are summarised in one line.
-            std::size_t n_evaluated = 0;
-            for (const core::S3FinalistRecord& f : s3_result.v2_finalists) n_evaluated += f.rollout_done ? 1 : 0;
-            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 finalists evaluated: %zu of %zu", n_evaluated,
-                        s3_result.v2_finalists.size());
-            for (std::size_t i = 0; i < s3_result.v2_finalists.size(); ++i) {
-                const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
-                if (!f.rollout_done) continue;
-                char jbuf[32];
-                if (!f.rollout_done) {
-                    std::snprintf(jbuf, sizeof(jbuf), "n/v");
-                } else if (f.rollout_feasible) {
-                    std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
-                } else {
-                    std::snprintf(jbuf, sizeof(jbuf), "n/a");
-                }
-                char cbuf[96] = "";
-                if (s3_params_.use_clearance) {
-                    if (f.clearance_done) {
-                        std::snprintf(cbuf, sizeof(cbuf), " clearance=%.2f mm %s t_rel=%.2f s%s", f.clearance_mm,
-                                      f.clearance_pair.c_str(), f.clearance_t_rel_s, f.clearance_rejected ? " REJECTED" : "");
-                    } else {
-                        std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
-                    }
-                }
-                char mbuf[160] = "";
-                if (s3_params_.use_margin) {
-                    if (f.margin_done) {
-                        std::snprintf(mbuf, sizeof(mbuf), " margin=%.2f deg limiting=fer_joint%d t_rel=%.2f s%s", f.margin_deg,
-                                      f.margin_joint + 1, f.margin_t_rel_s, f.margin_rejected ? " REJECTED" : "");
-                    } else {
-                        std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
-                    }
-                }
-                RCLCPP_INFO(this->get_logger(),
-                            "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
-                            "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
-                            i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
-                            f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
-                            f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
-                            (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
-                            f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
-                            f.winner ? " WINNER" : "");
-            }
-        }
-        if (v2 && s3_params_.use_clearance) {
-            RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 clearance stage: %.1f ms", s3_result.clearance_stage_ms);
-        }
-        for (const std::string& w : s3_result.warnings) {
-            RCLCPP_WARN(this->get_logger(), "grasp_planner_node: %s", w.c_str());
-        }
-        if (result.status == core::GraspLaunchResult::Status::kSelected) {
-            RCLCPP_INFO(this->get_logger(),
-                        "grasp_planner_node: selected k=%d theta=%.4f deg psi=%.4f deg wrist_flip=%d (force_flip=%d) "
-                        "branch_rule=%s start_goal_deg[A]=%.2f start_goal_deg[B]=%.2f wait_s=%.4f%s",
-                        static_cast<int>(result.k.value()), result.theta_star_rad.value() * 180.0 / M_PI,
-                        result.psi_rad * 180.0 / M_PI, result.wrist_flip ? 1 : 0, s3_params_.force_flip,
-                        s3_params_.branch_rule.c_str(),
-                        s3_result.chosen.eval.branch_rot_rad[0] * 180.0 / M_PI,
-                        s3_result.chosen.eval.branch_rot_rad[1] * 180.0 / M_PI,
-                        s3_result.chosen.wait_s,
-                        s3_params_.force ? " [FORCED]" : "");
-            for (const core::S3FinalistRecord& f : s3_result.v2_finalists) {
-                if (!f.winner) continue;
-                char mbuf[128] = "n/a", cbuf[160] = "n/a";
-                if (f.margin_done) {
-                    std::snprintf(mbuf, sizeof(mbuf), "%.2f deg (fer_joint%d at t_rel %.2f s)", f.margin_deg, f.margin_joint + 1,
-                                  f.margin_t_rel_s);
-                }
-                if (f.clearance_done) {
-                    std::snprintf(cbuf, sizeof(cbuf), "%.2f mm (%s at t_rel %.2f s)", f.clearance_mm, f.clearance_pair.c_str(),
-                                  f.clearance_t_rel_s);
-                }
-                RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner: predicted margin %s, clearance %s", mbuf,
-                            cbuf);
-            }
-        }
-        if (!s3_result.forced_violations.empty()) {
-            RCLCPP_ERROR(this->get_logger(),
-                         "grasp_planner_node: FORCED candidate VIOLATES constraints (force_ignore_constraints=true), "
-                         "proceeding anyway: %s", s3_result.forced_violations.c_str());
-        }
-
-        rclcpp::Time now = this->get_clock()->now();
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (now.seconds() < snapshot.t_s && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            now = this->get_clock()->now();
-        }
-        if (now.seconds() < snapshot.t_s) {
-            std::ostringstream m;
-            m << "node clock read " << now.seconds() << " s < snapshot.t_s " << snapshot.t_s
-              << " s at the end of selection (sim clock went backwards or was never advancing)";
-            throw std::runtime_error(m.str());
-        }
-
-        GraspCommandProvenance provenance;
-        provenance.start_position = in.p0;
-        provenance.weights_sha256 = in.weights_sha256;
-        const auto msg = toGraspCommandMsg(result, snapshot, now, provenance);
-        pub_->publish(msg);
-        RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: published GraspCommand (status=%u %s, evaluations=%u), now idle.",
-                    static_cast<unsigned>(msg.status), statusName(msg.status),
-                    static_cast<unsigned>(msg.evaluations));
-    } catch (const std::exception& e) {
-        RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: selection failed: %s", e.what());
-        rclcpp::shutdown();
+    if (s3_params_.force) {
+      RCLCPP_WARN(this->get_logger(),
+                  "grasp_planner_node: FORCED k=%d theta=%.4f deg psi=%.4f deg force_flip=%s "
+                  "(ignore_constraints=%s)",
+                  s3_params_.force_k, s3_params_.force_theta_deg, s3_params_.force_psi_deg,
+                  s3_params_.force_flip < 0 ? "auto(-1)" : (s3_params_.force_flip ? "1 (branch B)" : "0 (branch A)"),
+                  s3_params_.force_ignore_constraints ? "true" : "false");
     }
+    const bool v2 = core::parseS3Mode(s3_params_.mode) == core::S3Mode::kV2;
+    if (v2) {
+      std::ostringstream q;
+      for (std::size_t i = 0; i < s3_params_.rollout_q_ref.size(); ++i) q << (i ? ", " : "") << s3_params_.rollout_q_ref[i];
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1.mode=v2 branch_rule=%s use_w=%s kappa_w=%.3f mm kappa_t=%.3f mm/s tau_j=%.3f mm "
+                  "finalists_n=%d max_start_goal_deg=%.2f r_trust_m=%.3f posthoc_cluster_deg=%.2f rollout_q_ref=[%s] "
+                  "(w_hat_min and margin_min_rad NOT applied)",
+                  s3_params_.branch_rule.c_str(), s3_params_.use_w ? "true" : "false", s3_params_.kappa_w_mm,
+                  s3_params_.kappa_t_mm_s, s3_params_.tau_j_mm, s3_params_.finalists_n, s3_params_.max_start_goal_deg,
+                  s3_params_.r_trust_m, s3_params_.posthoc_cluster_deg, q.str().c_str());
+    }
+    core::S3Result s3_result;
+    const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
+        in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
+        /*eval_log=*/nullptr, clearance_model_.get());
+    RCLCPP_INFO(this->get_logger(),
+                "grasp_planner_node: s1 status=%d evaluations=%d rollouts=%d margin_evals=%d posthoc_checks=%d dv=%.3g m/s "
+                "path_margin=%.3f rad%s%s",
+                static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.rollouts_done,
+                s3_result.margin_evals_done, s3_result.posthoc_checks,
+                s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
+                s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
+    if (v2) {
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
+                  "start_goal_deg rollout_err_mm rollout_err_deg%s",
+                  s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
+      // ALL finalists that were evaluated (rollout done), numbered by their J_static rank; the ones after the winner of the
+      // lazy use_margin flow were never evaluated and are summarised in one line.
+      std::size_t n_evaluated = 0;
+      for (const core::S3FinalistRecord& f : s3_result.v2_finalists) n_evaluated += f.rollout_done ? 1 : 0;
+      RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 finalists evaluated: %zu of %zu", n_evaluated,
+                  s3_result.v2_finalists.size());
+      for (std::size_t i = 0; i < s3_result.v2_finalists.size(); ++i) {
+        const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
+        if (!f.rollout_done) continue;
+        char jbuf[32];
+        if (!f.rollout_done) {
+          std::snprintf(jbuf, sizeof(jbuf), "n/v");
+        } else if (f.rollout_feasible) {
+          std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
+        } else {
+          std::snprintf(jbuf, sizeof(jbuf), "n/a");
+        }
+        char cbuf[96] = "";
+        if (s3_params_.use_clearance) {
+          if (f.clearance_done) {
+            std::snprintf(cbuf, sizeof(cbuf), " clearance=%.2f mm %s t_rel=%.2f s%s", f.clearance_mm,
+                          f.clearance_pair.c_str(), f.clearance_t_rel_s, f.clearance_rejected ? " REJECTED" : "");
+          } else {
+            std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
+          }
+        }
+        char mbuf[160] = "";
+        if (s3_params_.use_margin) {
+          if (f.margin_done) {
+            std::snprintf(mbuf, sizeof(mbuf), " margin=%.2f deg limiting=fer_joint%d t_rel=%.2f s%s", f.margin_deg,
+                          f.margin_joint + 1, f.margin_t_rel_s, f.margin_rejected ? " REJECTED" : "");
+          } else {
+            std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
+          }
+        }
+        RCLCPP_INFO(this->get_logger(),
+                    "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
+                    "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
+                    i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
+                    f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
+                    f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
+                    (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
+                    f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
+                    f.winner ? " WINNER" : "");
+      }
+    }
+    if (v2 && s3_params_.use_clearance) {
+      RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 clearance stage: %.1f ms", s3_result.clearance_stage_ms);
+    }
+    for (const std::string& w : s3_result.warnings) {
+      RCLCPP_WARN(this->get_logger(), "grasp_planner_node: %s", w.c_str());
+    }
+    if (result.status == core::GraspLaunchResult::Status::kSelected) {
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: selected k=%d theta=%.4f deg psi=%.4f deg wrist_flip=%d (force_flip=%d) "
+                  "branch_rule=%s start_goal_deg[A]=%.2f start_goal_deg[B]=%.2f wait_s=%.4f%s",
+                  static_cast<int>(result.k.value()), result.theta_star_rad.value() * 180.0 / M_PI,
+                  result.psi_rad * 180.0 / M_PI, result.wrist_flip ? 1 : 0, s3_params_.force_flip,
+                  s3_params_.branch_rule.c_str(),
+                  s3_result.chosen.eval.branch_rot_rad[0] * 180.0 / M_PI,
+                  s3_result.chosen.eval.branch_rot_rad[1] * 180.0 / M_PI,
+                  s3_result.chosen.wait_s,
+                  s3_params_.force ? " [FORCED]" : "");
+      for (const core::S3FinalistRecord& f : s3_result.v2_finalists) {
+        if (!f.winner) continue;
+        char mbuf[128] = "n/a", cbuf[160] = "n/a";
+        if (f.margin_done) {
+          std::snprintf(mbuf, sizeof(mbuf), "%.2f deg (fer_joint%d at t_rel %.2f s)", f.margin_deg, f.margin_joint + 1,
+                        f.margin_t_rel_s);
+        }
+        if (f.clearance_done) {
+          std::snprintf(cbuf, sizeof(cbuf), "%.2f mm (%s at t_rel %.2f s)", f.clearance_mm, f.clearance_pair.c_str(),
+                        f.clearance_t_rel_s);
+        }
+        RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner: predicted margin %s, clearance %s", mbuf,
+                    cbuf);
+      }
+    }
+    if (!s3_result.forced_violations.empty()) {
+      RCLCPP_ERROR(this->get_logger(),
+                   "grasp_planner_node: FORCED candidate VIOLATES constraints (force_ignore_constraints=true), "
+                   "proceeding anyway: %s",
+                   s3_result.forced_violations.c_str());
+    }
+
+    rclcpp::Time now = this->get_clock()->now();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (now.seconds() < snapshot.t_s && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      now = this->get_clock()->now();
+    }
+    if (now.seconds() < snapshot.t_s) {
+      std::ostringstream m;
+      m << "node clock read " << now.seconds() << " s < snapshot.t_s " << snapshot.t_s
+        << " s at the end of selection (sim clock went backwards or was never advancing)";
+      throw std::runtime_error(m.str());
+    }
+
+    GraspCommandProvenance provenance;
+    provenance.start_position = in.p0;
+    provenance.weights_sha256 = in.weights_sha256;
+    const auto msg = toGraspCommandMsg(result, snapshot, now, provenance);
+    pub_->publish(msg);
+    RCLCPP_INFO(this->get_logger(),
+                "grasp_planner_node: published GraspCommand (status=%u %s, evaluations=%u), now idle.",
+                static_cast<unsigned>(msg.status), statusName(msg.status),
+                static_cast<unsigned>(msg.evaluations));
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(this->get_logger(), "grasp_planner_node: selection failed: %s", e.what());
+    rclcpp::shutdown();
+  }
 }
 
 }  // namespace ros_wrapper

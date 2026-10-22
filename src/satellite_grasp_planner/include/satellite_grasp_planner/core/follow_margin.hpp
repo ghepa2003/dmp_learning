@@ -30,24 +30,24 @@ namespace satellite_grasp_planner {
 namespace core {
 
 struct FollowMarginParams {
-    double follow_s = 0.0;         ///< duration of the simulated follow after AT_END [s], finite and >= 0; the caller always sets it (G16: 3.0)
-    double dt_approach_s = 0.005;  ///< integration step of the approach (as checkKinematicFeasibility and kDt of the selector)
-    double dt_follow_s = 0.01;     ///< integration step of the follow (step0c_margins.cpp: 0.01; run_rollout_follow_all.cpp: 0.1)
+  double follow_s = 0.0;         ///< duration of the simulated follow after AT_END [s], finite and >= 0; the caller always sets it (G16: 3.0)
+  double dt_approach_s = 0.005;  ///< integration step of the approach (as checkKinematicFeasibility and kDt of the selector)
+  double dt_follow_s = 0.01;     ///< integration step of the follow (step0c_margins.cpp: 0.01; run_rollout_follow_all.cpp: 0.1)
 };
 
 struct FollowMarginResult {
-    /// min over the sampled configurations and joints of min(q - lower, upper - q) [rad]; negative if a limit is exceeded.
-    double min_margin_rad = 0.0;
-    int joint = -1;  ///< limiting joint, 0-based (0 = fer_joint1); -1 if nothing was sampled
-    /// Time of the limiting sample relative to AT_END [s]: (i + 1) dt - tau (<= 0) in the approach, t_follow in (0, follow_s] in
-    /// the follow. Convention of the G16 diagnostics: the margin of the configuration BEFORE an integration step is labelled with
-    /// the end time of that step. The configuration reached after the LAST follow step is not sampled (as in step0c_margins.cpp).
-    double t_rel_s = 0.0;
-    double approach_min_margin_rad = 0.0;  ///< same minimum restricted to the approach samples
-    franka_cartesian_control::core::RobotModel::JointVector q_at_end =
-        franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state at AT_END (end of the approach)
-    franka_cartesian_control::core::RobotModel::JointVector q_final =
-        franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state after the follow
+  /// min over the sampled configurations and joints of min(q - lower, upper - q) [rad]; negative if a limit is exceeded.
+  double min_margin_rad = 0.0;
+  int joint = -1;  ///< limiting joint, 0-based (0 = fer_joint1); -1 if nothing was sampled
+  /// Time of the limiting sample relative to AT_END [s]: (i + 1) dt - tau (<= 0) in the approach, t_follow in (0, follow_s] in
+  /// the follow. Convention of the G16 diagnostics: the margin of the configuration BEFORE an integration step is labelled with
+  /// the end time of that step. The configuration reached after the LAST follow step is not sampled (as in step0c_margins.cpp).
+  double t_rel_s = 0.0;
+  double approach_min_margin_rad = 0.0;  ///< same minimum restricted to the approach samples
+  franka_cartesian_control::core::RobotModel::JointVector q_at_end =
+      franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state at AT_END (end of the approach)
+  franka_cartesian_control::core::RobotModel::JointVector q_final =
+      franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state after the follow
 };
 
 /**
@@ -57,11 +57,11 @@ struct FollowMarginResult {
  *        followMargin() call it is given to (not checked).
  */
 struct FollowApproachState {
-    franka_cartesian_control::core::RobotModel::JointVector q_end =
-        franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state AFTER the last approach step
-    double min_margin_rad = 0.0;  ///< approach minimum, as FollowMarginResult::approach_min_margin_rad
-    int joint = -1;               ///< its joint, 0-based; -1 = nothing was sampled in the approach
-    double t_rel_s = 0.0;         ///< its time relative to AT_END, (step + 1) dt - tau
+  franka_cartesian_control::core::RobotModel::JointVector q_end =
+      franka_cartesian_control::core::RobotModel::JointVector::Zero();  ///< joint state AFTER the last approach step
+  double min_margin_rad = 0.0;                                          ///< approach minimum, as FollowMarginResult::approach_min_margin_rad
+  int joint = -1;                                                       ///< its joint, 0-based; -1 = nothing was sampled in the approach
+  double t_rel_s = 0.0;                                                 ///< its time relative to AT_END, (step + 1) dt - tau
 };
 
 /**

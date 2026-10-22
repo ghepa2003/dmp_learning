@@ -13,8 +13,8 @@ namespace core {
  * 2. Rotational error (so(3)): 3D rotation vector (axis * angle) representing the geodesic rotational displacement.
  */
 struct CartesianError {
-    Eigen::Vector3d linear;   ///< Linear position error in base frame: e_p = p_target - p_current (meters)
-    Eigen::Vector3d angular;  ///< Angular orientation error in base frame: e_o = 2 * logMap(q_target * q_current^-1) (radians)
+  Eigen::Vector3d linear;   ///< Linear position error in base frame: e_p = p_target - p_current (meters)
+  Eigen::Vector3d angular;  ///< Angular orientation error in base frame: e_o = 2 * logMap(q_target * q_current^-1) (radians)
 };
 
 /**
@@ -36,20 +36,20 @@ struct CartesianError {
  * @return Eigen::Vector3d Half-angle rotation vector (theta / 2) * u in R^3.
  */
 inline Eigen::Vector3d logMap(const Eigen::Quaterniond& q) {
-    Eigen::Vector3d v(q.x(), q.y(), q.z());
-    double vnorm = v.norm();
+  Eigen::Vector3d v(q.x(), q.y(), q.z());
+  double vnorm = v.norm();
 
-    // Guard against singularity / division by zero near the identity rotation (theta -> 0).
-    if (vnorm < 1e-8) {
-        return Eigen::Vector3d::Zero();
-    }
+  // Guard against singularity / division by zero near the identity rotation (theta -> 0).
+  if (vnorm < 1e-8) {
+    return Eigen::Vector3d::Zero();
+  }
 
-    // Clamp the scalar part to [-1, 1] to prevent NaN resulting from numerical inaccuracies in acos.
-    double w = std::max(-1.0, std::min(1.0, q.w()));
-    double angle = std::acos(w);  // angle = theta / 2
+  // Clamp the scalar part to [-1, 1] to prevent NaN resulting from numerical inaccuracies in acos.
+  double w = std::max(-1.0, std::min(1.0, q.w()));
+  double angle = std::acos(w);  // angle = theta / 2
 
-    // Return (theta / 2) * u
-    return angle * (v / vnorm);
+  // Return (theta / 2) * u
+  return angle * (v / vnorm);
 }
 
 /**
@@ -80,30 +80,30 @@ inline Eigen::Vector3d logMap(const Eigen::Quaterniond& q) {
  * @return CartesianError Struct containing 3D linear error and 3D angular error.
  */
 inline CartesianError computePoseError(const Eigen::Vector3d& current_pos,
-                                        const Eigen::Quaterniond& current_quat,
-                                        const Eigen::Vector3d& target_pos,
-                                        const Eigen::Quaterniond& target_quat) {
-    CartesianError err;
+                                       const Eigen::Quaterniond& current_quat,
+                                       const Eigen::Vector3d& target_pos,
+                                       const Eigen::Quaterniond& target_quat) {
+  CartesianError err;
 
-    // Linear translation error (meters)
-    err.linear = target_pos - current_pos;
+  // Linear translation error (meters)
+  err.linear = target_pos - current_pos;
 
-    // Normalize quaternions defensively to avoid numerical drift accumulation
-    Eigen::Quaterniond q_cur = current_quat.normalized();
-    Eigen::Quaterniond q_tgt = target_quat.normalized();
+  // Normalize quaternions defensively to avoid numerical drift accumulation
+  Eigen::Quaterniond q_cur = current_quat.normalized();
+  Eigen::Quaterniond q_tgt = target_quat.normalized();
 
-    // Shortest-path hemisphere alignment: flip sign if in opposite hemisphere
-    if (q_cur.coeffs().dot(q_tgt.coeffs()) < 0.0) {
-        q_tgt.coeffs() = -q_tgt.coeffs();
-    }
+  // Shortest-path hemisphere alignment: flip sign if in opposite hemisphere
+  if (q_cur.coeffs().dot(q_tgt.coeffs()) < 0.0) {
+    q_tgt.coeffs() = -q_tgt.coeffs();
+  }
 
-    // Relative orientation displacement: q_err = q_tgt * q_cur^-1
-    Eigen::Quaterniond q_err = q_tgt * q_cur.conjugate();
+  // Relative orientation displacement: q_err = q_tgt * q_cur^-1
+  Eigen::Quaterniond q_err = q_tgt * q_cur.conjugate();
 
-    // Convert relative quaternion to angular error vector e_o in radians: e_o = 2 * (theta / 2) * u = theta * u
-    err.angular = 2.0 * logMap(q_err);
+  // Convert relative quaternion to angular error vector e_o in radians: e_o = 2 * (theta / 2) * u = theta * u
+  err.angular = 2.0 * logMap(q_err);
 
-    return err;
+  return err;
 }
 
 }  // namespace core

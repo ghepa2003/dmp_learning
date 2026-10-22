@@ -23,8 +23,8 @@ namespace ros_wrapper {
 
 /// Values the message reports that are not in GraspLaunchResult: they are inputs of the selection.
 struct GraspCommandProvenance {
-    Eigen::Vector3d start_position = Eigen::Vector3d::Zero();  ///< planner p0 (EE position at q0), world frame
-    std::string weights_sha256;  ///< SelectionInputs::weights_sha256
+  Eigen::Vector3d start_position = Eigen::Vector3d::Zero();  ///< planner p0 (EE position at q0), world frame
+  std::string weights_sha256;                                ///< SelectionInputs::weights_sha256
 };
 
 /// Converts one planGraspAndLaunchS1() @p result into a GraspCommand. goal_pose/k/theta_star_rad/

@@ -34,10 +34,10 @@ constexpr std::size_t kNumFingerJoints = 2;
 const std::array<std::string, kNumFingerJoints>& fingerJointNames();
 
 struct JointStateSample {
-    double t = 0.0;  ///< seconds since the start of the recording
-    std::array<double, kNumJoints> q{};
-    bool has_fingers = false;  ///< true if @ref fingers holds measured values
-    std::array<double, kNumFingerJoints> fingers{};
+  double t = 0.0;  ///< seconds since the start of the recording
+  std::array<double, kNumJoints> q{};
+  bool has_fingers = false;  ///< true if @ref fingers holds measured values
+  std::array<double, kNumFingerJoints> fingers{};
 };
 
 /// Fills @p fingers_out with fer_finger_joint1/2 looked up by name. Same contract as

@@ -52,42 +52,42 @@ inline constexpr double kClearanceTailExcludeS = 2.0;
 
 /// One sample of the commanded TCP trajectory: time from the start of the approach (the TRIGGER), pose of the TCP.
 struct ApproachSample {
-    double t_s = 0.0;
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+  double t_s = 0.0;
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
 };
 
 struct ClearanceParams {
-    double dt_s = 0.05;            ///< sampling of the window [0, tau]; > 0
-    double gripper_open_m = 0.060; ///< finger joint position (both fingers), in [0, kFingerOpenMaxM]
+  double dt_s = 0.05;             ///< sampling of the window [0, tau]; > 0
+  double gripper_open_m = 0.060;  ///< finger joint position (both fingers), in [0, kFingerOpenMaxM]
 };
 
 /// @throws std::invalid_argument naming the field.
 void validateClearanceParams(const ClearanceParams& p);
 
 struct ClearancePair {
-    std::string robot;      ///< "mano" | "dito 1" (left, +y) | "dito 2" (right, -y)
-    std::string satellite;  ///< "cubo" | "collare"
-    std::string str() const { return robot.empty() ? std::string("n/v") : robot + "-" + satellite; }
+  std::string robot;      ///< "mano" | "dito 1" (left, +y) | "dito 2" (right, -y)
+  std::string satellite;  ///< "cubo" | "collare"
+  std::string str() const { return robot.empty() ? std::string("n/v") : robot + "-" + satellite; }
 };
 
 struct ClearanceResult {
-    /// Minimum over the whole window [0, tau] [mm], with its pair and its time relative to contact (t - tau, <= 0).
-    double min_mm = 0.0;
-    ClearancePair pair;
-    double t_rel_s = 0.0;
-    /// Same over the window [0, tau - kClearanceTailExcludeS] ("senza ultimi 2 s"): THIS is the value the constraint uses.
-    double min_mm_no_tail = 0.0;
-    ClearancePair pair_no_tail;
-    double t_rel_no_tail_s = 0.0;
+  /// Minimum over the whole window [0, tau] [mm], with its pair and its time relative to contact (t - tau, <= 0).
+  double min_mm = 0.0;
+  ClearancePair pair;
+  double t_rel_s = 0.0;
+  /// Same over the window [0, tau - kClearanceTailExcludeS] ("senza ultimi 2 s"): THIS is the value the constraint uses.
+  double min_mm_no_tail = 0.0;
+  ClearancePair pair_no_tail;
+  double t_rel_no_tail_s = 0.0;
 };
 
 /// Triangle mesh of the hand collision geometry in the hand frame (unique vertices, triangles as index triples).
 struct HandMesh {
-    std::vector<Eigen::Vector3d> points;
-    std::vector<std::array<std::size_t, 3>> triangles;
-    /// Max convexity violation [m] measured by validateHandMesh (reported by describeHandMesh); < 0 = not measured yet.
-    double convexity_violation_m = -1.0;
+  std::vector<Eigen::Vector3d> points;
+  std::vector<std::array<std::size_t, 3>> triangles;
+  /// Max convexity violation [m] measured by validateHandMesh (reported by describeHandMesh); < 0 = not measured yet.
+  double convexity_violation_m = -1.0;
 };
 
 /// Tolerance of the convexity check of validateHandMesh [m]. ASSUMED 1.0 mm: the real fer_hand mesh (hand.stl) measures
@@ -113,21 +113,21 @@ HandMesh makeBoxHandMesh(const Eigen::Vector3d& half_extents);
 
 /// Hand convex mesh + collar/finger geometry. Built once; not copyable. Thread-compatible (const use only).
 class ApproachClearanceModel {
-public:
-    /// @param cube  cube_side_m, standoff_m, collar_radius_m, wall_thickness_m, face_normal_body are used (center_world
-    ///              and axis_world are NOT: they come with every query, from the snapshot).
-    /// @param hand  collision mesh of fer_hand in the hand frame; validateHandMesh() is run on a copy (convexity, orientation).
-    /// @throws std::invalid_argument for invalid geometry or an invalid / non-convex mesh.
-    ApproachClearanceModel(const haptic_dmp_learning::core::CubeSatelliteModel::Params& cube, const HandMesh& hand);
-    ~ApproachClearanceModel();
-    ApproachClearanceModel(const ApproachClearanceModel&) = delete;
-    ApproachClearanceModel& operator=(const ApproachClearanceModel&) = delete;
+ public:
+  /// @param cube  cube_side_m, standoff_m, collar_radius_m, wall_thickness_m, face_normal_body are used (center_world
+  ///              and axis_world are NOT: they come with every query, from the snapshot).
+  /// @param hand  collision mesh of fer_hand in the hand frame; validateHandMesh() is run on a copy (convexity, orientation).
+  /// @throws std::invalid_argument for invalid geometry or an invalid / non-convex mesh.
+  ApproachClearanceModel(const haptic_dmp_learning::core::CubeSatelliteModel::Params& cube, const HandMesh& hand);
+  ~ApproachClearanceModel();
+  ApproachClearanceModel(const ApproachClearanceModel&) = delete;
+  ApproachClearanceModel& operator=(const ApproachClearanceModel&) = delete;
 
-    struct Impl;
-    const Impl& impl() const { return *impl_; }
+  struct Impl;
+  const Impl& impl() const { return *impl_; }
 
-private:
-    std::unique_ptr<Impl> impl_;
+ private:
+  std::unique_ptr<Impl> impl_;
 };
 
 /**
@@ -149,14 +149,14 @@ ClearanceResult approachClearance(const ApproachClearanceModel& model, const std
 
 /// What the selection hands to the clearance evaluator for one finalist.
 struct ClearanceQuery {
-    const std::vector<ApproachSample>* trajectory = nullptr;
-    double tau_s = 0.0;
-    double theta_star_rad = 0.0;
-    double omega_rad_s = 0.0;
-    Eigen::Vector3d center_world = Eigen::Vector3d::Zero();
-    Eigen::Vector3d axis_world = Eigen::Vector3d::UnitZ();
-    int k = 0;
-    bool wrist_flip = false;
+  const std::vector<ApproachSample>* trajectory = nullptr;
+  double tau_s = 0.0;
+  double theta_star_rad = 0.0;
+  double omega_rad_s = 0.0;
+  Eigen::Vector3d center_world = Eigen::Vector3d::Zero();
+  Eigen::Vector3d axis_world = Eigen::Vector3d::UnitZ();
+  int k = 0;
+  bool wrist_flip = false;
 };
 using ClearanceEvaluator = std::function<ClearanceResult(const ClearanceQuery&)>;
 

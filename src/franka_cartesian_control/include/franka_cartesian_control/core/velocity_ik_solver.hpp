@@ -33,46 +33,46 @@ namespace core {
  *      dq_i = clamp(dq_i, -max_joint_speed, +max_joint_speed)
  */
 class VelocityIkSolver {
-public:
-    using JointVector = RobotModel::JointVector;
-    using Vector6d = Eigen::Matrix<double, 6, 1>;
+ public:
+  using JointVector = RobotModel::JointVector;
+  using Vector6d = Eigen::Matrix<double, 6, 1>;
 
-    struct Params {
-        double kp_linear = 1.0;          ///< Proportional gain for linear position error (1/s)
-        double kp_angular = 1.0;         ///< Proportional gain for angular orientation error (1/s)
-        double damping_lambda = 0.05;    ///< DLS singularity damping factor lambda
-        double max_linear_speed = 0.15;  ///< Maximum task-space linear speed cap (m/s)
-        double max_angular_speed = 0.5;  ///< Maximum task-space angular speed cap (rad/s)
-        double max_joint_speed = 1.5;    ///< Per-joint actuator velocity limit (rad/s)
-    };
+  struct Params {
+    double kp_linear = 1.0;          ///< Proportional gain for linear position error (1/s)
+    double kp_angular = 1.0;         ///< Proportional gain for angular orientation error (1/s)
+    double damping_lambda = 0.05;    ///< DLS singularity damping factor lambda
+    double max_linear_speed = 0.15;  ///< Maximum task-space linear speed cap (m/s)
+    double max_angular_speed = 0.5;  ///< Maximum task-space angular speed cap (rad/s)
+    double max_joint_speed = 1.5;    ///< Per-joint actuator velocity limit (rad/s)
+  };
 
-    VelocityIkSolver();
-    explicit VelocityIkSolver(const Params& params);
+  VelocityIkSolver();
+  explicit VelocityIkSolver(const Params& params);
 
-    /**
-     * @brief Computes desired twist [v; omega] from Cartesian pose error, optionally
-     *        with a velocity feedforward term: v_cmd = v_ff + Kp * e.
-     * @param error Struct containing linear error e_p (m) and angular error e_o (rad).
-     * @param feedforward Desired 6D feedforward twist [v_ff; omega_ff], base frame,
-     *                    added to the proportional term BEFORE saturation. Defaults
-     *                    to zero, reproducing the previous Kp-only behaviour exactly.
-     * @return Vector6d Saturated desired twist in base frame [v_x, v_y, v_z, w_x, w_y, w_z]^T.
-     */
-    Vector6d desiredTwist(const CartesianError& error, const Vector6d& feedforward = Vector6d::Zero()) const;
+  /**
+   * @brief Computes desired twist [v; omega] from Cartesian pose error, optionally
+   *        with a velocity feedforward term: v_cmd = v_ff + Kp * e.
+   * @param error Struct containing linear error e_p (m) and angular error e_o (rad).
+   * @param feedforward Desired 6D feedforward twist [v_ff; omega_ff], base frame,
+   *                    added to the proportional term BEFORE saturation. Defaults
+   *                    to zero, reproducing the previous Kp-only behaviour exactly.
+   * @return Vector6d Saturated desired twist in base frame [v_x, v_y, v_z, w_x, w_y, w_z]^T.
+   */
+  Vector6d desiredTwist(const CartesianError& error, const Vector6d& feedforward = Vector6d::Zero()) const;
 
-    /**
-     * @brief Computes joint velocity command dq using Damped Least Squares inversion.
-     * @param jacobian Current 6x7 geometric Jacobian matrix J(q).
-     * @param twist Desired 6D spatial twist V_des.
-     * @return JointVector Commanded joint velocities dq (7x1, rad/s).
-     */
-    JointVector solve(const RobotModel::Jacobian6x7& jacobian, const Vector6d& twist) const;
+  /**
+   * @brief Computes joint velocity command dq using Damped Least Squares inversion.
+   * @param jacobian Current 6x7 geometric Jacobian matrix J(q).
+   * @param twist Desired 6D spatial twist V_des.
+   * @return JointVector Commanded joint velocities dq (7x1, rad/s).
+   */
+  JointVector solve(const RobotModel::Jacobian6x7& jacobian, const Vector6d& twist) const;
 
-    const Params& params() const { return params_; }
-    void setParams(const Params& params) { params_ = params; }
+  const Params& params() const { return params_; }
+  void setParams(const Params& params) { params_ = params; }
 
-private:
-    Params params_;
+ private:
+  Params params_;
 };
 
 }  // namespace core

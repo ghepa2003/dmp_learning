@@ -33,17 +33,17 @@ namespace filter_utils {
  */
 inline std::vector<Sample> dropNonIncreasingTimeSamples(
     const std::vector<Sample>& samples, int* dropped = nullptr) {
-    std::vector<Sample> out;
-    out.reserve(samples.size());
-    for (const auto& s : samples) {
-        if (out.empty() || s.t > out.back().t) {
-            out.push_back(s);
-        }
+  std::vector<Sample> out;
+  out.reserve(samples.size());
+  for (const auto& s : samples) {
+    if (out.empty() || s.t > out.back().t) {
+      out.push_back(s);
     }
-    if (dropped != nullptr) {
-        *dropped = static_cast<int>(samples.size() - out.size());
-    }
-    return out;
+  }
+  if (dropped != nullptr) {
+    *dropped = static_cast<int>(samples.size() - out.size());
+  }
+  return out;
 }
 
 /**
@@ -70,22 +70,22 @@ inline std::vector<Sample> dropNonIncreasingTimeSamples(
  */
 inline std::vector<Sample> enforceQuaternionContinuity(
     const std::vector<Sample>& samples, int* transitions = nullptr) {
-    std::vector<Sample> out = samples;
-    int n = 0;
-    bool negate = false;
-    for (std::size_t k = 1; k < out.size(); ++k) {
-        if (samples[k - 1].orientation.dot(samples[k].orientation) < 0.0) {
-            negate = !negate;
-            ++n;
-        }
-        if (negate) {
-            out[k].orientation.coeffs() = -out[k].orientation.coeffs();
-        }
+  std::vector<Sample> out = samples;
+  int n = 0;
+  bool negate = false;
+  for (std::size_t k = 1; k < out.size(); ++k) {
+    if (samples[k - 1].orientation.dot(samples[k].orientation) < 0.0) {
+      negate = !negate;
+      ++n;
     }
-    if (transitions != nullptr) {
-        *transitions = n;
+    if (negate) {
+      out[k].orientation.coeffs() = -out[k].orientation.coeffs();
     }
-    return out;
+  }
+  if (transitions != nullptr) {
+    *transitions = n;
+  }
+  return out;
 }
 
 /**
@@ -119,29 +119,29 @@ inline std::vector<VectorT> movingAverageSmooth(
     const std::vector<VectorT>& signal,
     const std::vector<double>& t,
     double window_sec) {
-    const size_t N = signal.size();
-    if (window_sec <= 0.0 || N < 2) return signal;
+  const size_t N = signal.size();
+  if (window_sec <= 0.0 || N < 2) return signal;
 
-    // Estimate nominal sampling time
-    double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
-    if (dt_est <= 0.0) return signal;
+  // Estimate nominal sampling time
+  double dt_est = (t.back() - t.front()) / static_cast<double>(N - 1);
+  if (dt_est <= 0.0) return signal;
 
-    int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
-    int half = window_samples / 2;
+  int window_samples = std::max(1, static_cast<int>(std::round(window_sec / dt_est)));
+  int half = window_samples / 2;
 
-    std::vector<VectorT> out(N);
-    for (size_t k = 0; k < N; ++k) {
-        int lo = std::max(0, static_cast<int>(k) - half);
-        int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
-        VectorT sum = VectorT::Zero();
-        int count = 0;
-        for (int j = lo; j <= hi; ++j) {
-            sum += signal[j];
-            ++count;
-        }
-        out[k] = sum / static_cast<double>(count);
+  std::vector<VectorT> out(N);
+  for (size_t k = 0; k < N; ++k) {
+    int lo = std::max(0, static_cast<int>(k) - half);
+    int hi = std::min(static_cast<int>(N) - 1, static_cast<int>(k) + half);
+    VectorT sum = VectorT::Zero();
+    int count = 0;
+    for (int j = lo; j <= hi; ++j) {
+      sum += signal[j];
+      ++count;
     }
-    return out;
+    out[k] = sum / static_cast<double>(count);
+  }
+  return out;
 }
 
 }  // namespace filter_utils

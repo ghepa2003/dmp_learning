@@ -53,52 +53,52 @@ namespace satellite_grasp_planner {
 namespace ros_wrapper {
 
 class GraspPlannerNode : public rclcpp::Node {
-public:
-    GraspPlannerNode();
+ public:
+  GraspPlannerNode();
 
-    /// Joins the worker thread: if a selection is in flight (no cancellation mechanism exists in
-    /// selectGraspS3()), destruction blocks until it finishes - up to ~5.2 s (Release) or ~500 s
-    /// (unoptimized build).
-    ~GraspPlannerNode() override;
+  /// Joins the worker thread: if a selection is in flight (no cancellation mechanism exists in
+  /// selectGraspS3()), destruction blocks until it finishes - up to ~5.2 s (Release) or ~500 s
+  /// (unoptimized build).
+  ~GraspPlannerNode() override;
 
-private:
-    void onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
-    void runSelection(const core::SatelliteSnapshot& snapshot);
+ private:
+  void onOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
+  void runSelection(const core::SatelliteSnapshot& snapshot);
 
-    std::string demo_params_path_;
-    std::string urdf_path_;
-    double min_delay_s_ = 0.0;
-    haptic_dmp_learning::core::CubeSatelliteModel::Params cube_geometry_;
-    Eigen::Vector3d robot_base_world_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d satellite_rotation_center_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d satellite_rotation_axis_ = Eigen::Vector3d::UnitZ();
-    double satellite_omega_rad_s_ = 0.0;
-    Eigen::Quaterniond satellite_q_ref_ = Eigen::Quaterniond::Identity();
-    double omega_consistency_tol_rad_s_ = 0.0;
-    std::string grasp_command_topic_;
-    /// Set iff the start_joints_override_rad parameter is non-empty (validated at startup); unset = readyPose,
-    /// i.e. buildSelectionInputs() keeps its previous behaviour.
-    std::optional<core::StartState> start_state_;
+  std::string demo_params_path_;
+  std::string urdf_path_;
+  double min_delay_s_ = 0.0;
+  haptic_dmp_learning::core::CubeSatelliteModel::Params cube_geometry_;
+  Eigen::Vector3d robot_base_world_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d satellite_rotation_center_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d satellite_rotation_axis_ = Eigen::Vector3d::UnitZ();
+  double satellite_omega_rad_s_ = 0.0;
+  Eigen::Quaterniond satellite_q_ref_ = Eigen::Quaterniond::Identity();
+  double omega_consistency_tol_rad_s_ = 0.0;
+  std::string grasp_command_topic_;
+  /// Set iff the start_joints_override_rad parameter is non-empty (validated at startup); unset = readyPose,
+  /// i.e. buildSelectionInputs() keeps its previous behaviour.
+  std::optional<core::StartState> start_state_;
 
-    core::S3Params s3_params_;  ///< s1.* parameters, see grasp_planner_example.yaml
-    /// Set iff s1.use_clearance (hand convex hull computed once at startup); null otherwise.
-    std::shared_ptr<core::ApproachClearanceModel> clearance_model_;
+  core::S3Params s3_params_;  ///< s1.* parameters, see grasp_planner_example.yaml
+  /// Set iff s1.use_clearance (hand convex hull computed once at startup); null otherwise.
+  std::shared_ptr<core::ApproachClearanceModel> clearance_model_;
 
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;
 
-    /// First accepted odometry sample (position / frame / phase already checked). omega is estimated from the
-    /// quaternion increment first -> next sample with a later stamp (twist.angular is NOT used, see
-    /// axisRateFromQuaternions); the snapshot keeps the phase and stamp of this first sample.
-    struct FirstOdomSample {
-        Eigen::Quaterniond q;
-        double stamp_s;
-        double theta_rad;
-    };
-    std::optional<FirstOdomSample> first_odom_;  // touched only by onOdom (single-threaded executor)
+  /// First accepted odometry sample (position / frame / phase already checked). omega is estimated from the
+  /// quaternion increment first -> next sample with a later stamp (twist.angular is NOT used, see
+  /// axisRateFromQuaternions); the snapshot keeps the phase and stamp of this first sample.
+  struct FirstOdomSample {
+    Eigen::Quaterniond q;
+    double stamp_s;
+    double theta_rad;
+  };
+  std::optional<FirstOdomSample> first_odom_;  // touched only by onOdom (single-threaded executor)
 
-    std::atomic<bool> dispatched_{false};
-    std::thread worker_;
+  std::atomic<bool> dispatched_{false};
+  std::thread worker_;
 };
 
 }  // namespace ros_wrapper

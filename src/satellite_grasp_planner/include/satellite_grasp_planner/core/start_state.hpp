@@ -21,9 +21,9 @@ namespace core {
 inline constexpr const char* kStartJointsParameterName = "start_joints_override_rad";
 
 struct StartState {
-    franka_cartesian_control::core::RobotModel::JointVector q =
-        franka_cartesian_control::core::RobotModel::JointVector::Zero();
-    std::string source;  ///< where q comes from, for the provenance and the log
+  franka_cartesian_control::core::RobotModel::JointVector q =
+      franka_cartesian_control::core::RobotModel::JointVector::Zero();
+  std::string source;  ///< where q comes from, for the provenance and the log
 };
 
 /// @throws std::invalid_argument naming kStartJointsParameterName if @p values does not have exactly 7
@@ -40,10 +40,10 @@ void validateStartJoints(const std::vector<double>& values,
 StartState makeStartStateFromOverride(const std::vector<double>& values, const std::string& urdf_path);
 
 struct StartDistance {
-    double joint_norm_rad = 0.0;  ///< || q0 - readyPose ||
-    double joint_max_rad = 0.0;   ///< max_i |q0_i - readyPose_i|
-    int joint_max_index = 1;      ///< the i (1..7, fer_jointN) where it happens
-    double task_mm = 0.0;         ///< || FK(q0) - FK(readyPose) || [mm]
+  double joint_norm_rad = 0.0;  ///< || q0 - readyPose ||
+  double joint_max_rad = 0.0;   ///< max_i |q0_i - readyPose_i|
+  int joint_max_index = 1;      ///< the i (1..7, fer_jointN) where it happens
+  double task_mm = 0.0;         ///< || FK(q0) - FK(readyPose) || [mm]
 };
 
 /// Distance of @p q0 from RobotModel::readyPose() in joint space and in task space (EE position). Leaves

@@ -17,10 +17,10 @@ namespace core {
  * - Orientation `orientation`: Unit quaternion [w, x, y, z] in SO(3).
  */
 struct Sample {
-    double t = 0.0;                                                 ///< Elapsed timestamp (seconds, t >= 0)
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();            ///< 3D Cartesian position (meters)
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity(); ///< Orientation unit quaternion in SO(3)
-    bool gripper_trigger = false;                                   ///< Gripper close trigger event
+  double t = 0.0;                                                   ///< Elapsed timestamp (seconds, t >= 0)
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();               ///< 3D Cartesian position (meters)
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();  ///< Orientation unit quaternion in SO(3)
+  bool gripper_trigger = false;                                     ///< Gripper close trigger event
 };
 
 }  // namespace core

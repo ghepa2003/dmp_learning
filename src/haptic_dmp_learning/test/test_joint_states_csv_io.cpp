@@ -10,162 +10,162 @@
 using namespace haptic_dmp_learning::core::joint_states_csv_io;
 
 TEST(JointStatesCsvIoTest, MapsByNameNotByPosition) {
-    // Shuffled order plus extra joints (finger joints) that must be ignored.
-    const std::vector<std::string> names = {"fer_finger_joint1", "fer_joint7", "fer_joint3",
-                                            "fer_joint1", "fer_joint2", "fer_joint6",
-                                            "fer_joint5", "fer_joint4"};
-    const std::vector<double> pos = {9.0, 7.0, 3.0, 1.0, 2.0, 6.0, 5.0, 4.0};
-    std::array<double, kNumJoints> q{};
-    ASSERT_TRUE(extractJointPositions(names, pos, q));
-    for (std::size_t j = 0; j < kNumJoints; ++j) EXPECT_DOUBLE_EQ(q[j], j + 1.0);
+  // Shuffled order plus extra joints (finger joints) that must be ignored.
+  const std::vector<std::string> names = {"fer_finger_joint1", "fer_joint7", "fer_joint3",
+                                          "fer_joint1", "fer_joint2", "fer_joint6",
+                                          "fer_joint5", "fer_joint4"};
+  const std::vector<double> pos = {9.0, 7.0, 3.0, 1.0, 2.0, 6.0, 5.0, 4.0};
+  std::array<double, kNumJoints> q{};
+  ASSERT_TRUE(extractJointPositions(names, pos, q));
+  for (std::size_t j = 0; j < kNumJoints; ++j) EXPECT_DOUBLE_EQ(q[j], j + 1.0);
 }
 
 TEST(JointStatesCsvIoTest, MissingJointIsRejected) {
-    std::vector<std::string> names = {"fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
-                                      "fer_joint5", "fer_joint6"};  // no fer_joint7
-    std::vector<double> pos(names.size(), 0.0);
-    std::array<double, kNumJoints> q{};
-    EXPECT_FALSE(extractJointPositions(names, pos, q));
-    // names longer than positions: the unmatched joint counts as missing.
-    names.push_back("fer_joint7");
-    EXPECT_FALSE(extractJointPositions(names, pos, q));
+  std::vector<std::string> names = {"fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
+                                    "fer_joint5", "fer_joint6"};  // no fer_joint7
+  std::vector<double> pos(names.size(), 0.0);
+  std::array<double, kNumJoints> q{};
+  EXPECT_FALSE(extractJointPositions(names, pos, q));
+  // names longer than positions: the unmatched joint counts as missing.
+  names.push_back("fer_joint7");
+  EXPECT_FALSE(extractJointPositions(names, pos, q));
 }
 
 TEST(JointStatesCsvIoTest, DerivesPathFromDemoPath) {
-    EXPECT_EQ(deriveJointStatesCsvPath("/w/live_demo_raw.csv"), "/w/live_demo_joint_states.csv");
-    EXPECT_EQ(deriveJointStatesCsvPath("/w/demo_raw.csv"), "/w/demo_joint_states.csv");
-    EXPECT_EQ(deriveJointStatesCsvPath("/w/my_demo.csv"), "/w/my_demo_joint_states.csv");
-    EXPECT_EQ(deriveJointStatesCsvPath(""), "");
+  EXPECT_EQ(deriveJointStatesCsvPath("/w/live_demo_raw.csv"), "/w/live_demo_joint_states.csv");
+  EXPECT_EQ(deriveJointStatesCsvPath("/w/demo_raw.csv"), "/w/demo_joint_states.csv");
+  EXPECT_EQ(deriveJointStatesCsvPath("/w/my_demo.csv"), "/w/my_demo_joint_states.csv");
+  EXPECT_EQ(deriveJointStatesCsvPath(""), "");
 }
 
 TEST(JointStatesCsvIoTest, WritesExpectedHeaderAndRows) {
-    const std::string path = ::testing::TempDir() + "joint_states_io_test.csv";
-    std::vector<JointStateSample> s(2);
-    s[0].t = 0.0;
-    s[1].t = 0.5;
-    for (std::size_t j = 0; j < kNumJoints; ++j) {
-        s[0].q[j] = 0.1 * static_cast<double>(j);
-        s[1].q[j] = -0.2 * static_cast<double>(j + 1);
-    }
-    writeJointStatesCsv(path, s);
+  const std::string path = ::testing::TempDir() + "joint_states_io_test.csv";
+  std::vector<JointStateSample> s(2);
+  s[0].t = 0.0;
+  s[1].t = 0.5;
+  for (std::size_t j = 0; j < kNumJoints; ++j) {
+    s[0].q[j] = 0.1 * static_cast<double>(j);
+    s[1].q[j] = -0.2 * static_cast<double>(j + 1);
+  }
+  writeJointStatesCsv(path, s);
 
-    std::ifstream f(path);
-    std::string line;
-    std::getline(f, line);
-    EXPECT_EQ(line,
-              "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7");
-    std::getline(f, line);
-    EXPECT_EQ(line, "0,0,0.1,0.2,0.3,0.4,0.5,0.6");
-    std::getline(f, line);
-    EXPECT_EQ(line.rfind("0.5,-0.2,-0.4,-0.6", 0), 0u);
-    std::remove(path.c_str());
+  std::ifstream f(path);
+  std::string line;
+  std::getline(f, line);
+  EXPECT_EQ(line,
+            "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7");
+  std::getline(f, line);
+  EXPECT_EQ(line, "0,0,0.1,0.2,0.3,0.4,0.5,0.6");
+  std::getline(f, line);
+  EXPECT_EQ(line.rfind("0.5,-0.2,-0.4,-0.6", 0), 0u);
+  std::remove(path.c_str());
 }
 
 TEST(JointStatesCsvIoTest, EmptyBufferThrowsAndWritesNoFile) {
-    const std::string path = ::testing::TempDir() + "joint_states_io_empty.csv";
-    std::remove(path.c_str());
-    EXPECT_THROW(writeJointStatesCsv(path, {}), std::invalid_argument);
-    EXPECT_FALSE(std::ifstream(path).good());
+  const std::string path = ::testing::TempDir() + "joint_states_io_empty.csv";
+  std::remove(path.c_str());
+  EXPECT_THROW(writeJointStatesCsv(path, {}), std::invalid_argument);
+  EXPECT_FALSE(std::ifstream(path).good());
 }
 
 TEST(JointStatesCsvIoTest, ReadRoundTripAndByNameMapping) {
-    const std::string path = ::testing::TempDir() + "joint_states_read_test.csv";
-    std::vector<JointStateSample> s(2);
-    s[0].t = 0.0;
-    s[1].t = 0.5;
-    for (std::size_t j = 0; j < kNumJoints; ++j) {
-        s[0].q[j] = 0.1 * static_cast<double>(j);
-        s[1].q[j] = -0.2 * static_cast<double>(j + 1);
-    }
-    writeJointStatesCsv(path, s);
-    const auto r = readJointStatesCsv(path);
-    ASSERT_EQ(r.size(), 2u);
-    EXPECT_NEAR(r[1].t, 0.5, 1e-12);
-    for (std::size_t j = 0; j < kNumJoints; ++j) {
-        EXPECT_NEAR(r[0].q[j], s[0].q[j], 1e-9);
-        EXPECT_NEAR(r[1].q[j], s[1].q[j], 1e-9);
-    }
+  const std::string path = ::testing::TempDir() + "joint_states_read_test.csv";
+  std::vector<JointStateSample> s(2);
+  s[0].t = 0.0;
+  s[1].t = 0.5;
+  for (std::size_t j = 0; j < kNumJoints; ++j) {
+    s[0].q[j] = 0.1 * static_cast<double>(j);
+    s[1].q[j] = -0.2 * static_cast<double>(j + 1);
+  }
+  writeJointStatesCsv(path, s);
+  const auto r = readJointStatesCsv(path);
+  ASSERT_EQ(r.size(), 2u);
+  EXPECT_NEAR(r[1].t, 0.5, 1e-12);
+  for (std::size_t j = 0; j < kNumJoints; ++j) {
+    EXPECT_NEAR(r[0].q[j], s[0].q[j], 1e-9);
+    EXPECT_NEAR(r[1].q[j], s[1].q[j], 1e-9);
+  }
 
-    // Shuffled columns plus an extra one: mapped by name.
-    const std::string shuffled = ::testing::TempDir() + "joint_states_read_shuffled.csv";
-    {
-        std::ofstream f(shuffled);
-        f << "extra,fer_joint7,t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6\n";
-        f << "99,7,1.5,1,2,3,4,5,6\n";
-    }
-    const auto q = readJointStatesCsv(shuffled);
-    ASSERT_EQ(q.size(), 1u);
-    EXPECT_DOUBLE_EQ(q[0].t, 1.5);
-    for (std::size_t j = 0; j < kNumJoints; ++j) EXPECT_DOUBLE_EQ(q[0].q[j], j + 1.0);
+  // Shuffled columns plus an extra one: mapped by name.
+  const std::string shuffled = ::testing::TempDir() + "joint_states_read_shuffled.csv";
+  {
+    std::ofstream f(shuffled);
+    f << "extra,fer_joint7,t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6\n";
+    f << "99,7,1.5,1,2,3,4,5,6\n";
+  }
+  const auto q = readJointStatesCsv(shuffled);
+  ASSERT_EQ(q.size(), 1u);
+  EXPECT_DOUBLE_EQ(q[0].t, 1.5);
+  for (std::size_t j = 0; j < kNumJoints; ++j) EXPECT_DOUBLE_EQ(q[0].q[j], j + 1.0);
 }
 
 TEST(JointStatesCsvIoTest, ReadRejectsBadFiles) {
-    EXPECT_THROW(readJointStatesCsv("/tmp/definitely_missing_joint_states.csv"), std::runtime_error);
-    const std::string missing_col = ::testing::TempDir() + "joint_states_read_missingcol.csv";
-    {
-        std::ofstream f(missing_col);
-        f << "t,fer_joint1,fer_joint2\n0,1,2\n";
-    }
-    EXPECT_THROW(readJointStatesCsv(missing_col), std::runtime_error);
-    const std::string no_rows = ::testing::TempDir() + "joint_states_read_norows.csv";
-    {
-        std::ofstream f(no_rows);
-        f << "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7\n";
-    }
-    EXPECT_THROW(readJointStatesCsv(no_rows), std::runtime_error);
+  EXPECT_THROW(readJointStatesCsv("/tmp/definitely_missing_joint_states.csv"), std::runtime_error);
+  const std::string missing_col = ::testing::TempDir() + "joint_states_read_missingcol.csv";
+  {
+    std::ofstream f(missing_col);
+    f << "t,fer_joint1,fer_joint2\n0,1,2\n";
+  }
+  EXPECT_THROW(readJointStatesCsv(missing_col), std::runtime_error);
+  const std::string no_rows = ::testing::TempDir() + "joint_states_read_norows.csv";
+  {
+    std::ofstream f(no_rows);
+    f << "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7\n";
+  }
+  EXPECT_THROW(readJointStatesCsv(no_rows), std::runtime_error);
 }
 
 TEST(JointStatesCsvIoTest, ExtractsFingersByNameAndRejectsPartial) {
-    const std::vector<std::string> names = {"fer_finger_joint2", "fer_joint1", "fer_finger_joint1"};
-    const std::vector<double> pos = {0.02, 1.0, 0.03};
-    std::array<double, kNumFingerJoints> w{};
-    ASSERT_TRUE(extractFingerPositions(names, pos, w));
-    EXPECT_DOUBLE_EQ(w[0], 0.03);
-    EXPECT_DOUBLE_EQ(w[1], 0.02);
-    EXPECT_FALSE(extractFingerPositions({"fer_finger_joint1"}, {0.03}, w));
-    EXPECT_FALSE(extractFingerPositions({}, {}, w));
+  const std::vector<std::string> names = {"fer_finger_joint2", "fer_joint1", "fer_finger_joint1"};
+  const std::vector<double> pos = {0.02, 1.0, 0.03};
+  std::array<double, kNumFingerJoints> w{};
+  ASSERT_TRUE(extractFingerPositions(names, pos, w));
+  EXPECT_DOUBLE_EQ(w[0], 0.03);
+  EXPECT_DOUBLE_EQ(w[1], 0.02);
+  EXPECT_FALSE(extractFingerPositions({"fer_finger_joint1"}, {0.03}, w));
+  EXPECT_FALSE(extractFingerPositions({}, {}, w));
 }
 
 TEST(JointStatesCsvIoTest, AcceptsMimicAliasForFinger2) {
-    const std::vector<std::string> names = {"fer_finger_joint1", "fer_finger_joint2_mimic"};
-    std::array<double, kNumFingerJoints> w{};
-    std::string used;
-    ASSERT_TRUE(extractFingerPositions(names, {0.03, 0.02}, w, &used));
-    EXPECT_DOUBLE_EQ(w[0], 0.03);
-    EXPECT_DOUBLE_EQ(w[1], 0.02);
-    EXPECT_EQ(used, "fer_finger_joint2_mimic");
-    // Exact name wins when both are present.
-    ASSERT_TRUE(extractFingerPositions({"fer_finger_joint2_mimic", "fer_finger_joint1", "fer_finger_joint2"},
-                                       {0.5, 0.03, 0.02}, w, &used));
-    EXPECT_DOUBLE_EQ(w[1], 0.02);
-    EXPECT_EQ(used, "fer_finger_joint2");
+  const std::vector<std::string> names = {"fer_finger_joint1", "fer_finger_joint2_mimic"};
+  std::array<double, kNumFingerJoints> w{};
+  std::string used;
+  ASSERT_TRUE(extractFingerPositions(names, {0.03, 0.02}, w, &used));
+  EXPECT_DOUBLE_EQ(w[0], 0.03);
+  EXPECT_DOUBLE_EQ(w[1], 0.02);
+  EXPECT_EQ(used, "fer_finger_joint2_mimic");
+  // Exact name wins when both are present.
+  ASSERT_TRUE(extractFingerPositions({"fer_finger_joint2_mimic", "fer_finger_joint1", "fer_finger_joint2"},
+                                     {0.5, 0.03, 0.02}, w, &used));
+  EXPECT_DOUBLE_EQ(w[1], 0.02);
+  EXPECT_EQ(used, "fer_finger_joint2");
 }
 
 TEST(JointStatesCsvIoTest, NoFingersMessageAndFinger1Only) {
-    std::array<double, kNumFingerJoints> w{};
-    EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_joint2"}, {0.1, 0.2}, w));
-    EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_finger_joint1"}, {0.1, 0.03}, w));
+  std::array<double, kNumFingerJoints> w{};
+  EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_joint2"}, {0.1, 0.2}, w));
+  EXPECT_FALSE(extractFingerPositions({"fer_joint1", "fer_finger_joint1"}, {0.1, 0.03}, w));
 }
 
 TEST(JointStatesCsvIoTest, AppendsFingerColumnsOnlyWhenPresent) {
-    const std::string path = ::testing::TempDir() + "joint_states_io_fingers.csv";
-    std::vector<JointStateSample> s(2);
-    s[0].t = 0.0;
-    s[0].has_fingers = true;
-    s[0].fingers = {0.04, 0.04};
-    s[1].t = 0.5;  // no finger data: nan placeholders
-    writeJointStatesCsv(path, s);
+  const std::string path = ::testing::TempDir() + "joint_states_io_fingers.csv";
+  std::vector<JointStateSample> s(2);
+  s[0].t = 0.0;
+  s[0].has_fingers = true;
+  s[0].fingers = {0.04, 0.04};
+  s[1].t = 0.5;  // no finger data: nan placeholders
+  writeJointStatesCsv(path, s);
 
-    std::ifstream f(path);
-    std::string line;
-    std::getline(f, line);
-    EXPECT_EQ(line,
-              "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7,"
-              "fer_finger_joint1,fer_finger_joint2");
-    std::getline(f, line);
-    EXPECT_EQ(line, "0,0,0,0,0,0,0,0,0.04,0.04");
-    std::getline(f, line);
-    EXPECT_EQ(line, "0.5,0,0,0,0,0,0,0,nan,nan");
-    // The by-name reader still works on the extended file.
-    EXPECT_EQ(readJointStatesCsv(path).size(), 2u);
+  std::ifstream f(path);
+  std::string line;
+  std::getline(f, line);
+  EXPECT_EQ(line,
+            "t,fer_joint1,fer_joint2,fer_joint3,fer_joint4,fer_joint5,fer_joint6,fer_joint7,"
+            "fer_finger_joint1,fer_finger_joint2");
+  std::getline(f, line);
+  EXPECT_EQ(line, "0,0,0,0,0,0,0,0,0.04,0.04");
+  std::getline(f, line);
+  EXPECT_EQ(line, "0.5,0,0,0,0,0,0,0,nan,nan");
+  // The by-name reader still works on the extended file.
+  EXPECT_EQ(readJointStatesCsv(path).size(), 2u);
 }

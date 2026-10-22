@@ -9,151 +9,153 @@ namespace core {
 namespace joint_states_csv_io {
 
 const std::array<std::string, kNumJoints>& jointNames() {
-    static const std::array<std::string, kNumJoints> names = {
-        "fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
-        "fer_joint5", "fer_joint6", "fer_joint7"};
-    return names;
+  static const std::array<std::string, kNumJoints> names = {
+      "fer_joint1", "fer_joint2", "fer_joint3", "fer_joint4",
+      "fer_joint5", "fer_joint6", "fer_joint7"};
+  return names;
 }
 
 const std::array<std::string, kNumFingerJoints>& fingerJointNames() {
-    static const std::array<std::string, kNumFingerJoints> names = {"fer_finger_joint1",
-                                                                    "fer_finger_joint2"};
-    return names;
+  static const std::array<std::string, kNumFingerJoints> names = {"fer_finger_joint1",
+                                                                  "fer_finger_joint2"};
+  return names;
 }
 
 bool extractFingerPositions(const std::vector<std::string>& names,
                             const std::vector<double>& positions,
                             std::array<double, kNumFingerJoints>& fingers_out,
                             std::string* finger2_name_out) {
-    const auto& wanted = fingerJointNames();
-    const std::string finger2_alias = wanted[1] + "_mimic";
-    for (std::size_t j = 0; j < kNumFingerJoints; ++j) {
-        bool found = false;
-        const std::string* used = nullptr;
-        for (std::size_t i = 0; i < names.size() && i < positions.size(); ++i) {
-            const bool alias = (j == 1 && names[i] == finger2_alias);
-            if (names[i] == wanted[j] || (alias && !used)) {
-                fingers_out[j] = positions[i];
-                found = true;
-                used = &names[i];
-                if (!alias) break;
-            }
-        }
-        if (!found) return false;
-        if (j == 1 && finger2_name_out) *finger2_name_out = *used;
+  const auto& wanted = fingerJointNames();
+  const std::string finger2_alias = wanted[1] + "_mimic";
+  for (std::size_t j = 0; j < kNumFingerJoints; ++j) {
+    bool found = false;
+    const std::string* used = nullptr;
+    for (std::size_t i = 0; i < names.size() && i < positions.size(); ++i) {
+      const bool alias = (j == 1 && names[i] == finger2_alias);
+      if (names[i] == wanted[j] || (alias && !used)) {
+        fingers_out[j] = positions[i];
+        found = true;
+        used = &names[i];
+        if (!alias) break;
+      }
     }
-    return true;
+    if (!found) return false;
+    if (j == 1 && finger2_name_out) *finger2_name_out = *used;
+  }
+  return true;
 }
 
 bool extractJointPositions(const std::vector<std::string>& names,
                            const std::vector<double>& positions,
                            std::array<double, kNumJoints>& q_out) {
-    const auto& wanted = jointNames();
-    for (std::size_t j = 0; j < kNumJoints; ++j) {
-        bool found = false;
-        for (std::size_t i = 0; i < names.size() && i < positions.size(); ++i) {
-            if (names[i] == wanted[j]) {
-                q_out[j] = positions[i];
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
+  const auto& wanted = jointNames();
+  for (std::size_t j = 0; j < kNumJoints; ++j) {
+    bool found = false;
+    for (std::size_t i = 0; i < names.size() && i < positions.size(); ++i) {
+      if (names[i] == wanted[j]) {
+        q_out[j] = positions[i];
+        found = true;
+        break;
+      }
     }
-    return true;
+    if (!found) return false;
+  }
+  return true;
 }
 
 std::string deriveJointStatesCsvPath(const std::string& demo_csv_path) {
-    if (demo_csv_path.empty()) return demo_csv_path;
-    const std::string raw_suffix = "_raw.csv";
-    const std::string csv_suffix = ".csv";
-    auto ends_with = [&](const std::string& suffix) {
-        return demo_csv_path.size() >= suffix.size() &&
-               demo_csv_path.compare(demo_csv_path.size() - suffix.size(), suffix.size(),
-                                     suffix) == 0;
-    };
-    if (ends_with(raw_suffix)) {
-        return demo_csv_path.substr(0, demo_csv_path.size() - raw_suffix.size()) +
-               "_joint_states.csv";
-    }
-    if (ends_with(csv_suffix)) {
-        return demo_csv_path.substr(0, demo_csv_path.size() - csv_suffix.size()) +
-               "_joint_states.csv";
-    }
-    return demo_csv_path + "_joint_states.csv";
+  if (demo_csv_path.empty()) return demo_csv_path;
+  const std::string raw_suffix = "_raw.csv";
+  const std::string csv_suffix = ".csv";
+  auto ends_with = [&](const std::string& suffix) {
+    return demo_csv_path.size() >= suffix.size() &&
+           demo_csv_path.compare(demo_csv_path.size() - suffix.size(), suffix.size(),
+                                 suffix) == 0;
+  };
+  if (ends_with(raw_suffix)) {
+    return demo_csv_path.substr(0, demo_csv_path.size() - raw_suffix.size()) +
+           "_joint_states.csv";
+  }
+  if (ends_with(csv_suffix)) {
+    return demo_csv_path.substr(0, demo_csv_path.size() - csv_suffix.size()) +
+           "_joint_states.csv";
+  }
+  return demo_csv_path + "_joint_states.csv";
 }
 
 void writeJointStatesCsv(const std::string& path, const std::vector<JointStateSample>& samples) {
-    if (samples.empty()) {
-        throw std::invalid_argument("writeJointStatesCsv: no samples to write to " + path);
-    }
-    std::ofstream f(path);
-    if (!f.is_open()) {
-        throw std::runtime_error("writeJointStatesCsv: cannot open file for writing: " + path);
-    }
-    bool any_fingers = false;
-    for (const auto& s : samples) any_fingers = any_fingers || s.has_fingers;
+  if (samples.empty()) {
+    throw std::invalid_argument("writeJointStatesCsv: no samples to write to " + path);
+  }
+  std::ofstream f(path);
+  if (!f.is_open()) {
+    throw std::runtime_error("writeJointStatesCsv: cannot open file for writing: " + path);
+  }
+  bool any_fingers = false;
+  for (const auto& s : samples) any_fingers = any_fingers || s.has_fingers;
 
-    f << "t";
-    for (const auto& n : jointNames()) f << "," << n;
+  f << "t";
+  for (const auto& n : jointNames()) f << "," << n;
+  if (any_fingers) {
+    for (const auto& n : fingerJointNames()) f << "," << n;
+  }
+  f << "\n";
+  for (const auto& s : samples) {
+    f << s.t;
+    for (double q : s.q) f << "," << q;
     if (any_fingers) {
-        for (const auto& n : fingerJointNames()) f << "," << n;
+      for (double w : s.fingers) {
+        if (s.has_fingers)
+          f << "," << w;
+        else
+          f << ",nan";
+      }
     }
     f << "\n";
-    for (const auto& s : samples) {
-        f << s.t;
-        for (double q : s.q) f << "," << q;
-        if (any_fingers) {
-            for (double w : s.fingers) {
-                if (s.has_fingers) f << "," << w;
-                else f << ",nan";
-            }
-        }
-        f << "\n";
-    }
+  }
 }
 
 std::vector<JointStateSample> readJointStatesCsv(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) throw std::runtime_error("readJointStatesCsv: cannot open " + path);
+  std::ifstream f(path);
+  if (!f.is_open()) throw std::runtime_error("readJointStatesCsv: cannot open " + path);
 
-    auto split = [](const std::string& line) {
-        std::vector<std::string> out;
-        std::stringstream ss(line);
-        std::string cell;
-        while (std::getline(ss, cell, ',')) out.push_back(cell);
-        return out;
-    };
-
-    std::string header_line;
-    if (!std::getline(f, header_line)) throw std::runtime_error("readJointStatesCsv: empty file " + path);
-    const std::vector<std::string> header = split(header_line);
-    auto column = [&](const std::string& name) -> std::size_t {
-        for (std::size_t i = 0; i < header.size(); ++i) {
-            if (header[i] == name) return i;
-        }
-        throw std::runtime_error("readJointStatesCsv: missing column '" + name + "' in " + path);
-    };
-    const std::size_t t_col = column("t");
-    std::array<std::size_t, kNumJoints> q_col{};
-    for (std::size_t j = 0; j < kNumJoints; ++j) q_col[j] = column(jointNames()[j]);
-
-    std::vector<JointStateSample> out;
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        const std::vector<std::string> cells = split(line);
-        JointStateSample s;
-        try {
-            s.t = std::stod(cells.at(t_col));
-            for (std::size_t j = 0; j < kNumJoints; ++j) s.q[j] = std::stod(cells.at(q_col[j]));
-        } catch (const std::exception&) {
-            throw std::runtime_error("readJointStatesCsv: malformed row '" + line + "' in " + path);
-        }
-        out.push_back(s);
-    }
-    if (out.empty()) throw std::runtime_error("readJointStatesCsv: no data rows in " + path);
+  auto split = [](const std::string& line) {
+    std::vector<std::string> out;
+    std::stringstream ss(line);
+    std::string cell;
+    while (std::getline(ss, cell, ',')) out.push_back(cell);
     return out;
+  };
+
+  std::string header_line;
+  if (!std::getline(f, header_line)) throw std::runtime_error("readJointStatesCsv: empty file " + path);
+  const std::vector<std::string> header = split(header_line);
+  auto column = [&](const std::string& name) -> std::size_t {
+    for (std::size_t i = 0; i < header.size(); ++i) {
+      if (header[i] == name) return i;
+    }
+    throw std::runtime_error("readJointStatesCsv: missing column '" + name + "' in " + path);
+  };
+  const std::size_t t_col = column("t");
+  std::array<std::size_t, kNumJoints> q_col{};
+  for (std::size_t j = 0; j < kNumJoints; ++j) q_col[j] = column(jointNames()[j]);
+
+  std::vector<JointStateSample> out;
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty()) continue;
+    const std::vector<std::string> cells = split(line);
+    JointStateSample s;
+    try {
+      s.t = std::stod(cells.at(t_col));
+      for (std::size_t j = 0; j < kNumJoints; ++j) s.q[j] = std::stod(cells.at(q_col[j]));
+    } catch (const std::exception&) {
+      throw std::runtime_error("readJointStatesCsv: malformed row '" + line + "' in " + path);
+    }
+    out.push_back(s);
+  }
+  if (out.empty()) throw std::runtime_error("readJointStatesCsv: no data rows in " + path);
+  return out;
 }
 
 }  // namespace joint_states_csv_io

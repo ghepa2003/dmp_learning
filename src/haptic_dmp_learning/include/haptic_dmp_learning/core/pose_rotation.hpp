@@ -10,8 +10,8 @@ namespace core {
 
 /// Position + orientation of a frame, both expressed in the world frame.
 struct RotatablePose {
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
 };
 
 /**
@@ -24,11 +24,11 @@ struct RotatablePose {
  */
 inline RotatablePose rotatePoseAboutZ(const Eigen::Vector3d& center, const RotatablePose& pose,
                                       double dtheta_rad) {
-    const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, Eigen::Vector3d::UnitZ()));
-    RotatablePose out;
-    out.position = center + rz * (pose.position - center);
-    out.orientation = (rz * pose.orientation).normalized();
-    return out;
+  const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, Eigen::Vector3d::UnitZ()));
+  RotatablePose out;
+  out.position = center + rz * (pose.position - center);
+  out.orientation = (rz * pose.orientation).normalized();
+  return out;
 }
 
 /**
@@ -43,14 +43,14 @@ inline RotatablePose rotatePoseAboutZ(const Eigen::Vector3d& center, const Rotat
  */
 inline RotatablePose rotatePoseAboutAxis(const Eigen::Vector3d& center, const Eigen::Vector3d& axis,
                                          const RotatablePose& pose, double dtheta_rad) {
-    if (!(axis.allFinite() && axis.norm() > 0.0)) {
-        throw std::invalid_argument("rotatePoseAboutAxis: axis must be finite and non-zero");
-    }
-    const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, axis.normalized()));
-    RotatablePose out;
-    out.position = center + rz * (pose.position - center);
-    out.orientation = (rz * pose.orientation).normalized();
-    return out;
+  if (!(axis.allFinite() && axis.norm() > 0.0)) {
+    throw std::invalid_argument("rotatePoseAboutAxis: axis must be finite and non-zero");
+  }
+  const Eigen::Quaterniond rz(Eigen::AngleAxisd(dtheta_rad, axis.normalized()));
+  RotatablePose out;
+  out.position = center + rz * (pose.position - center);
+  out.orientation = (rz * pose.orientation).normalized();
+  return out;
 }
 
 /**
@@ -63,10 +63,10 @@ inline RotatablePose rotatePoseAboutAxis(const Eigen::Vector3d& center, const Ei
  */
 inline double effectiveFollowDtheta(double t_since_end, double follow_s, double dtheta_now,
                                     double dtheta_frozen) {
-    if (t_since_end < 0.0 || !(follow_s > 0.0) || t_since_end <= follow_s) {
-        return dtheta_now;
-    }
-    return dtheta_frozen;
+  if (t_since_end < 0.0 || !(follow_s > 0.0) || t_since_end <= follow_s) {
+    return dtheta_now;
+  }
+  return dtheta_frozen;
 }
 
 }  // namespace core

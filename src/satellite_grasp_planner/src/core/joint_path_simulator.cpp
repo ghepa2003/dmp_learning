@@ -21,17 +21,17 @@ RobotModel::JointVector MinNormDlsResolution::computeJointVelocity(
     const CartesianSample& target,
     const RobotModel::JointVector& /* q */,
     const RobotModel::JointVector& /* q0 */) const {
-    franka_cartesian_control::core::CartesianError err =
-        franka_cartesian_control::core::computePoseError(
-            model.eePosition(), model.eeOrientation(),
-            target.position, target.orientation);
+  franka_cartesian_control::core::CartesianError err =
+      franka_cartesian_control::core::computePoseError(
+          model.eePosition(), model.eeOrientation(),
+          target.position, target.orientation);
 
-    VelocityIkSolver::Vector6d feedforward;
-    feedforward.head<3>() = target.linear_velocity;
-    feedforward.tail<3>() = target.angular_velocity;
+  VelocityIkSolver::Vector6d feedforward;
+  feedforward.head<3>() = target.linear_velocity;
+  feedforward.tail<3>() = target.angular_velocity;
 
-    auto twist = ik_solver_.desiredTwist(err, feedforward);
-    return ik_solver_.solve(model.jacobian(), twist);
+  auto twist = ik_solver_.desiredTwist(err, feedforward);
+  return ik_solver_.solve(model.jacobian(), twist);
 }
 
 // ---------------------------------------------------------------------
@@ -48,35 +48,35 @@ RobotModel::JointVector NullspaceBiasedResolution::computeJointVelocity(
     const CartesianSample& target,
     const RobotModel::JointVector& q,
     const RobotModel::JointVector& q0) const {
-    // 1. Primary task: pose error -> desired twist -> DLS minimum-norm joint velocity
-    franka_cartesian_control::core::CartesianError err =
-        franka_cartesian_control::core::computePoseError(
-            model.eePosition(), model.eeOrientation(),
-            target.position, target.orientation);
+  // 1. Primary task: pose error -> desired twist -> DLS minimum-norm joint velocity
+  franka_cartesian_control::core::CartesianError err =
+      franka_cartesian_control::core::computePoseError(
+          model.eePosition(), model.eeOrientation(),
+          target.position, target.orientation);
 
-    VelocityIkSolver::Vector6d feedforward;
-    feedforward.head<3>() = target.linear_velocity;
-    feedforward.tail<3>() = target.angular_velocity;
+  VelocityIkSolver::Vector6d feedforward;
+  feedforward.head<3>() = target.linear_velocity;
+  feedforward.tail<3>() = target.angular_velocity;
 
-    auto twist = ik_solver_.desiredTwist(err, feedforward);
-    auto dq_primary = ik_solver_.solve(model.jacobian(), twist);
+  auto twist = ik_solver_.desiredTwist(err, feedforward);
+  auto dq_primary = ik_solver_.solve(model.jacobian(), twist);
 
-    // 2. Damped nullspace projector: N = I - J^# J, where J^# = J^T (J J^T + lambda_ns^2 I)^-1
-    const auto& J = model.jacobian();
-    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-    JJt.diagonal().array() += params_.nullspace_damping * params_.nullspace_damping;
-    Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
-    Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
+  // 2. Damped nullspace projector: N = I - J^# J, where J^# = J^T (J J^T + lambda_ns^2 I)^-1
+  const auto& J = model.jacobian();
+  Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+  JJt.diagonal().array() += params_.nullspace_damping * params_.nullspace_damping;
+  Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
+  Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
 
-    // 3. Nullspace posture regulation: pull toward ready pose q0
-    // Kinematic conversion: nullspace_gain in s^-1 acts as proportional rate
-    // toward q0 in the nullspace of the primary task.
-    RobotModel::JointVector qe = q0 - q;
-    qe(0) *= params_.joint1_nullspace_gain_scale;
+  // 3. Nullspace posture regulation: pull toward ready pose q0
+  // Kinematic conversion: nullspace_gain in s^-1 acts as proportional rate
+  // toward q0 in the nullspace of the primary task.
+  RobotModel::JointVector qe = q0 - q;
+  qe(0) *= params_.joint1_nullspace_gain_scale;
 
-    RobotModel::JointVector dq_ns = N * (params_.nullspace_gain * qe);
+  RobotModel::JointVector dq_ns = N * (params_.nullspace_gain * qe);
 
-    return dq_primary + dq_ns;
+  return dq_primary + dq_ns;
 }
 
 // ---------------------------------------------------------------------
@@ -84,17 +84,17 @@ RobotModel::JointVector NullspaceBiasedResolution::computeJointVelocity(
 // ---------------------------------------------------------------------
 std::shared_ptr<RedundancyResolutionStrategy> createStrategyForController(
     const std::string& controller_name) {
-    if (controller_name == "cartesian_impedance_controller" || controller_name == "impedance") {
-        return std::make_shared<NullspaceBiasedResolution>();
-    }
-    if (controller_name == "velocity_cartesian_controller" ||
-        controller_name == "cartesian_velocity_controller" ||
-        controller_name == "velocity") {
-        return std::make_shared<MinNormDlsResolution>();
-    }
-    throw std::invalid_argument(
-        "createStrategyForController: unknown controller_name '" + controller_name +
-        "'. Expected 'cartesian_impedance_controller' or 'velocity_cartesian_controller'.");
+  if (controller_name == "cartesian_impedance_controller" || controller_name == "impedance") {
+    return std::make_shared<NullspaceBiasedResolution>();
+  }
+  if (controller_name == "velocity_cartesian_controller" ||
+      controller_name == "cartesian_velocity_controller" ||
+      controller_name == "velocity") {
+    return std::make_shared<MinNormDlsResolution>();
+  }
+  throw std::invalid_argument(
+      "createStrategyForController: unknown controller_name '" + controller_name +
+      "'. Expected 'cartesian_impedance_controller' or 'velocity_cartesian_controller'.");
 }
 
 // ---------------------------------------------------------------------
@@ -104,56 +104,56 @@ JointPathSimulator::JointPathSimulator(std::shared_ptr<RobotModel> robot_model)
     : JointPathSimulator(std::move(robot_model), Params()) {}
 
 JointPathSimulator::JointPathSimulator(std::shared_ptr<RobotModel> robot_model,
-                                         const Params& params)
+                                       const Params& params)
     : robot_model_(std::move(robot_model)), params_(params) {
-    if (!params_.strategy) {
-        params_.strategy = std::make_shared<NullspaceBiasedResolution>();
-    }
+  if (!params_.strategy) {
+    params_.strategy = std::make_shared<NullspaceBiasedResolution>();
+  }
 }
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0) const {
-    return simulate(trajectory, q0, q0);
+  return simulate(trajectory, q0, q0);
 }
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
     const RobotModel::JointVector& q_ref) const {
-    return simulate(trajectory, q0, q_ref, nullptr);
+  return simulate(trajectory, q0, q_ref, nullptr);
 }
 
 std::vector<JointPathSimulator::Step> JointPathSimulator::simulate(
     const std::vector<CartesianSample>& trajectory, const RobotModel::JointVector& q0,
     const RobotModel::JointVector& q_ref, RobotModel::JointVector* q_after_last_step) const {
-    std::vector<Step> steps;
-    steps.reserve(trajectory.size());
-    if (q_after_last_step) *q_after_last_step = q0;
-    if (trajectory.empty()) {
-        return steps;
-    }
-
-    RobotModel::JointVector q = q0;
-    const RobotModel::JointVector dq_zero = RobotModel::JointVector::Zero();
-
-    for (size_t i = 0; i < trajectory.size(); ++i) {
-        // 1. FK + Jacobian at the current (already-integrated) configuration.
-        robot_model_->update(q, dq_zero);
-
-        Step step;
-        step.q = q;
-        step.w_trans = wTransFromJacobian(robot_model_->jacobian().topRows<3>());
-        steps.push_back(step);
-
-        // 2. Delegate redundancy resolution to the configured strategy.
-        const CartesianSample& target = trajectory[i];
-        auto dq_cmd = params_.strategy->computeJointVelocity(*robot_model_, target, q, q_ref);
-
-        // 3. Explicit-Euler forward integration of the joint path.
-        q += dq_cmd * params_.dt;
-    }
-
-    if (q_after_last_step) *q_after_last_step = q;
+  std::vector<Step> steps;
+  steps.reserve(trajectory.size());
+  if (q_after_last_step) *q_after_last_step = q0;
+  if (trajectory.empty()) {
     return steps;
+  }
+
+  RobotModel::JointVector q = q0;
+  const RobotModel::JointVector dq_zero = RobotModel::JointVector::Zero();
+
+  for (size_t i = 0; i < trajectory.size(); ++i) {
+    // 1. FK + Jacobian at the current (already-integrated) configuration.
+    robot_model_->update(q, dq_zero);
+
+    Step step;
+    step.q = q;
+    step.w_trans = wTransFromJacobian(robot_model_->jacobian().topRows<3>());
+    steps.push_back(step);
+
+    // 2. Delegate redundancy resolution to the configured strategy.
+    const CartesianSample& target = trajectory[i];
+    auto dq_cmd = params_.strategy->computeJointVelocity(*robot_model_, target, q, q_ref);
+
+    // 3. Explicit-Euler forward integration of the joint path.
+    q += dq_cmd * params_.dt;
+  }
+
+  if (q_after_last_step) *q_after_last_step = q;
+  return steps;
 }
 
 }  // namespace core

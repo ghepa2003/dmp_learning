@@ -14,8 +14,8 @@ namespace core {
 /// q_nominal * AngleAxis(psi, UnitZ), normalized: rotation about the LOCAL z of the TCP, i.e. the
 /// approach axis (which therefore does not change).
 inline Eigen::Quaterniond applyRoll(const Eigen::Quaterniond& q_nominal, double psi) {
-    return (q_nominal * Eigen::Quaterniond(Eigen::AngleAxisd(psi, Eigen::Vector3d::UnitZ())))
-        .normalized();
+  return (q_nominal * Eigen::Quaterniond(Eigen::AngleAxisd(psi, Eigen::Vector3d::UnitZ())))
+      .normalized();
 }
 
 }  // namespace core

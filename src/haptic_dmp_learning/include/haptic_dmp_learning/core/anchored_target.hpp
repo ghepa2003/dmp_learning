@@ -31,41 +31,41 @@ inline constexpr double kUnitNormTolerance = 1e-6;
 /// Anchor position; throws std::invalid_argument naming `param_name` unless it has 3 entries.
 inline Eigen::Vector3d parseAnchorPosition(const std::vector<double>& v,
                                            const std::string& param_name) {
-    if (v.size() != 3) {
-        throw std::invalid_argument(param_name + " must have exactly 3 elements (x, y, z), got " +
-                                    std::to_string(v.size()));
-    }
-    return Eigen::Vector3d(v[0], v[1], v[2]);
+  if (v.size() != 3) {
+    throw std::invalid_argument(param_name + " must have exactly 3 elements (x, y, z), got " +
+                                std::to_string(v.size()));
+  }
+  return Eigen::Vector3d(v[0], v[1], v[2]);
 }
 
 /// Anchor orientation [x, y, z, w]; throws std::invalid_argument naming `param_name` unless it has
 /// 4 finite entries with |q| = 1 +- kUnitNormTolerance. Returned as given (not renormalized).
 inline Eigen::Quaterniond parseAnchorOrientation(const std::vector<double>& v,
                                                  const std::string& param_name) {
-    if (v.size() != 4) {
-        throw std::invalid_argument(param_name + " must have exactly 4 elements (x, y, z, w), got " +
-                                    std::to_string(v.size()));
-    }
-    const double norm = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
-    if (!std::isfinite(norm) || std::abs(norm - 1.0) > kUnitNormTolerance) {
-        throw std::invalid_argument(param_name + " must be a unit quaternion (|q| = 1 +- 1e-6), got |q| = " +
-                                    std::to_string(norm));
-    }
-    return Eigen::Quaterniond(v[3], v[0], v[1], v[2]);
+  if (v.size() != 4) {
+    throw std::invalid_argument(param_name + " must have exactly 4 elements (x, y, z, w), got " +
+                                std::to_string(v.size()));
+  }
+  const double norm = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
+  if (!std::isfinite(norm) || std::abs(norm - 1.0) > kUnitNormTolerance) {
+    throw std::invalid_argument(param_name + " must be a unit quaternion (|q| = 1 +- 1e-6), got |q| = " +
+                                std::to_string(norm));
+  }
+  return Eigen::Quaterniond(v[3], v[0], v[1], v[2]);
 }
 
 /// Per-recording state: first-sample reference and previous output (for sign continuity).
 struct State {
-    bool has_reference = false;
-    Eigen::Vector3d p_corr0 = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond q_corr0 = Eigen::Quaterniond::Identity();
-    bool has_last = false;
-    Eigen::Quaterniond q_pub_last = Eigen::Quaterniond::Identity();
+  bool has_reference = false;
+  Eigen::Vector3d p_corr0 = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond q_corr0 = Eigen::Quaterniond::Identity();
+  bool has_last = false;
+  Eigen::Quaterniond q_pub_last = Eigen::Quaterniond::Identity();
 };
 
 struct Pose {
-    Eigen::Vector3d position;
-    Eigen::Quaterniond orientation;
+  Eigen::Vector3d position;
+  Eigen::Quaterniond orientation;
 };
 
 /// One step. The first call on a fresh State stores the reference and returns exactly the anchor.
@@ -75,34 +75,34 @@ inline Pose computeAnchoredTarget(State& state,
                                   const Eigen::Quaterniond& anchor_q,
                                   const Eigen::Vector3d& p_corr,
                                   const Eigen::Quaterniond& q_corr) {
-    if (std::abs(anchor_q.norm() - 1.0) > kUnitNormTolerance) {
-        throw std::invalid_argument("anchor quaternion is not unit");
-    }
-    if (std::abs(q_corr.norm() - 1.0) > kUnitNormTolerance) {
-        throw std::invalid_argument("master quaternion is not unit");
-    }
+  if (std::abs(anchor_q.norm() - 1.0) > kUnitNormTolerance) {
+    throw std::invalid_argument("anchor quaternion is not unit");
+  }
+  if (std::abs(q_corr.norm() - 1.0) > kUnitNormTolerance) {
+    throw std::invalid_argument("master quaternion is not unit");
+  }
 
-    if (!state.has_reference) {
-        state.has_reference = true;
-        state.p_corr0 = p_corr;
-        state.q_corr0 = q_corr;
-    }
+  if (!state.has_reference) {
+    state.has_reference = true;
+    state.p_corr0 = p_corr;
+    state.q_corr0 = q_corr;
+  }
 
-    Pose out;
-    out.position = anchor_p + (p_corr - state.p_corr0);
+  Pose out;
+  out.position = anchor_p + (p_corr - state.p_corr0);
 
-    Eigen::Quaterniond q = anchor_q * (state.q_corr0.inverse() * q_corr);
-    q.normalize();
-    if (!state.has_last) {
-        // First sample: relative rotation is the identity, the result is the anchor itself.
-        q = anchor_q;
-    } else if (state.q_pub_last.dot(q) < 0.0) {
-        q.coeffs() = -q.coeffs();
-    }
-    state.q_pub_last = q;
-    state.has_last = true;
-    out.orientation = q;
-    return out;
+  Eigen::Quaterniond q = anchor_q * (state.q_corr0.inverse() * q_corr);
+  q.normalize();
+  if (!state.has_last) {
+    // First sample: relative rotation is the identity, the result is the anchor itself.
+    q = anchor_q;
+  } else if (state.q_pub_last.dot(q) < 0.0) {
+    q.coeffs() = -q.coeffs();
+  }
+  state.q_pub_last = q;
+  state.has_last = true;
+  out.orientation = q;
+  return out;
 }
 
 }  // namespace anchored_target

@@ -8,16 +8,16 @@
  * constructor; log via RCLCPP_FATAL and exit non-zero instead of spinning.
  */
 int main(int argc, char** argv) {
-    rclcpp::init(argc, argv);
-    try {
-        auto node = std::make_shared<haptic_dmp_learning::ros_wrapper::GraspStateMachineNode>();
-        rclcpp::spin(node);
-    } catch (const std::exception& e) {
-        RCLCPP_FATAL(rclcpp::get_logger("grasp_state_machine"),
-                     "Fatal initialization error: %s", e.what());
-        rclcpp::shutdown();
-        return 1;
-    }
+  rclcpp::init(argc, argv);
+  try {
+    auto node = std::make_shared<haptic_dmp_learning::ros_wrapper::GraspStateMachineNode>();
+    rclcpp::spin(node);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("grasp_state_machine"),
+                 "Fatal initialization error: %s", e.what());
     rclcpp::shutdown();
-    return 0;
+    return 1;
+  }
+  rclcpp::shutdown();
+  return 0;
 }

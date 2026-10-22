@@ -32,814 +32,825 @@ constexpr auto kTickPeriod = std::chrono::milliseconds(100);
 constexpr double kStartEdgeGapSec = 0.2;
 
 std::string numArg(const std::string& key, double v) {
-    return key + ":=" + std::to_string(v);
+  return key + ":=" + std::to_string(v);
 }
 // "%.17g" round-trips a double; std::to_string (6 decimals) would break the unit-norm check of
 // the anchor quaternion in the recorder.
 std::string listArg(const std::string& key, const std::vector<double>& v) {
-    std::string out = key + ":=";
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        char buf[40];
-        std::snprintf(buf, sizeof(buf), "%.17g", v[i]);
-        out += (i ? "," : "");
-        out += buf;
-    }
-    return out;
+  std::string out = key + ":=";
+  for (std::size_t i = 0; i < v.size(); ++i) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.17g", v[i]);
+    out += (i ? "," : "");
+    out += buf;
+  }
+  return out;
 }
 double secElapsed(std::chrono::steady_clock::time_point since) {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
 }
 }  // namespace
 
 DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
     : Node("demo_replay_sync_orchestrator") {
+  // 1. mode (mandatory, fail-loud) -----------------------------------------
+  std::string mode_str;
+  try {
+    mode_str = this->declare_parameter<std::string>("mode");
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: required parameter 'mode' "
+        "('demo' | 'replay') was not provided. Underlying error: " +
+        std::string(e.what()));
+  }
+  if (mode_str == "demo") {
+    mode_ = Mode::kDemo;
+  } else if (mode_str == "replay") {
+    mode_ = Mode::kReplay;
+  } else {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: 'mode' must be 'demo' or 'replay', got '" +
+        mode_str + "'.");
+  }
 
-    // 1. mode (mandatory, fail-loud) -----------------------------------------
-    std::string mode_str;
-    try {
-        mode_str = this->declare_parameter<std::string>("mode");
-    } catch (const std::exception& e) {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: required parameter 'mode' "
-            "('demo' | 'replay') was not provided. Underlying error: " +
-            std::string(e.what()));
+  // 2. run_id: generated in demo mode, mandatory input in replay mode ------
+  const std::string run_id_param = this->declare_parameter<std::string>("run_id", "");
+  if (mode_ == Mode::kReplay) {
+    if (run_id_param.empty()) {
+      throw std::runtime_error(
+          "demo_replay_sync_orchestrator: in replay mode 'run_id' is mandatory "
+          "- it identifies the demonstration whose DMP weights and force "
+          "calibration are replayed. It is NOT generated in this mode.");
     }
-    if (mode_str == "demo") {
-        mode_ = Mode::kDemo;
-    } else if (mode_str == "replay") {
-        mode_ = Mode::kReplay;
-    } else {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: 'mode' must be 'demo' or 'replay', got '" +
-            mode_str + "'.");
+    run_id_ = run_id_param;
+  } else {
+    run_id_ = run_id_param.empty() ? generateRunId() : run_id_param;
+  }
+
+  // 3. Parameters (documented defaults) -----------------------------------
+  clock_wait_timeout_sec_ = this->declare_parameter<double>("clock_wait_timeout_sec", 10.0);
+  odom_wait_timeout_sec_ = this->declare_parameter<double>("odom_wait_timeout_sec", 30.0);
+  sync_delay_sec_ = this->declare_parameter<double>("sync_delay_sec", 5.0);
+  target_name_ = this->declare_parameter<std::string>("target_name", "free_target_object");
+  tx_ = this->declare_parameter<double>("target_x", 0.6);
+  ty_ = this->declare_parameter<double>("target_y", 0.0);
+  tz_ = this->declare_parameter<double>("target_z", 0.5);
+  tvx_ = this->declare_parameter<double>("target_vx", 0.0);
+  tvy_ = this->declare_parameter<double>("target_vy", 0.0);
+  tvz_ = this->declare_parameter<double>("target_vz", 0.0);
+  twx_ = this->declare_parameter<double>("target_wx", 0.0);
+  twy_ = this->declare_parameter<double>("target_wy", 0.0);
+  twz_ = this->declare_parameter<double>("target_wz", 0.0);
+  // Real satellite defaults: 150 mm cube (matches satellite_m.stl; the collar needs
+  // collar_radius <= size/2), CAD mass 4.412 kg (inertia: CAD default in the xacro, not recomputed).
+  tsx_ = this->declare_parameter<double>("target_size_x", 0.150);
+  tsy_ = this->declare_parameter<double>("target_size_y", 0.150);
+  tsz_ = this->declare_parameter<double>("target_size_z", 0.150);
+  tmass_ = this->declare_parameter<double>("target_mass", 4.412);
+  target_yaw_ = this->declare_parameter<double>("target_yaw", 0.0);
+  target_with_collar_ = this->declare_parameter<bool>("target_with_collar", true);
+  target_collar_collision_ = this->declare_parameter<bool>("target_collar_collision", true);
+  // Empty => demo_replay_sync.launch.py keeps the demo_csv_path of params.yaml.
+  demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "");
+  buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
+  buttons_synced_topic_ = this->declare_parameter<std::string>(
+      "buttons_synced_topic", "/touch0/buttons_synced");
+  // Button scheme (demo mode). "single_button": ONE stylus button, three presses = start,
+  // trigger + gripper close, stop. "legacy": buttons[0] start, buttons[1] stop, SPACE trigger.
+  const std::string button_scheme = this->declare_parameter<std::string>(
+      "button_scheme", "single_button");
+  if (button_scheme == "single_button") {
+    single_button_ = true;
+  } else if (button_scheme == "legacy") {
+    single_button_ = false;
+  } else {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: 'button_scheme' must be 'legacy' or "
+        "'single_button', got '" +
+        button_scheme + "'.");
+  }
+  button_index_ = static_cast<int>(this->declare_parameter<int>("button_index", 0));
+  if (button_index_ < 0) {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: 'button_index' must be >= 0.");
+  }
+  const double debounce_s = this->declare_parameter<double>("debounce_s", 0.30);
+  try {
+    sequencer_ = core::button_sequencer::ButtonSequencer(debounce_s);
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: invalid 'debounce_s': " + std::string(e.what()));
+  }
+  use_csv_playback_ = this->declare_parameter<bool>("use_csv_playback", true);
+  // Anchored recorder /target_pose (default off). Same checks as the recorder, so a bad value
+  // fails here at start-up instead of inside the child launch.
+  anchor_enabled_ = this->declare_parameter<bool>("anchor_enabled", false);
+  anchor_position_m_ = this->declare_parameter<std::vector<double>>(
+      "anchor_position_m", std::vector<double>{});
+  anchor_orientation_xyzw_ = this->declare_parameter<std::vector<double>>(
+      "anchor_orientation_xyzw", std::vector<double>{});
+  if (anchor_enabled_) {
+    if (anchor_position_m_.empty()) {
+      throw std::runtime_error(
+          "demo_replay_sync_orchestrator: anchor_enabled=true but "
+          "anchor_position_m was not provided");
     }
-
-    // 2. run_id: generated in demo mode, mandatory input in replay mode ------
-    const std::string run_id_param = this->declare_parameter<std::string>("run_id", "");
-    if (mode_ == Mode::kReplay) {
-        if (run_id_param.empty()) {
-            throw std::runtime_error(
-                "demo_replay_sync_orchestrator: in replay mode 'run_id' is mandatory "
-                "- it identifies the demonstration whose DMP weights and force "
-                "calibration are replayed. It is NOT generated in this mode.");
-        }
-        run_id_ = run_id_param;
-    } else {
-        run_id_ = run_id_param.empty() ? generateRunId() : run_id_param;
+    if (anchor_orientation_xyzw_.empty()) {
+      throw std::runtime_error(
+          "demo_replay_sync_orchestrator: anchor_enabled=true but "
+          "anchor_orientation_xyzw was not provided");
     }
+    core::anchored_target::parseAnchorPosition(anchor_position_m_, "anchor_position_m");
+    core::anchored_target::parseAnchorOrientation(anchor_orientation_xyzw_,
+                                                  "anchor_orientation_xyzw");
+  }
+  // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
+  // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
+  gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
+  gripper_closed_position_ = this->declare_parameter<double>("gripper_closed_position", 0.0);
+  gripper_close_ramp_duration_sec_ =
+      this->declare_parameter<double>("gripper_close_ramp_duration_sec", 2.0);
+  // Forwarded to grasp_state_machine in replay mode; mandatory there (absolute
+  // safety limit, no silent default), unused in demo mode.
+  hard_force_limit_n_ = this->declare_parameter<double>("hard_force_limit_n", -1.0);
+  if (mode_ == Mode::kReplay && !(hard_force_limit_n_ > 0.0)) {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: in replay mode 'hard_force_limit_n' (> 0) "
+        "is mandatory - it is forwarded to grasp_state_machine as the absolute "
+        "|F| safety limit and must be set explicitly.");
+  }
+  // Forwarded to dmp_gazebo_executor_node in replay mode (see kLaunchReplay).
+  target_odom_required_ = this->declare_parameter<bool>("target_odom_required", false);
+  target_odom_topic_ = this->declare_parameter<std::string>(
+      "target_odom_topic", "/free_target_object/odometry");
+  target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
 
-    // 3. Parameters (documented defaults) -----------------------------------
-    clock_wait_timeout_sec_ = this->declare_parameter<double>("clock_wait_timeout_sec", 10.0);
-    odom_wait_timeout_sec_ = this->declare_parameter<double>("odom_wait_timeout_sec", 30.0);
-    sync_delay_sec_ = this->declare_parameter<double>("sync_delay_sec", 5.0);
-    target_name_ = this->declare_parameter<std::string>("target_name", "free_target_object");
-    tx_ = this->declare_parameter<double>("target_x", 0.6);
-    ty_ = this->declare_parameter<double>("target_y", 0.0);
-    tz_ = this->declare_parameter<double>("target_z", 0.5);
-    tvx_ = this->declare_parameter<double>("target_vx", 0.0);
-    tvy_ = this->declare_parameter<double>("target_vy", 0.0);
-    tvz_ = this->declare_parameter<double>("target_vz", 0.0);
-    twx_ = this->declare_parameter<double>("target_wx", 0.0);
-    twy_ = this->declare_parameter<double>("target_wy", 0.0);
-    twz_ = this->declare_parameter<double>("target_wz", 0.0);
-    // Real satellite defaults: 150 mm cube (matches satellite_m.stl; the collar needs
-    // collar_radius <= size/2), CAD mass 4.412 kg (inertia: CAD default in the xacro, not recomputed).
-    tsx_ = this->declare_parameter<double>("target_size_x", 0.150);
-    tsy_ = this->declare_parameter<double>("target_size_y", 0.150);
-    tsz_ = this->declare_parameter<double>("target_size_z", 0.150);
-    tmass_ = this->declare_parameter<double>("target_mass", 4.412);
-    target_yaw_ = this->declare_parameter<double>("target_yaw", 0.0);
-    target_with_collar_ = this->declare_parameter<bool>("target_with_collar", true);
-    target_collar_collision_ = this->declare_parameter<bool>("target_collar_collision", true);
-    // Empty => demo_replay_sync.launch.py keeps the demo_csv_path of params.yaml.
-    demo_csv_path_ = this->declare_parameter<std::string>("demo_csv_path", "");
-    buttons_topic_ = this->declare_parameter<std::string>("buttons_topic", "/touch0/buttons");
-    buttons_synced_topic_ = this->declare_parameter<std::string>(
-        "buttons_synced_topic", "/touch0/buttons_synced");
-    // Button scheme (demo mode). "single_button": ONE stylus button, three presses = start,
-    // trigger + gripper close, stop. "legacy": buttons[0] start, buttons[1] stop, SPACE trigger.
-    const std::string button_scheme = this->declare_parameter<std::string>(
-        "button_scheme", "single_button");
-    if (button_scheme == "single_button") {
-        single_button_ = true;
-    } else if (button_scheme == "legacy") {
-        single_button_ = false;
-    } else {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: 'button_scheme' must be 'legacy' or "
-            "'single_button', got '" + button_scheme + "'.");
+  // Which movement-primitive formulation the replay executor uses. Default
+  // "dmp" preserves today's behaviour EXACTLY (same child executable, same
+  // arguments). "prodmp" launches the twin prodmp_gazebo_executor_node with
+  // the ProDMP position weights (prodmp_weights_<run_id>.yaml) and the classic
+  // file only for the orientation channel. Same explicit-default style as
+  // target_odom_required_ above; an unrecognised value is a fail-loud error,
+  // never a silent fallback.
+  mp_formulation_ = this->declare_parameter<std::string>("mp_formulation", "dmp");
+  if (mp_formulation_ != "dmp" && mp_formulation_ != "prodmp") {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: 'mp_formulation' must be 'dmp' or 'prodmp', got '" +
+        mp_formulation_ + "'.");
+  }
+
+  buttons_synced_pub_ = this->create_publisher<sensor_msgs::msg::Joy>(
+      buttons_synced_topic_, rclcpp::QoS(10));
+
+  gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+      "/gripper_position_cmd", rclcpp::QoS(10));
+
+  // One-shot announce that the gripper close ramp has finished (see header).
+  gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
+      "/gripper_close_complete", rclcpp::QoS(10));
+
+  // One-shot wall-timer (1.0 s) to publish the initial gripper position
+  // (gripper_open_position_), allowing the ROS2 <-> Ignition bridge time to
+  // subscribe before the message.
+  gripper_init_timer_ = this->create_wall_timer(
+      std::chrono::seconds(1), [this]() {
+        gripper_init_timer_->cancel();
+        std_msgs::msg::Float64 cmd;
+        cmd.data = gripper_open_position_;
+        gripper_pub_->publish(cmd);
+        RCLCPP_INFO(this->get_logger(),
+                    "Initial gripper open command (%.3f) published on /gripper_position_cmd",
+                    gripper_open_position_);
+      });
+
+  // Non-blocking keyboard reading setup via termios
+  if (isatty(STDIN_FILENO)) {
+    if (tcgetattr(STDIN_FILENO, &orig_termios_) == 0) {
+      struct termios raw = orig_termios_;
+      raw.c_lflag &= ~(ICANON | ECHO);
+      raw.c_cc[VMIN] = 0;
+      raw.c_cc[VTIME] = 0;
+      if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) {
+        termios_modified_ = true;
+      }
     }
-    button_index_ = static_cast<int>(this->declare_parameter<int>("button_index", 0));
-    if (button_index_ < 0) {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: 'button_index' must be >= 0.");
-    }
-    const double debounce_s = this->declare_parameter<double>("debounce_s", 0.30);
-    try {
-        sequencer_ = core::button_sequencer::ButtonSequencer(debounce_s);
-    } catch (const std::exception& e) {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: invalid 'debounce_s': " + std::string(e.what()));
-    }
-    use_csv_playback_ = this->declare_parameter<bool>("use_csv_playback", true);
-    // Anchored recorder /target_pose (default off). Same checks as the recorder, so a bad value
-    // fails here at start-up instead of inside the child launch.
-    anchor_enabled_ = this->declare_parameter<bool>("anchor_enabled", false);
-    anchor_position_m_ = this->declare_parameter<std::vector<double>>(
-        "anchor_position_m", std::vector<double>{});
-    anchor_orientation_xyzw_ = this->declare_parameter<std::vector<double>>(
-        "anchor_orientation_xyzw", std::vector<double>{});
-    if (anchor_enabled_) {
-        if (anchor_position_m_.empty()) {
-            throw std::runtime_error("demo_replay_sync_orchestrator: anchor_enabled=true but "
-                                     "anchor_position_m was not provided");
-        }
-        if (anchor_orientation_xyzw_.empty()) {
-            throw std::runtime_error("demo_replay_sync_orchestrator: anchor_enabled=true but "
-                                     "anchor_orientation_xyzw was not provided");
-        }
-        core::anchored_target::parseAnchorPosition(anchor_position_m_, "anchor_position_m");
-        core::anchored_target::parseAnchorOrientation(anchor_orientation_xyzw_,
-                                                      "anchor_orientation_xyzw");
-    }
-    // Gripper close ramp (see core/gripper_ramp.hpp). Defaults reproduce the
-    // previous single-step behaviour's endpoints: 0.06 = open, 0.0 = closed.
-    gripper_open_position_ = this->declare_parameter<double>("gripper_open_position", 0.06);
-    gripper_closed_position_ = this->declare_parameter<double>("gripper_closed_position", 0.0);
-    gripper_close_ramp_duration_sec_ =
-        this->declare_parameter<double>("gripper_close_ramp_duration_sec", 2.0);
-    // Forwarded to grasp_state_machine in replay mode; mandatory there (absolute
-    // safety limit, no silent default), unused in demo mode.
-    hard_force_limit_n_ = this->declare_parameter<double>("hard_force_limit_n", -1.0);
-    if (mode_ == Mode::kReplay && !(hard_force_limit_n_ > 0.0)) {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: in replay mode 'hard_force_limit_n' (> 0) "
-            "is mandatory - it is forwarded to grasp_state_machine as the absolute "
-            "|F| safety limit and must be set explicitly.");
-    }
-    // Forwarded to dmp_gazebo_executor_node in replay mode (see kLaunchReplay).
-    target_odom_required_ = this->declare_parameter<bool>("target_odom_required", false);
-    target_odom_topic_ = this->declare_parameter<std::string>(
-        "target_odom_topic", "/free_target_object/odometry");
-    target_odom_timeout_sec_ = this->declare_parameter<double>("target_odom_timeout_sec", 5.0);
+  }
 
-    // Which movement-primitive formulation the replay executor uses. Default
-    // "dmp" preserves today's behaviour EXACTLY (same child executable, same
-    // arguments). "prodmp" launches the twin prodmp_gazebo_executor_node with
-    // the ProDMP position weights (prodmp_weights_<run_id>.yaml) and the classic
-    // file only for the orientation channel. Same explicit-default style as
-    // target_odom_required_ above; an unrecognised value is a fail-loud error,
-    // never a silent fallback.
-    mp_formulation_ = this->declare_parameter<std::string>("mp_formulation", "dmp");
-    if (mp_formulation_ != "dmp" && mp_formulation_ != "prodmp") {
-        throw std::runtime_error(
-            "demo_replay_sync_orchestrator: 'mp_formulation' must be 'dmp' or 'prodmp', got '" +
-            mp_formulation_ + "'.");
-    }
+  keyboard_timer_ = this->create_wall_timer(
+      std::chrono::milliseconds(20),
+      std::bind(&DemoReplaySyncOrchestratorNode::checkKeyboard, this));
 
-    buttons_synced_pub_ = this->create_publisher<sensor_msgs::msg::Joy>(
-        buttons_synced_topic_, rclcpp::QoS(10));
+  // 4. /clock presence check subscription --------------------------------
+  clock_sub_ = this->create_subscription<rosgraph_msgs::msg::Clock>(
+      "/clock", rclcpp::QoS(10),
+      std::bind(&DemoReplaySyncOrchestratorNode::clockCallback, this, std::placeholders::_1));
 
-    gripper_pub_ = this->create_publisher<std_msgs::msg::Float64>(
-        "/gripper_position_cmd", rclcpp::QoS(10));
+  node_start_ = std::chrono::steady_clock::now();
+  phase_entered_ = node_start_;
 
-    // One-shot announce that the gripper close ramp has finished (see header).
-    gripper_close_complete_pub_ = this->create_publisher<std_msgs::msg::Empty>(
-        "/gripper_close_complete", rclcpp::QoS(10));
+  RCLCPP_INFO(this->get_logger(),
+              "==== demo_replay_sync_orchestrator ====\n"
+              "  mode                 = %s\n"
+              "  run_id               = %s   (%s)\n"
+              "  sync_delay_sec       = %.2f (anchored to target odometry sim-time t0)\n"
+              "  target               = %s @ (%.3f, %.3f, %.3f)  v=(%.3f, %.3f, %.3f)  w=(%.3f, %.3f, %.3f)\n"
+              "  target box size      = (%.3f, %.3f, %.3f) m   mass = %.3f kg\n"
+              "  clock_wait_timeout   = %.1f s (wall clock)\n"
+              "  buttons: %s -> %s\n"
+              "  button_scheme        = %s (button_index=%d, debounce_s=%.2f)",
+              (mode_ == Mode::kDemo ? "demo" : "replay"),
+              run_id_.c_str(),
+              (mode_ == Mode::kReplay ? "provided" : "generated"),
+              sync_delay_sec_, target_name_.c_str(),
+              tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_,
+              tsx_, tsy_, tsz_, tmass_,
+              clock_wait_timeout_sec_,
+              buttons_topic_.c_str(), buttons_synced_topic_.c_str(),
+              single_button_ ? "single_button" : "legacy", button_index_,
+              sequencer_.debounceSeconds());
 
-    // One-shot wall-timer (1.0 s) to publish the initial gripper position
-    // (gripper_open_position_), allowing the ROS2 <-> Ignition bridge time to
-    // subscribe before the message.
-    gripper_init_timer_ = this->create_wall_timer(
-        std::chrono::seconds(1), [this]() {
-            gripper_init_timer_->cancel();
-            std_msgs::msg::Float64 cmd;
-            cmd.data = gripper_open_position_;
-            gripper_pub_->publish(cmd);
-            RCLCPP_INFO(this->get_logger(),
-                        "Initial gripper open command (%.3f) published on /gripper_position_cmd",
-                        gripper_open_position_);
-        });
-
-    // Non-blocking keyboard reading setup via termios
-    if (isatty(STDIN_FILENO)) {
-        if (tcgetattr(STDIN_FILENO, &orig_termios_) == 0) {
-            struct termios raw = orig_termios_;
-            raw.c_lflag &= ~(ICANON | ECHO);
-            raw.c_cc[VMIN] = 0;
-            raw.c_cc[VTIME] = 0;
-            if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) {
-                termios_modified_ = true;
-            }
-        }
-    }
-
-    keyboard_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(20),
-        std::bind(&DemoReplaySyncOrchestratorNode::checkKeyboard, this));
-
-    // 4. /clock presence check subscription --------------------------------
-    clock_sub_ = this->create_subscription<rosgraph_msgs::msg::Clock>(
-        "/clock", rclcpp::QoS(10),
-        std::bind(&DemoReplaySyncOrchestratorNode::clockCallback, this, std::placeholders::_1));
-
-    node_start_ = std::chrono::steady_clock::now();
-    phase_entered_ = node_start_;
-
-    RCLCPP_INFO(this->get_logger(),
-                "==== demo_replay_sync_orchestrator ====\n"
-                "  mode                 = %s\n"
-                "  run_id               = %s   (%s)\n"
-                "  sync_delay_sec       = %.2f (anchored to target odometry sim-time t0)\n"
-                "  target               = %s @ (%.3f, %.3f, %.3f)  v=(%.3f, %.3f, %.3f)  w=(%.3f, %.3f, %.3f)\n"
-                "  target box size      = (%.3f, %.3f, %.3f) m   mass = %.3f kg\n"
-                "  clock_wait_timeout   = %.1f s (wall clock)\n"
-                "  buttons: %s -> %s\n"
-                "  button_scheme        = %s (button_index=%d, debounce_s=%.2f)",
-                (mode_ == Mode::kDemo ? "demo" : "replay"),
-                run_id_.c_str(),
-                (mode_ == Mode::kReplay ? "provided" : "generated"),
-                sync_delay_sec_, target_name_.c_str(),
-                tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_,
-                tsx_, tsy_, tsz_, tmass_,
-                clock_wait_timeout_sec_,
-                buttons_topic_.c_str(), buttons_synced_topic_.c_str(),
-                single_button_ ? "single_button" : "legacy", button_index_,
-                sequencer_.debounceSeconds());
-
-    // 5. Orchestration timer. Intentionally create_wall_timer / steady_clock:
-    //    it must run BEFORE /clock is confirmed and it drives the wall-clock
-    //    timeout of the /clock presence check itself.
-    tick_timer_ = this->create_wall_timer(
-        kTickPeriod, std::bind(&DemoReplaySyncOrchestratorNode::tick, this));
+  // 5. Orchestration timer. Intentionally create_wall_timer / steady_clock:
+  //    it must run BEFORE /clock is confirmed and it drives the wall-clock
+  //    timeout of the /clock presence check itself.
+  tick_timer_ = this->create_wall_timer(
+      kTickPeriod, std::bind(&DemoReplaySyncOrchestratorNode::tick, this));
 }
 
 DemoReplaySyncOrchestratorNode::~DemoReplaySyncOrchestratorNode() {
-    if (termios_modified_) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios_);
-        termios_modified_ = false;
-    }
-    stopChildren();
+  if (termios_modified_) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios_);
+    termios_modified_ = false;
+  }
+  stopChildren();
 }
 
 // ---------------------------------------------------------------------------
 void DemoReplaySyncOrchestratorNode::clockCallback(
     const rosgraph_msgs::msg::Clock::SharedPtr msg) {
-    last_clock_sec_ =
-        static_cast<double>(msg->clock.sec) + static_cast<double>(msg->clock.nanosec) * 1e-9;
-    clock_seen_ = true;
+  last_clock_sec_ =
+      static_cast<double>(msg->clock.sec) + static_cast<double>(msg->clock.nanosec) * 1e-9;
+  clock_seen_ = true;
 }
 
 void DemoReplaySyncOrchestratorNode::odomCallback(
     const nav_msgs::msg::Odometry::SharedPtr msg) {
-    if (odom_seen_) return;
-    t0_sim_ = rclcpp::Time(msg->header.stamp).seconds();
-    odom_seen_ = true;
-    RCLCPP_INFO(this->get_logger(),
-                "target '%s' first odometry: sim-time t0 = %.4f s (frame_id='%s'); "
-                "will trigger at t0 + %.2f s",
-                target_name_.c_str(), t0_sim_, msg->header.frame_id.c_str(),
-                sync_delay_sec_);
+  if (odom_seen_) return;
+  t0_sim_ = rclcpp::Time(msg->header.stamp).seconds();
+  odom_seen_ = true;
+  RCLCPP_INFO(this->get_logger(),
+              "target '%s' first odometry: sim-time t0 = %.4f s (frame_id='%s'); "
+              "will trigger at t0 + %.2f s",
+              target_name_.c_str(), t0_sim_, msg->header.frame_id.c_str(),
+              sync_delay_sec_);
 }
 
 void DemoReplaySyncOrchestratorNode::buttonsCallback(
     const sensor_msgs::msg::Joy::SharedPtr msg) {
-    if (single_button_) {
-        // One button, rising edges only; every other entry (incl. buttons[1]) is ignored.
-        const auto idx = static_cast<std::size_t>(button_index_);
-        if (msg->buttons.size() <= idx) {
-            RCLCPP_WARN_ONCE(this->get_logger(),
-                             "Expected at least %zu entries in %s, got %zu",
-                             idx + 1, buttons_topic_.c_str(), msg->buttons.size());
-            return;
-        }
-        // The first message only seeds the previous state (as in the legacy path).
-        const bool rising = (msg->buttons[idx] != 0) && prev_buttons_.size() > idx &&
-                            prev_buttons_[idx] == 0;
-        prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
-        if (rising) handleButtonPress("stylus button");
-        return;
+  if (single_button_) {
+    // One button, rising edges only; every other entry (incl. buttons[1]) is ignored.
+    const auto idx = static_cast<std::size_t>(button_index_);
+    if (msg->buttons.size() <= idx) {
+      RCLCPP_WARN_ONCE(this->get_logger(),
+                       "Expected at least %zu entries in %s, got %zu",
+                       idx + 1, buttons_topic_.c_str(), msg->buttons.size());
+      return;
     }
-
-    if (msg->buttons.size() < 2) {
-        RCLCPP_WARN_ONCE(this->get_logger(),
-                         "Expected at least 2 entries in %s, got %zu",
-                         buttons_topic_.c_str(), msg->buttons.size());
-        return;
-    }
-    if (prev_buttons_.empty()) {
-        prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
-        return;
-    }
-    const bool rising0 = (msg->buttons[0] != 0) && (prev_buttons_[0] == 0);
-    const bool rising1 = (msg->buttons[1] != 0) && (prev_buttons_[1] == 0);
+    // The first message only seeds the previous state (as in the legacy path).
+    const bool rising = (msg->buttons[idx] != 0) && prev_buttons_.size() > idx &&
+                        prev_buttons_[idx] == 0;
     prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
+    if (rising) handleButtonPress("stylus button");
+    return;
+  }
 
-    if (rising0 && !recording_ && phase_ == Phase::kWaitButtonStart) {
-        startRequested();
-    } else if (rising1 && recording_) {
-        stopRequested();
-    }
+  if (msg->buttons.size() < 2) {
+    RCLCPP_WARN_ONCE(this->get_logger(),
+                     "Expected at least 2 entries in %s, got %zu",
+                     buttons_topic_.c_str(), msg->buttons.size());
+    return;
+  }
+  if (prev_buttons_.empty()) {
+    prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
+    return;
+  }
+  const bool rising0 = (msg->buttons[0] != 0) && (prev_buttons_[0] == 0);
+  const bool rising1 = (msg->buttons[1] != 0) && (prev_buttons_[1] == 0);
+  prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());
+
+  if (rising0 && !recording_ && phase_ == Phase::kWaitButtonStart) {
+    startRequested();
+  } else if (rising1 && recording_) {
+    stopRequested();
+  }
 }
 
 void DemoReplaySyncOrchestratorNode::startRequested() {
-    recording_ = true;
-    gripper_trigger_sent_ = false;
-    RCLCPP_INFO(this->get_logger(),
-                "start button: spawning target and starting the %0.2f s sync window",
-                sync_delay_sec_);
-    phase_ = Phase::kSpawnTarget;
-    phase_entered_ = std::chrono::steady_clock::now();
+  recording_ = true;
+  gripper_trigger_sent_ = false;
+  RCLCPP_INFO(this->get_logger(),
+              "start button: spawning target and starting the %0.2f s sync window",
+              sync_delay_sec_);
+  phase_ = Phase::kSpawnTarget;
+  phase_entered_ = std::chrono::steady_clock::now();
 }
 
 void DemoReplaySyncOrchestratorNode::stopRequested() {
-    // Stop: republish immediately on the synced topic, no delay.
-    if (phase_ == Phase::kRunning || phase_ == Phase::kDone) {
-        publishSyncedButtons(0, 1);
-        RCLCPP_INFO(this->get_logger(),
-                    "stop button: republished [0,1] on %s (immediate)",
-                    buttons_synced_topic_.c_str());
-    } else {
-        RCLCPP_WARN(this->get_logger(),
-                    "stop button received before the synced start was emitted "
-                    "(phase not RUNNING); forwarding [0,1] anyway - the demo was "
-                    "aborted mid-sync.");
-        publishSyncedButtons(0, 1);
-    }
-    recording_ = false;
-    phase_ = Phase::kDone;
+  // Stop: republish immediately on the synced topic, no delay.
+  if (phase_ == Phase::kRunning || phase_ == Phase::kDone) {
+    publishSyncedButtons(0, 1);
+    RCLCPP_INFO(this->get_logger(),
+                "stop button: republished [0,1] on %s (immediate)",
+                buttons_synced_topic_.c_str());
+  } else {
+    RCLCPP_WARN(this->get_logger(),
+                "stop button received before the synced start was emitted "
+                "(phase not RUNNING); forwarding [0,1] anyway - the demo was "
+                "aborted mid-sync.");
+    publishSyncedButtons(0, 1);
+  }
+  recording_ = false;
+  phase_ = Phase::kDone;
 }
 
 void DemoReplaySyncOrchestratorNode::logSequencerTransition(
     const char* why, core::button_sequencer::State from,
     core::button_sequencer::State to) const {
-    RCLCPP_INFO(this->get_logger(), "[t=%.3f s] button sequencer: %s -> %s (%s)",
-                secElapsed(node_start_), core::button_sequencer::toString(from),
-                core::button_sequencer::toString(to), why);
+  RCLCPP_INFO(this->get_logger(), "[t=%.3f s] button sequencer: %s -> %s (%s)",
+              secElapsed(node_start_), core::button_sequencer::toString(from),
+              core::button_sequencer::toString(to), why);
 }
 
 void DemoReplaySyncOrchestratorNode::handleButtonPress(const char* source) {
-    using core::button_sequencer::Action;
-    using core::button_sequencer::Outcome;
-    using core::button_sequencer::State;
+  using core::button_sequencer::Action;
+  using core::button_sequencer::Outcome;
+  using core::button_sequencer::State;
 
-    // Not ready to start yet (clock check / recording stack launch still in progress): do not
-    // feed the sequencer, otherwise a press here would be consumed without starting anything.
-    if (sequencer_.state() == State::kIdle && phase_ != Phase::kWaitButtonStart) {
-        RCLCPP_INFO(this->get_logger(),
-                    "[t=%.3f s] %s ignored: orchestrator not ready for start yet",
-                    secElapsed(node_start_), source);
-        return;
-    }
+  // Not ready to start yet (clock check / recording stack launch still in progress): do not
+  // feed the sequencer, otherwise a press here would be consumed without starting anything.
+  if (sequencer_.state() == State::kIdle && phase_ != Phase::kWaitButtonStart) {
+    RCLCPP_INFO(this->get_logger(),
+                "[t=%.3f s] %s ignored: orchestrator not ready for start yet",
+                secElapsed(node_start_), source);
+    return;
+  }
 
-    const auto r = sequencer_.onPress(secElapsed(node_start_));
-    switch (r.outcome) {
-        case Outcome::kDebounced:
-            RCLCPP_INFO(this->get_logger(),
-                        "[t=%.3f s] %s ignored: debounce (< %.2f s from previous edge), state %s",
-                        secElapsed(node_start_), source, sequencer_.debounceSeconds(),
-                        core::button_sequencer::toString(r.before));
-            return;
-        case Outcome::kIgnoredStarting:
-            RCLCPP_INFO(this->get_logger(),
-                        "[t=%.3f s] %s: pressione ignorata: sync in corso (state STARTING)",
-                        secElapsed(node_start_), source);
-            return;
-        case Outcome::kIgnoredStopped:
-            RCLCPP_INFO(this->get_logger(),
-                        "[t=%.3f s] %s ignored: demo already STOPPED (restart the node)",
-                        secElapsed(node_start_), source);
-            return;
-        case Outcome::kAccepted:
-            break;
-    }
+  const auto r = sequencer_.onPress(secElapsed(node_start_));
+  switch (r.outcome) {
+    case Outcome::kDebounced:
+      RCLCPP_INFO(this->get_logger(),
+                  "[t=%.3f s] %s ignored: debounce (< %.2f s from previous edge), state %s",
+                  secElapsed(node_start_), source, sequencer_.debounceSeconds(),
+                  core::button_sequencer::toString(r.before));
+      return;
+    case Outcome::kIgnoredStarting:
+      RCLCPP_INFO(this->get_logger(),
+                  "[t=%.3f s] %s: pressione ignorata: sync in corso (state STARTING)",
+                  secElapsed(node_start_), source);
+      return;
+    case Outcome::kIgnoredStopped:
+      RCLCPP_INFO(this->get_logger(),
+                  "[t=%.3f s] %s ignored: demo already STOPPED (restart the node)",
+                  secElapsed(node_start_), source);
+      return;
+    case Outcome::kAccepted:
+      break;
+  }
 
-    logSequencerTransition(source, r.before, r.after);
-    switch (r.action) {
-        case Action::kRequestStart: startRequested(); break;
-        case Action::kTrigger: triggerGraspClosure(source); break;
-        case Action::kStop: stopRequested(); break;
-        case Action::kNone: break;
-    }
+  logSequencerTransition(source, r.before, r.after);
+  switch (r.action) {
+    case Action::kRequestStart:
+      startRequested();
+      break;
+    case Action::kTrigger:
+      triggerGraspClosure(source);
+      break;
+    case Action::kStop:
+      stopRequested();
+      break;
+    case Action::kNone:
+      break;
+  }
 }
 
 // ---------------------------------------------------------------------------
 void DemoReplaySyncOrchestratorNode::tick() {
-    switch (phase_) {
-        case Phase::kCheckClock:
-            if (clock_seen_) {
-                RCLCPP_INFO(this->get_logger(), "/clock is live (t=%.3f s).", last_clock_sec_);
-                phase_ = (mode_ == Mode::kDemo) ? Phase::kLaunchRecording : Phase::kSpawnTarget;
-                phase_entered_ = std::chrono::steady_clock::now();
-            } else if (secElapsed(node_start_) > clock_wait_timeout_sec_) {
-                fatal("no message received on /clock within " +
-                      std::to_string(clock_wait_timeout_sec_) + " s. /clock is NOT "
-                      "bridged by any file in this workspace - it must be provided by "
-                      "an external component (e.g. gz_ros2_control in the Franka Gazebo "
-                      "bringup). Bring up Gazebo with sim time before this node.");
-            }
-            break;
+  switch (phase_) {
+    case Phase::kCheckClock:
+      if (clock_seen_) {
+        RCLCPP_INFO(this->get_logger(), "/clock is live (t=%.3f s).", last_clock_sec_);
+        phase_ = (mode_ == Mode::kDemo) ? Phase::kLaunchRecording : Phase::kSpawnTarget;
+        phase_entered_ = std::chrono::steady_clock::now();
+      } else if (secElapsed(node_start_) > clock_wait_timeout_sec_) {
+        fatal("no message received on /clock within " +
+              std::to_string(clock_wait_timeout_sec_) +
+              " s. /clock is NOT "
+              "bridged by any file in this workspace - it must be provided by "
+              "an external component (e.g. gz_ros2_control in the Franka Gazebo "
+              "bringup). Bring up Gazebo with sim time before this node.");
+      }
+      break;
 
-        case Phase::kLaunchRecording: {  // demo only
-            std::vector<std::string> argv = {
-                "ros2", "launch", "haptic_dmp_learning", "demo_replay_sync.launch.py",
-                "run_id:=" + run_id_,
-                std::string("use_csv_playback:=") + (use_csv_playback_ ? "true" : "false")};
-            if (!demo_csv_path_.empty()) {  // empty: argv identical to before
-                argv.push_back("demo_csv_path:=" + demo_csv_path_);
-            }
-            if (anchor_enabled_) {  // anchor_enabled=false: argv identical to before
-                argv.push_back("anchor_enabled:=true");
-                argv.push_back(listArg("anchor_position_m", anchor_position_m_));
-                argv.push_back(listArg("anchor_orientation_xyzw", anchor_orientation_xyzw_));
-            }
-            launchChild(argv, "recording_launch");
-            buttons_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
-                buttons_topic_, rclcpp::QoS(10),
-                std::bind(&DemoReplaySyncOrchestratorNode::buttonsCallback, this,
-                          std::placeholders::_1));
-            RCLCPP_INFO(this->get_logger(),
-                        "recording stack launched; waiting for start button on %s",
-                        buttons_topic_.c_str());
-            phase_ = Phase::kWaitButtonStart;
-            phase_entered_ = std::chrono::steady_clock::now();
-            break;
-        }
-
-        case Phase::kWaitButtonStart:  // demo only; driven by buttonsCallback
-            break;
-
-        case Phase::kSpawnTarget: {
-            std::vector<std::string> argv = {
-                "ros2", "launch", "free_target_object", "free_target_object.launch.py",
-                "name:=" + target_name_,
-                numArg("x", tx_), numArg("y", ty_), numArg("z", tz_),
-                numArg("vx", tvx_), numArg("vy", tvy_), numArg("vz", tvz_),
-                numArg("wx", twx_), numArg("wy", twy_), numArg("wz", twz_),
-                numArg("size_x", tsx_), numArg("size_y", tsy_), numArg("size_z", tsz_),
-                numArg("mass", tmass_),
-                std::string("with_collar:=") + (target_with_collar_ ? "true" : "false"),
-                std::string("collar_collision:=") + (target_collar_collision_ ? "true" : "false"),
-                numArg("yaw", target_yaw_)};
-            launchChild(argv, "free_target_object");
-            odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-                "/" + target_name_ + "/odometry", rclcpp::QoS(10),
-                std::bind(&DemoReplaySyncOrchestratorNode::odomCallback, this,
-                          std::placeholders::_1));
-            phase_ = Phase::kWaitOdom;
-            phase_entered_ = std::chrono::steady_clock::now();
-            break;
-        }
-
-        case Phase::kWaitOdom:
-            if (odom_seen_) {
-                phase_ = Phase::kWaitSync;
-                phase_entered_ = std::chrono::steady_clock::now();
-            } else if (secElapsed(phase_entered_) > odom_wait_timeout_sec_) {
-                fatal("no message on /" + target_name_ + "/odometry within " +
-                      std::to_string(odom_wait_timeout_sec_) +
-                      " s after spawning the target.");
-            }
-            break;
-
-        case Phase::kWaitSync:
-            if (clock_seen_ && (last_clock_sec_ - t0_sim_) >= sync_delay_sec_) {
-                RCLCPP_INFO(this->get_logger(),
-                            "sync reached: sim-time %.4f s = t0 (%.4f) + %.2f s",
-                            last_clock_sec_, t0_sim_, sync_delay_sec_);
-                if (mode_ == Mode::kDemo) {
-                    phase_ = Phase::kEmitStartSeed;
-                } else {
-                    phase_ = Phase::kLaunchReplay;
-                }
-                phase_entered_ = std::chrono::steady_clock::now();
-            }
-            break;
-
-        case Phase::kEmitStartSeed:  // demo only
-            publishSyncedButtons(0, 0);
-            phase_ = Phase::kEmitStartEdge;
-            phase_entered_ = std::chrono::steady_clock::now();
-            break;
-
-        case Phase::kEmitStartEdge:  // demo only
-            if (secElapsed(phase_entered_) >= kStartEdgeGapSec) {
-                publishSyncedButtons(1, 0);
-                RCLCPP_INFO(this->get_logger(),
-                            "synced start edge [1,0] emitted on %s; recorder is live.",
-                            buttons_synced_topic_.c_str());
-                phase_ = Phase::kRunning;
-                phase_entered_ = std::chrono::steady_clock::now();
-                if (single_button_) {
-                    const auto from = sequencer_.state();
-                    if (sequencer_.onStartEmitted()) {
-                        logSequencerTransition("synced start emitted", from, sequencer_.state());
-                    }
-                }
-            }
-            break;
-
-        case Phase::kLaunchReplay: {  // replay only
-            // Only the position executor differs by formulation. "dmp" keeps the
-            // exact child + arguments used before this switch existed; "prodmp"
-            // swaps the executable and its weights path and adds
-            // orientation_weights_yaml_path (the classic combined file, used for
-            // the quaternion channel that ProDMP does not model). Every other
-            // argument is identical between the two branches.
-            if (mp_formulation_ == "dmp") {
-                launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
-                             "--ros-args",
-                             "--params-file", hapticDmpParamsPath(),
-                             "-p", std::string("target_odom_required:=") +
-                                       (target_odom_required_ ? "true" : "false"),
-                             "-p", "target_odom_topic:=" + target_odom_topic_,
-                             "-p", "target_odom_timeout_sec:=" +
-                                       std::to_string(target_odom_timeout_sec_),
-                             "-p", "use_sim_time:=true",
-                             "-p", "startup_delay_sec:=0.0",
-                             "-p", "weights_yaml_path:=" + weightsPathForRunId(),
-                             "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
-                            "dmp_executor");
-            } else {  // mp_formulation_ == "prodmp"
-                launchChild({"ros2", "run", "haptic_dmp_learning", "prodmp_gazebo_executor_node",
-                             "--ros-args",
-                             "--params-file", hapticDmpParamsPath(),
-                             "-p", std::string("target_odom_required:=") +
-                                       (target_odom_required_ ? "true" : "false"),
-                             "-p", "target_odom_topic:=" + target_odom_topic_,
-                             "-p", "target_odom_timeout_sec:=" +
-                                       std::to_string(target_odom_timeout_sec_),
-                             "-p", "use_sim_time:=true",
-                             "-p", "startup_delay_sec:=0.0",
-                             "-p", "weights_yaml_path:=" + prodmpWeightsPathForRunId(),
-                             "-p", "orientation_weights_yaml_path:=" + weightsPathForRunId(),
-                             "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
-                            "prodmp_executor");
-            }
-            launchChild({"ros2", "run", "grasp_monitoring", "geometric_grasp_monitor",
-                         "--ros-args",
-                         "--params-file", graspMonitorParamsPath(),
-                         "-p", "use_sim_time:=true"},
-                        "geometric_grasp_monitor");
-            launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_force_calibration_node",
-                         "--ros-args",
-                         "--params-file", hapticDmpParamsPath(),
-                         "-p", "use_sim_time:=true",
-                         "-p", "mode:=verify",
-                         "-p", "run_id:=" + run_id_},
-                        "grasp_force_calibration(verify)");
-            launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_state_machine_node",
-                         "--ros-args",
-                         "-p", "use_sim_time:=true",
-                         "-p", numArg("hard_force_limit_n", hard_force_limit_n_)},
-                        "grasp_state_machine_node");
-            RCLCPP_INFO(this->get_logger(),
-                        "replay stack launched for run_id '%s' (mp_formulation=%s, weights: %s).",
-                        run_id_.c_str(), mp_formulation_.c_str(),
-                        (mp_formulation_ == "dmp" ? weightsPathForRunId()
-                                                  : prodmpWeightsPathForRunId())
-                            .c_str());
-            phase_ = Phase::kRunning;
-            phase_entered_ = std::chrono::steady_clock::now();
-            break;
-        }
-
-        case Phase::kRunning:
-            RCLCPP_INFO_ONCE(this->get_logger(),
-                             "orchestration complete for run_id '%s'; child processes "
-                             "are running. Stop this node (Ctrl-C) when finished - it "
-                             "will terminate the children it launched.",
-                             run_id_.c_str());
-            break;
-
-        case Phase::kDone:
-        case Phase::kError:
-            break;
+    case Phase::kLaunchRecording: {  // demo only
+      std::vector<std::string> argv = {
+          "ros2", "launch", "haptic_dmp_learning", "demo_replay_sync.launch.py",
+          "run_id:=" + run_id_,
+          std::string("use_csv_playback:=") + (use_csv_playback_ ? "true" : "false")};
+      if (!demo_csv_path_.empty()) {  // empty: argv identical to before
+        argv.push_back("demo_csv_path:=" + demo_csv_path_);
+      }
+      if (anchor_enabled_) {  // anchor_enabled=false: argv identical to before
+        argv.push_back("anchor_enabled:=true");
+        argv.push_back(listArg("anchor_position_m", anchor_position_m_));
+        argv.push_back(listArg("anchor_orientation_xyzw", anchor_orientation_xyzw_));
+      }
+      launchChild(argv, "recording_launch");
+      buttons_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
+          buttons_topic_, rclcpp::QoS(10),
+          std::bind(&DemoReplaySyncOrchestratorNode::buttonsCallback, this,
+                    std::placeholders::_1));
+      RCLCPP_INFO(this->get_logger(),
+                  "recording stack launched; waiting for start button on %s",
+                  buttons_topic_.c_str());
+      phase_ = Phase::kWaitButtonStart;
+      phase_entered_ = std::chrono::steady_clock::now();
+      break;
     }
+
+    case Phase::kWaitButtonStart:  // demo only; driven by buttonsCallback
+      break;
+
+    case Phase::kSpawnTarget: {
+      std::vector<std::string> argv = {
+          "ros2", "launch", "free_target_object", "free_target_object.launch.py",
+          "name:=" + target_name_,
+          numArg("x", tx_), numArg("y", ty_), numArg("z", tz_),
+          numArg("vx", tvx_), numArg("vy", tvy_), numArg("vz", tvz_),
+          numArg("wx", twx_), numArg("wy", twy_), numArg("wz", twz_),
+          numArg("size_x", tsx_), numArg("size_y", tsy_), numArg("size_z", tsz_),
+          numArg("mass", tmass_),
+          std::string("with_collar:=") + (target_with_collar_ ? "true" : "false"),
+          std::string("collar_collision:=") + (target_collar_collision_ ? "true" : "false"),
+          numArg("yaw", target_yaw_)};
+      launchChild(argv, "free_target_object");
+      odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+          "/" + target_name_ + "/odometry", rclcpp::QoS(10),
+          std::bind(&DemoReplaySyncOrchestratorNode::odomCallback, this,
+                    std::placeholders::_1));
+      phase_ = Phase::kWaitOdom;
+      phase_entered_ = std::chrono::steady_clock::now();
+      break;
+    }
+
+    case Phase::kWaitOdom:
+      if (odom_seen_) {
+        phase_ = Phase::kWaitSync;
+        phase_entered_ = std::chrono::steady_clock::now();
+      } else if (secElapsed(phase_entered_) > odom_wait_timeout_sec_) {
+        fatal("no message on /" + target_name_ + "/odometry within " +
+              std::to_string(odom_wait_timeout_sec_) +
+              " s after spawning the target.");
+      }
+      break;
+
+    case Phase::kWaitSync:
+      if (clock_seen_ && (last_clock_sec_ - t0_sim_) >= sync_delay_sec_) {
+        RCLCPP_INFO(this->get_logger(),
+                    "sync reached: sim-time %.4f s = t0 (%.4f) + %.2f s",
+                    last_clock_sec_, t0_sim_, sync_delay_sec_);
+        if (mode_ == Mode::kDemo) {
+          phase_ = Phase::kEmitStartSeed;
+        } else {
+          phase_ = Phase::kLaunchReplay;
+        }
+        phase_entered_ = std::chrono::steady_clock::now();
+      }
+      break;
+
+    case Phase::kEmitStartSeed:  // demo only
+      publishSyncedButtons(0, 0);
+      phase_ = Phase::kEmitStartEdge;
+      phase_entered_ = std::chrono::steady_clock::now();
+      break;
+
+    case Phase::kEmitStartEdge:  // demo only
+      if (secElapsed(phase_entered_) >= kStartEdgeGapSec) {
+        publishSyncedButtons(1, 0);
+        RCLCPP_INFO(this->get_logger(),
+                    "synced start edge [1,0] emitted on %s; recorder is live.",
+                    buttons_synced_topic_.c_str());
+        phase_ = Phase::kRunning;
+        phase_entered_ = std::chrono::steady_clock::now();
+        if (single_button_) {
+          const auto from = sequencer_.state();
+          if (sequencer_.onStartEmitted()) {
+            logSequencerTransition("synced start emitted", from, sequencer_.state());
+          }
+        }
+      }
+      break;
+
+    case Phase::kLaunchReplay: {  // replay only
+      // Only the position executor differs by formulation. "dmp" keeps the
+      // exact child + arguments used before this switch existed; "prodmp"
+      // swaps the executable and its weights path and adds
+      // orientation_weights_yaml_path (the classic combined file, used for
+      // the quaternion channel that ProDMP does not model). Every other
+      // argument is identical between the two branches.
+      if (mp_formulation_ == "dmp") {
+        launchChild({"ros2", "run", "haptic_dmp_learning", "dmp_gazebo_executor_node",
+                     "--ros-args",
+                     "--params-file", hapticDmpParamsPath(),
+                     "-p", std::string("target_odom_required:=") + (target_odom_required_ ? "true" : "false"),
+                     "-p", "target_odom_topic:=" + target_odom_topic_,
+                     "-p", "target_odom_timeout_sec:=" + std::to_string(target_odom_timeout_sec_),
+                     "-p", "use_sim_time:=true",
+                     "-p", "startup_delay_sec:=0.0",
+                     "-p", "weights_yaml_path:=" + weightsPathForRunId(),
+                     "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
+                    "dmp_executor");
+      } else {  // mp_formulation_ == "prodmp"
+        launchChild({"ros2", "run", "haptic_dmp_learning", "prodmp_gazebo_executor_node",
+                     "--ros-args",
+                     "--params-file", hapticDmpParamsPath(),
+                     "-p", std::string("target_odom_required:=") + (target_odom_required_ ? "true" : "false"),
+                     "-p", "target_odom_topic:=" + target_odom_topic_,
+                     "-p", "target_odom_timeout_sec:=" + std::to_string(target_odom_timeout_sec_),
+                     "-p", "use_sim_time:=true",
+                     "-p", "startup_delay_sec:=0.0",
+                     "-p", "weights_yaml_path:=" + prodmpWeightsPathForRunId(),
+                     "-p", "orientation_weights_yaml_path:=" + weightsPathForRunId(),
+                     "-p", "demo_csv_path:=" + demoCsvPathForRunId()},
+                    "prodmp_executor");
+      }
+      launchChild({"ros2", "run", "grasp_monitoring", "geometric_grasp_monitor",
+                   "--ros-args",
+                   "--params-file", graspMonitorParamsPath(),
+                   "-p", "use_sim_time:=true"},
+                  "geometric_grasp_monitor");
+      launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_force_calibration_node",
+                   "--ros-args",
+                   "--params-file", hapticDmpParamsPath(),
+                   "-p", "use_sim_time:=true",
+                   "-p", "mode:=verify",
+                   "-p", "run_id:=" + run_id_},
+                  "grasp_force_calibration(verify)");
+      launchChild({"ros2", "run", "haptic_dmp_learning", "grasp_state_machine_node",
+                   "--ros-args",
+                   "-p", "use_sim_time:=true",
+                   "-p", numArg("hard_force_limit_n", hard_force_limit_n_)},
+                  "grasp_state_machine_node");
+      RCLCPP_INFO(this->get_logger(),
+                  "replay stack launched for run_id '%s' (mp_formulation=%s, weights: %s).",
+                  run_id_.c_str(), mp_formulation_.c_str(),
+                  (mp_formulation_ == "dmp" ? weightsPathForRunId()
+                                            : prodmpWeightsPathForRunId())
+                      .c_str());
+      phase_ = Phase::kRunning;
+      phase_entered_ = std::chrono::steady_clock::now();
+      break;
+    }
+
+    case Phase::kRunning:
+      RCLCPP_INFO_ONCE(this->get_logger(),
+                       "orchestration complete for run_id '%s'; child processes "
+                       "are running. Stop this node (Ctrl-C) when finished - it "
+                       "will terminate the children it launched.",
+                       run_id_.c_str());
+      break;
+
+    case Phase::kDone:
+    case Phase::kError:
+      break;
+  }
 }
 
 void DemoReplaySyncOrchestratorNode::fatal(const std::string& why) {
-    if (failed_) return;
-    failed_ = true;
-    phase_ = Phase::kError;
-    RCLCPP_FATAL(this->get_logger(), "demo_replay_sync_orchestrator ABORTED: %s", why.c_str());
-    if (termios_modified_) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios_);
-        termios_modified_ = false;
-    }
-    stopChildren();
-    rclcpp::shutdown();
+  if (failed_) return;
+  failed_ = true;
+  phase_ = Phase::kError;
+  RCLCPP_FATAL(this->get_logger(), "demo_replay_sync_orchestrator ABORTED: %s", why.c_str());
+  if (termios_modified_) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios_);
+    termios_modified_ = false;
+  }
+  stopChildren();
+  rclcpp::shutdown();
 }
 
 // ---------------------------------------------------------------------------
 std::string DemoReplaySyncOrchestratorNode::generateRunId() const {
-    std::time_t t = std::time(nullptr);
-    std::tm tm_buf{};
-    localtime_r(&t, &tm_buf);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y%m%dT%H%M%S", &tm_buf);
-    return std::string(buf);
+  std::time_t t = std::time(nullptr);
+  std::tm tm_buf{};
+  localtime_r(&t, &tm_buf);
+  char buf[32];
+  std::strftime(buf, sizeof(buf), "%Y%m%dT%H%M%S", &tm_buf);
+  return std::string(buf);
 }
 
 std::string DemoReplaySyncOrchestratorNode::weightsPathForRunId() const {
-    const char* home = std::getenv("HOME");
-    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-    return ws_root + "/dmp_weights_" + run_id_ + ".yaml";
+  const char* home = std::getenv("HOME");
+  const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+  return ws_root + "/dmp_weights_" + run_id_ + ".yaml";
 }
 
 std::string DemoReplaySyncOrchestratorNode::prodmpWeightsPathForRunId() const {
-    // Same pattern as weightsPathForRunId(), distinct filename so the classic
-    // DMP file (dmp_weights_<run_id>.yaml) and the ProDMP file
-    // (prodmp_weights_<run_id>.yaml) coexist for the same run_id.
-    const char* home = std::getenv("HOME");
-    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-    return ws_root + "/prodmp_weights_" + run_id_ + ".yaml";
+  // Same pattern as weightsPathForRunId(), distinct filename so the classic
+  // DMP file (dmp_weights_<run_id>.yaml) and the ProDMP file
+  // (prodmp_weights_<run_id>.yaml) coexist for the same run_id.
+  const char* home = std::getenv("HOME");
+  const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+  return ws_root + "/prodmp_weights_" + run_id_ + ".yaml";
 }
 
 std::string DemoReplaySyncOrchestratorNode::demoCsvPathForRunId() const {
-    const char* home = std::getenv("HOME");
-    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-    return ws_root + "/demo_raw_" + run_id_ + ".csv";
+  const char* home = std::getenv("HOME");
+  const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+  return ws_root + "/demo_raw_" + run_id_ + ".csv";
 }
 
 std::string DemoReplaySyncOrchestratorNode::graspMonitorParamsPath() const {
-    // grasp_monitoring/config/params.yaml carries geometric_grasp_monitor's
-    // parameters (enable_alignment_check, ...). Passed with --params-file so the
-    // node does not silently run on its hardcoded defaults. Resolve the installed
-    // share copy, falling back to the source tree (same idiom as the feature
-    // flags path in live_demo_recorder_node / haptic_dmp_wrapper_node).
-    try {
-        return ament_index_cpp::get_package_share_directory("grasp_monitoring") +
-               "/config/params.yaml";
-    } catch (const std::exception&) {
-        const char* home = std::getenv("HOME");
-        const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-        return ws_root + "/src/grasp_monitoring/config/params.yaml";
-    }
+  // grasp_monitoring/config/params.yaml carries geometric_grasp_monitor's
+  // parameters (enable_alignment_check, ...). Passed with --params-file so the
+  // node does not silently run on its hardcoded defaults. Resolve the installed
+  // share copy, falling back to the source tree (same idiom as the feature
+  // flags path in live_demo_recorder_node / haptic_dmp_wrapper_node).
+  try {
+    return ament_index_cpp::get_package_share_directory("grasp_monitoring") +
+           "/config/params.yaml";
+  } catch (const std::exception&) {
+    const char* home = std::getenv("HOME");
+    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+    return ws_root + "/src/grasp_monitoring/config/params.yaml";
+  }
 }
 
 std::string DemoReplaySyncOrchestratorNode::hapticDmpParamsPath() const {
-    // haptic_dmp_learning/config/params.yaml is a single file with one section
-    // per node name (dmp_gazebo_executor_node, demo_replay_sync_orchestrator,
-    // ...); a node only reads its own section, so the same file is passed to
-    // every haptic_dmp_learning child. Same resolve-share-then-source idiom as
-    // graspMonitorParamsPath().
-    try {
-        return ament_index_cpp::get_package_share_directory("haptic_dmp_learning") +
-               "/config/params.yaml";
-    } catch (const std::exception&) {
-        const char* home = std::getenv("HOME");
-        const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
-        return ws_root + "/src/haptic_dmp_learning/config/params.yaml";
-    }
+  // haptic_dmp_learning/config/params.yaml is a single file with one section
+  // per node name (dmp_gazebo_executor_node, demo_replay_sync_orchestrator,
+  // ...); a node only reads its own section, so the same file is passed to
+  // every haptic_dmp_learning child. Same resolve-share-then-source idiom as
+  // graspMonitorParamsPath().
+  try {
+    return ament_index_cpp::get_package_share_directory("haptic_dmp_learning") +
+           "/config/params.yaml";
+  } catch (const std::exception&) {
+    const char* home = std::getenv("HOME");
+    const std::string ws_root = std::string(home ? home : "/root") + "/thesis_ws";
+    return ws_root + "/src/haptic_dmp_learning/config/params.yaml";
+  }
 }
 
 void DemoReplaySyncOrchestratorNode::publishSyncedButtons(int b0, int b1) {
-    sensor_msgs::msg::Joy msg;
-    msg.header.stamp = this->now();
-    msg.buttons = {static_cast<int32_t>(b0), static_cast<int32_t>(b1)};
-    buttons_synced_pub_->publish(msg);
+  sensor_msgs::msg::Joy msg;
+  msg.header.stamp = this->now();
+  msg.buttons = {static_cast<int32_t>(b0), static_cast<int32_t>(b1)};
+  buttons_synced_pub_->publish(msg);
 }
 
 void DemoReplaySyncOrchestratorNode::publishGripperTrigger() {
-    sensor_msgs::msg::Joy msg;
-    msg.header.stamp = this->now();
-    msg.buttons = {0, 0, 1};
-    buttons_synced_pub_->publish(msg);
+  sensor_msgs::msg::Joy msg;
+  msg.header.stamp = this->now();
+  msg.buttons = {0, 0, 1};
+  buttons_synced_pub_->publish(msg);
 }
 
 void DemoReplaySyncOrchestratorNode::checkKeyboard() {
-    if (!termios_modified_) return;
+  if (!termios_modified_) return;
 
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(STDIN_FILENO, &readfds);
-    struct timeval tv{0, 0};
-    int ret = select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &tv);
-    if (ret > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
-        char c = 0;
-        if (read(STDIN_FILENO, &c, 1) == 1) {
-            if (c == ' ') {
-                if (single_button_ && mode_ == Mode::kDemo) {
-                    // Same state machine as the stylus button: SPACE == one press.
-                    handleButtonPress("SPACE");
-                } else if (phase_ == Phase::kRunning && !gripper_trigger_sent_) {
-                    triggerGraspClosure("SPACE");
-                }
-            }
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(STDIN_FILENO, &readfds);
+  struct timeval tv {
+    0, 0
+  };
+  int ret = select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &tv);
+  if (ret > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
+    char c = 0;
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+      if (c == ' ') {
+        if (single_button_ && mode_ == Mode::kDemo) {
+          // Same state machine as the stylus button: SPACE == one press.
+          handleButtonPress("SPACE");
+        } else if (phase_ == Phase::kRunning && !gripper_trigger_sent_) {
+          triggerGraspClosure("SPACE");
         }
+      }
     }
+  }
 }
 
 void DemoReplaySyncOrchestratorNode::triggerGraspClosure(const char* source) {
-    // 1. Mark the instant of intent on the synced buttons topic (ONE message: the recorder
-    //    flags gripper_trigger on the level of buttons[2], one message = one CSV row).
-    publishGripperTrigger();
-    // 2. Lock out repeat presses immediately.
-    gripper_trigger_sent_ = true;
-    // 3. Close along a timed ramp instead of one step command (a
-    //    step slams the fingers shut and ejects the object). A
-    //    dedicated 20 ms wall timer (same period as keyboard_timer_)
-    //    walks core::gripper_ramp::interpolateGripperPosition from
-    //    open to closed, then cancels itself.
-    gripper_ramp_start_ = std::chrono::steady_clock::now();
-    gripper_ramp_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(20),
-        std::bind(&DemoReplaySyncOrchestratorNode::gripperRampTick, this));
-    RCLCPP_INFO(this->get_logger(),
-                "%s: starting %.1fs gripper close ramp and trigger "
-                "Joy [0,0,1] on %s",
-                source, gripper_close_ramp_duration_sec_, buttons_synced_topic_.c_str());
+  // 1. Mark the instant of intent on the synced buttons topic (ONE message: the recorder
+  //    flags gripper_trigger on the level of buttons[2], one message = one CSV row).
+  publishGripperTrigger();
+  // 2. Lock out repeat presses immediately.
+  gripper_trigger_sent_ = true;
+  // 3. Close along a timed ramp instead of one step command (a
+  //    step slams the fingers shut and ejects the object). A
+  //    dedicated 20 ms wall timer (same period as keyboard_timer_)
+  //    walks core::gripper_ramp::interpolateGripperPosition from
+  //    open to closed, then cancels itself.
+  gripper_ramp_start_ = std::chrono::steady_clock::now();
+  gripper_ramp_timer_ = this->create_wall_timer(
+      std::chrono::milliseconds(20),
+      std::bind(&DemoReplaySyncOrchestratorNode::gripperRampTick, this));
+  RCLCPP_INFO(this->get_logger(),
+              "%s: starting %.1fs gripper close ramp and trigger "
+              "Joy [0,0,1] on %s",
+              source, gripper_close_ramp_duration_sec_, buttons_synced_topic_.c_str());
 }
 
 void DemoReplaySyncOrchestratorNode::gripperRampTick() {
-    const double elapsed = secElapsed(gripper_ramp_start_);
-    const bool done = elapsed >= gripper_close_ramp_duration_sec_;
+  const double elapsed = secElapsed(gripper_ramp_start_);
+  const bool done = elapsed >= gripper_close_ramp_duration_sec_;
 
-    std_msgs::msg::Float64 cmd;
-    // interpolateGripperPosition already clamps to the closed value once elapsed
-    // reaches the duration; publish that exact value on the final tick so timer
-    // drift cannot leave the gripper a hair open.
-    cmd.data = done ? gripper_closed_position_
-                    : core::gripper_ramp::interpolateGripperPosition(
-                          elapsed, gripper_close_ramp_duration_sec_,
-                          gripper_open_position_, gripper_closed_position_);
-    gripper_pub_->publish(cmd);
+  std_msgs::msg::Float64 cmd;
+  // interpolateGripperPosition already clamps to the closed value once elapsed
+  // reaches the duration; publish that exact value on the final tick so timer
+  // drift cannot leave the gripper a hair open.
+  cmd.data = done ? gripper_closed_position_
+                  : core::gripper_ramp::interpolateGripperPosition(
+                        elapsed, gripper_close_ramp_duration_sec_,
+                        gripper_open_position_, gripper_closed_position_);
+  gripper_pub_->publish(cmd);
 
-    if (done) {
-        gripper_ramp_timer_->cancel();
-        gripper_ramp_timer_.reset();
-        // Physical command first (above), then announce the ramp is complete so
-        // grasp_force_calibration_node can start its force capture on real contact.
-        gripper_close_complete_pub_->publish(std_msgs::msg::Empty());
-        RCLCPP_INFO(this->get_logger(),
-                    "gripper close ramp complete (%.3f).", gripper_closed_position_);
-    }
+  if (done) {
+    gripper_ramp_timer_->cancel();
+    gripper_ramp_timer_.reset();
+    // Physical command first (above), then announce the ramp is complete so
+    // grasp_force_calibration_node can start its force capture on real contact.
+    gripper_close_complete_pub_->publish(std_msgs::msg::Empty());
+    RCLCPP_INFO(this->get_logger(),
+                "gripper close ramp complete (%.3f).", gripper_closed_position_);
+  }
 }
 
 pid_t DemoReplaySyncOrchestratorNode::launchChild(
     const std::vector<std::string>& argv, const std::string& tag) {
-    // Build the argv array and the log line BEFORE fork(): between fork() and
-    // execvp() the child may only call async-signal-safe functions (no malloc),
-    // and rclcpp keeps background threads alive so a post-fork allocation could
-    // deadlock on the malloc lock.
-    std::vector<char*> cargv;
-    cargv.reserve(argv.size() + 1);
-    for (const auto& s : argv) cargv.push_back(const_cast<char*>(s.c_str()));
-    cargv.push_back(nullptr);
+  // Build the argv array and the log line BEFORE fork(): between fork() and
+  // execvp() the child may only call async-signal-safe functions (no malloc),
+  // and rclcpp keeps background threads alive so a post-fork allocation could
+  // deadlock on the malloc lock.
+  std::vector<char*> cargv;
+  cargv.reserve(argv.size() + 1);
+  for (const auto& s : argv) cargv.push_back(const_cast<char*>(s.c_str()));
+  cargv.push_back(nullptr);
 
-    std::string joined;
-    for (const auto& s : argv) { joined += s; joined += ' '; }
+  std::string joined;
+  for (const auto& s : argv) {
+    joined += s;
+    joined += ' ';
+  }
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        RCLCPP_ERROR(this->get_logger(), "fork() failed for child [%s]: %s",
-                     tag.c_str(), std::strerror(errno));
-        return -1;
-    }
-    if (pid == 0) {
-        // Child: own process group so we can signal the whole ros2 launch tree.
-        setpgid(0, 0);
-        execvp(cargv[0], cargv.data());
-        _exit(127);  // exec failed
-    }
-    setpgid(pid, pid);  // race-safe duplicate of the child's setpgid
-    children_.emplace_back(pid, tag);
-    RCLCPP_INFO(this->get_logger(), "launched child [%s] pid=%d: %s",
-                tag.c_str(), pid, joined.c_str());
-    return pid;
+  pid_t pid = fork();
+  if (pid < 0) {
+    RCLCPP_ERROR(this->get_logger(), "fork() failed for child [%s]: %s",
+                 tag.c_str(), std::strerror(errno));
+    return -1;
+  }
+  if (pid == 0) {
+    // Child: own process group so we can signal the whole ros2 launch tree.
+    setpgid(0, 0);
+    execvp(cargv[0], cargv.data());
+    _exit(127);  // exec failed
+  }
+  setpgid(pid, pid);  // race-safe duplicate of the child's setpgid
+  children_.emplace_back(pid, tag);
+  RCLCPP_INFO(this->get_logger(), "launched child [%s] pid=%d: %s",
+              tag.c_str(), pid, joined.c_str());
+  return pid;
 }
 
 void DemoReplaySyncOrchestratorNode::stopChildren() {
-    if (children_.empty()) return;
+  if (children_.empty()) return;
+  for (const auto& [pid, tag] : children_) {
+    RCLCPP_INFO(rclcpp::get_logger("demo_replay_sync_orchestrator"),
+                "SIGINT -> child [%s] pgid=%d", tag.c_str(), pid);
+    kill(-pid, SIGINT);
+  }
+  // Give them a few seconds to shut down cleanly, then SIGKILL survivors.
+  for (int i = 0; i < 30; ++i) {
+    bool all_done = true;
     for (const auto& [pid, tag] : children_) {
-        RCLCPP_INFO(rclcpp::get_logger("demo_replay_sync_orchestrator"),
-                    "SIGINT -> child [%s] pgid=%d", tag.c_str(), pid);
-        kill(-pid, SIGINT);
+      (void)tag;
+      int status = 0;
+      pid_t r = waitpid(pid, &status, WNOHANG);
+      if (r == 0) all_done = false;
     }
-    // Give them a few seconds to shut down cleanly, then SIGKILL survivors.
-    for (int i = 0; i < 30; ++i) {
-        bool all_done = true;
-        for (const auto& [pid, tag] : children_) {
-            (void)tag;
-            int status = 0;
-            pid_t r = waitpid(pid, &status, WNOHANG);
-            if (r == 0) all_done = false;
-        }
-        if (all_done) break;
-        usleep(100 * 1000);
+    if (all_done) break;
+    usleep(100 * 1000);
+  }
+  for (const auto& [pid, tag] : children_) {
+    int status = 0;
+    if (waitpid(pid, &status, WNOHANG) == 0) {
+      RCLCPP_WARN(rclcpp::get_logger("demo_replay_sync_orchestrator"),
+                  "SIGKILL -> child [%s] pgid=%d (did not exit on SIGINT)",
+                  tag.c_str(), pid);
+      kill(-pid, SIGKILL);
+      waitpid(pid, &status, 0);
     }
-    for (const auto& [pid, tag] : children_) {
-        int status = 0;
-        if (waitpid(pid, &status, WNOHANG) == 0) {
-            RCLCPP_WARN(rclcpp::get_logger("demo_replay_sync_orchestrator"),
-                        "SIGKILL -> child [%s] pgid=%d (did not exit on SIGINT)",
-                        tag.c_str(), pid);
-            kill(-pid, SIGKILL);
-            waitpid(pid, &status, 0);
-        }
-    }
-    children_.clear();
+  }
+  children_.clear();
 }
 
 }  // namespace ros_wrapper

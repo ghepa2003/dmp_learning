@@ -16,21 +16,21 @@ namespace core {
 /// decreases in time when omega < 0); t_s is the instant of the measurement, on the same clock as
 /// every other time in this header.
 struct SatelliteSnapshot {
-    Eigen::Vector3d center = Eigen::Vector3d::Zero();
-    Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
-    double omega_rad_s = 0.0;
-    double theta_rad = 0.0;
-    double t_s = 0.0;
+  Eigen::Vector3d center = Eigen::Vector3d::Zero();
+  Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
+  double omega_rad_s = 0.0;
+  double theta_rad = 0.0;
+  double t_s = 0.0;
 };
 
 /// Phase at time t_s assuming constant omega: theta + omega*(t_s - snapshot.t_s), wrapped to (-pi, pi].
 double phaseAt(const SatelliteSnapshot& snapshot, double t_s);
 
 struct LaunchPlan {
-    double delay_s = 0.0;
-    double launch_time_s = 0.0;
-    double contact_time_s = 0.0;
-    double phase_at_contact_rad = 0.0;
+  double delay_s = 0.0;
+  double launch_time_s = 0.0;
+  double contact_time_s = 0.0;
+  double phase_at_contact_rad = 0.0;
 };
 
 /// Plans the launch so that contact happens at phase theta_star: theta_now = phaseAt(at_launch,

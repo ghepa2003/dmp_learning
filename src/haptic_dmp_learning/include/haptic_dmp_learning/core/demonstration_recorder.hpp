@@ -16,24 +16,24 @@ namespace core {
  * objects is passed to DMP::learnFromDemonstration() and QuaternionDMP::learnFromDemonstration().
  */
 class DemonstrationRecorder {
-public:
-    /// @brief Appends a new timestamped pose sample to the demonstration trajectory.
-    void addSample(const Sample& s);
+ public:
+  /// @brief Appends a new timestamped pose sample to the demonstration trajectory.
+  void addSample(const Sample& s);
 
-    /// @brief Resets the recorder buffer, removing all collected samples.
-    void clear();
+  /// @brief Resets the recorder buffer, removing all collected samples.
+  void clear();
 
-    /// @brief Returns a const reference to the recorded sample trajectory.
-    const std::vector<Sample>& samples() const;
+  /// @brief Returns a const reference to the recorded sample trajectory.
+  const std::vector<Sample>& samples() const;
 
-    /// @brief Checks if the buffer contains no samples.
-    bool empty() const;
+  /// @brief Checks if the buffer contains no samples.
+  bool empty() const;
 
-    /// @brief Returns the total number of recorded samples in the buffer.
-    size_t size() const;
+  /// @brief Returns the total number of recorded samples in the buffer.
+  size_t size() const;
 
-private:
-    std::vector<Sample> samples_;
+ private:
+  std::vector<Sample> samples_;
 };
 
 }  // namespace core

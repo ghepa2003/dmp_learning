@@ -35,7 +35,7 @@ inline constexpr const char* kSkipInitialAlignmentParamName = "skip_initial_alig
 /// anchor prodmp_.setInitialConditions(), just repackaged as the flat double[3] the parameter
 /// expects.
 inline std::vector<double> toAlignmentOverrideValue(const Eigen::Vector3d& ee_now) {
-    return {ee_now.x(), ee_now.y(), ee_now.z()};
+  return {ee_now.x(), ee_now.y(), ee_now.z()};
 }
 
 /// True iff `value` is a value the controller would actually apply as an override (exactly 3
@@ -45,11 +45,11 @@ inline std::vector<double> toAlignmentOverrideValue(const Eigen::Vector3d& ee_no
 /// NaN, but silently forwarding a bogus value that the controller would treat as "not set" would
 /// defeat this whole fix without any error - better to fail loud here.
 inline bool isValidAlignmentOverrideValue(const std::vector<double>& value) {
-    if (value.size() != 3) return false;
-    for (double v : value) {
-        if (std::isnan(v)) return false;
-    }
-    return true;
+  if (value.size() != 3) return false;
+  for (double v : value) {
+    if (std::isnan(v)) return false;
+  }
+  return true;
 }
 
 }  // namespace controller_param_sync

@@ -14,42 +14,42 @@ using namespace haptic_dmp_learning::core;
  * The final position at t = tau must converge to within 0.02 m of the target attractor goal.
  */
 TEST(DMPCoreTest, ConvergenceToDemonstratedGoal) {
-    const int N = 100;
-    const double dt = 0.02;
-    const double duration = (N - 1) * dt;
+  const int N = 100;
+  const double dt = 0.02;
+  const double duration = (N - 1) * dt;
 
-    Eigen::Vector3d p_start(0.0, 0.0, 0.0);
-    Eigen::Vector3d p_goal(0.3, -0.2, 0.4);
+  Eigen::Vector3d p_start(0.0, 0.0, 0.0);
+  Eigen::Vector3d p_goal(0.3, -0.2, 0.4);
 
-    std::vector<Sample> demo(N);
-    for (int i = 0; i < N; ++i) {
-        double s = static_cast<double>(i) / (N - 1);
-        // Smooth 5th-order minimum-jerk profile: s^3 * (10 - 15s + 6s^2)
-        double poly = s * s * s * (10.0 - 15.0 * s + 6.0 * s * s);
-        demo[i].t = i * dt;
-        demo[i].position = p_start + poly * (p_goal - p_start);
-        demo[i].orientation = Eigen::Quaterniond::Identity();
-    }
+  std::vector<Sample> demo(N);
+  for (int i = 0; i < N; ++i) {
+    double s = static_cast<double>(i) / (N - 1);
+    // Smooth 5th-order minimum-jerk profile: s^3 * (10 - 15s + 6s^2)
+    double poly = s * s * s * (10.0 - 15.0 * s + 6.0 * s * s);
+    demo[i].t = i * dt;
+    demo[i].position = p_start + poly * (p_goal - p_start);
+    demo[i].orientation = Eigen::Quaterniond::Identity();
+  }
 
-    DMP dmp(25, 1.0, 25.0, 6.25, false);
-    dmp.learnFromDemonstration(demo);
+  DMP dmp(25, 1.0, 25.0, 6.25, false);
+  dmp.learnFromDemonstration(demo);
 
-    EXPECT_TRUE(dmp.isLearned());
-    EXPECT_NEAR(dmp.tau(), duration, 1e-4);
+  EXPECT_TRUE(dmp.isLearned());
+  EXPECT_NEAR(dmp.tau(), duration, 1e-4);
 
-    dmp.reset();
-    Eigen::Vector3d pos = dmp.position();
-    EXPECT_NEAR(pos.x(), p_start.x(), 1e-3);
-    EXPECT_NEAR(pos.y(), p_start.y(), 1e-3);
-    EXPECT_NEAR(pos.z(), p_start.z(), 1e-3);
+  dmp.reset();
+  Eigen::Vector3d pos = dmp.position();
+  EXPECT_NEAR(pos.x(), p_start.x(), 1e-3);
+  EXPECT_NEAR(pos.y(), p_start.y(), 1e-3);
+  EXPECT_NEAR(pos.z(), p_start.z(), 1e-3);
 
-    for (int i = 0; i < N - 1; ++i) {
-        pos = dmp.step(dt);
-    }
+  for (int i = 0; i < N - 1; ++i) {
+    pos = dmp.step(dt);
+  }
 
-    EXPECT_NEAR(pos.x(), p_goal.x(), 0.02);
-    EXPECT_NEAR(pos.y(), p_goal.y(), 0.02);
-    EXPECT_NEAR(pos.z(), p_goal.z(), 0.02);
+  EXPECT_NEAR(pos.x(), p_goal.x(), 0.02);
+  EXPECT_NEAR(pos.y(), p_goal.y(), 0.02);
+  EXPECT_NEAR(pos.z(), p_goal.z(), 0.02);
 }
 
 /**
@@ -59,35 +59,35 @@ TEST(DMPCoreTest, ConvergenceToDemonstratedGoal) {
  * The DMP dynamic system must adapt its spatial scaling and converge to the new target goal.
  */
 TEST(DMPCoreTest, GoalGeneralization) {
-    const int N = 100;
-    const double dt = 0.02;
+  const int N = 100;
+  const double dt = 0.02;
 
-    Eigen::Vector3d p_start(0.0, 0.0, 0.0);
-    Eigen::Vector3d p_goal_demo(0.3, 0.0, 0.3);
-    Eigen::Vector3d p_goal_new(0.5, 0.2, 0.1);
+  Eigen::Vector3d p_start(0.0, 0.0, 0.0);
+  Eigen::Vector3d p_goal_demo(0.3, 0.0, 0.3);
+  Eigen::Vector3d p_goal_new(0.5, 0.2, 0.1);
 
-    std::vector<Sample> demo(N);
-    for (int i = 0; i < N; ++i) {
-        double s = static_cast<double>(i) / (N - 1);
-        demo[i].t = i * dt;
-        demo[i].position = p_start + s * (p_goal_demo - p_start);
-        demo[i].orientation = Eigen::Quaterniond::Identity();
-    }
+  std::vector<Sample> demo(N);
+  for (int i = 0; i < N; ++i) {
+    double s = static_cast<double>(i) / (N - 1);
+    demo[i].t = i * dt;
+    demo[i].position = p_start + s * (p_goal_demo - p_start);
+    demo[i].orientation = Eigen::Quaterniond::Identity();
+  }
 
-    DMP dmp(25);
-    dmp.learnFromDemonstration(demo);
+  DMP dmp(25);
+  dmp.learnFromDemonstration(demo);
 
-    dmp.reset();
-    dmp.setGoal(p_goal_new);
+  dmp.reset();
+  dmp.setGoal(p_goal_new);
 
-    Eigen::Vector3d pos = dmp.position();
-    for (int i = 0; i < N - 1; ++i) {
-        pos = dmp.step(dt);
-    }
+  Eigen::Vector3d pos = dmp.position();
+  for (int i = 0; i < N - 1; ++i) {
+    pos = dmp.step(dt);
+  }
 
-    EXPECT_NEAR(pos.x(), p_goal_new.x(), 0.03);
-    EXPECT_NEAR(pos.y(), p_goal_new.y(), 0.03);
-    EXPECT_NEAR(pos.z(), p_goal_new.z(), 0.03);
+  EXPECT_NEAR(pos.x(), p_goal_new.x(), 0.03);
+  EXPECT_NEAR(pos.y(), p_goal_new.y(), 0.03);
+  EXPECT_NEAR(pos.z(), p_goal_new.z(), 0.03);
 }
 
 /**
@@ -97,24 +97,24 @@ TEST(DMPCoreTest, GoalGeneralization) {
  * that movingAverageSmooth suppresses the variance without introducing phase delay.
  */
 TEST(DMPCoreTest, MovingAverageFilterSmoothing) {
-    std::vector<Eigen::Vector3d> signal;
-    std::vector<double> t;
-    const int N = 50;
-    const double dt = 0.01;
+  std::vector<Eigen::Vector3d> signal;
+  std::vector<double> t;
+  const int N = 50;
+  const double dt = 0.01;
 
-    for (int i = 0; i < N; ++i) {
-        t.push_back(i * dt);
-        double noise = (i % 2 == 0) ? 0.1 : -0.1;
-        signal.push_back(Eigen::Vector3d(1.0 + noise, 2.0 + noise, 3.0 + noise));
-    }
+  for (int i = 0; i < N; ++i) {
+    t.push_back(i * dt);
+    double noise = (i % 2 == 0) ? 0.1 : -0.1;
+    signal.push_back(Eigen::Vector3d(1.0 + noise, 2.0 + noise, 3.0 + noise));
+  }
 
-    auto filtered = filter_utils::movingAverageSmooth(signal, t, 0.05);
+  auto filtered = filter_utils::movingAverageSmooth(signal, t, 0.05);
 
-    EXPECT_EQ(filtered.size(), signal.size());
-    // Middle samples should be very close to nominal (1.0, 2.0, 3.0)
-    EXPECT_NEAR(filtered[25].x(), 1.0, 0.05);
-    EXPECT_NEAR(filtered[25].y(), 2.0, 0.05);
-    EXPECT_NEAR(filtered[25].z(), 3.0, 0.05);
+  EXPECT_EQ(filtered.size(), signal.size());
+  // Middle samples should be very close to nominal (1.0, 2.0, 3.0)
+  EXPECT_NEAR(filtered[25].x(), 1.0, 0.05);
+  EXPECT_NEAR(filtered[25].y(), 2.0, 0.05);
+  EXPECT_NEAR(filtered[25].z(), 3.0, 0.05);
 }
 
 /**
@@ -126,47 +126,47 @@ TEST(DMPCoreTest, MovingAverageFilterSmoothing) {
  * the duplicates carry no new information, recover the clean fit exactly.
  */
 TEST(DMPCoreTest, DropsNonIncreasingTimestampSamples) {
-    const int N = 80;
-    const double dt = 0.02;
-    Eigen::Vector3d p_start(0.0, 0.0, 0.0);
-    Eigen::Vector3d p_goal(0.25, -0.1, 0.15);
+  const int N = 80;
+  const double dt = 0.02;
+  Eigen::Vector3d p_start(0.0, 0.0, 0.0);
+  Eigen::Vector3d p_goal(0.25, -0.1, 0.15);
 
-    std::vector<Sample> clean;
-    for (int i = 0; i < N; ++i) {
-        double s = static_cast<double>(i) / (N - 1);
-        double poly = s * s * s * (10.0 - 15.0 * s + 6.0 * s * s);
-        Sample smp;
-        smp.t = i * dt;
-        smp.position = p_start + poly * (p_goal - p_start);
-        smp.orientation = Eigen::Quaterniond::Identity();
-        clean.push_back(smp);
+  std::vector<Sample> clean;
+  for (int i = 0; i < N; ++i) {
+    double s = static_cast<double>(i) / (N - 1);
+    double poly = s * s * s * (10.0 - 15.0 * s + 6.0 * s * s);
+    Sample smp;
+    smp.t = i * dt;
+    smp.position = p_start + poly * (p_goal - p_start);
+    smp.orientation = Eigen::Quaterniond::Identity();
+    clean.push_back(smp);
+  }
+
+  // Same trajectory, but with exact duplicate-timestamp rows spliced in.
+  std::vector<Sample> with_dups;
+  const int inject_after[] = {12, 25, 40, 41, 63};
+  for (int i = 0; i < N; ++i) {
+    with_dups.push_back(clean[i]);
+    for (int idx : inject_after) {
+      if (i == idx) with_dups.push_back(clean[i]);  // dt = 0 vs previous
     }
+  }
+  ASSERT_EQ(with_dups.size(), clean.size() + 5);
 
-    // Same trajectory, but with exact duplicate-timestamp rows spliced in.
-    std::vector<Sample> with_dups;
-    const int inject_after[] = {12, 25, 40, 41, 63};
-    for (int i = 0; i < N; ++i) {
-        with_dups.push_back(clean[i]);
-        for (int idx : inject_after) {
-            if (i == idx) with_dups.push_back(clean[i]);  // dt = 0 vs previous
-        }
+  DMP clean_dmp(25, 1.0, 25.0, 6.25, false);
+  clean_dmp.learnFromDemonstration(clean);
+  EXPECT_EQ(clean_dmp.diagnostics().dropped_non_monotonic_samples, 0);
+
+  DMP dup_dmp(25, 1.0, 25.0, 6.25, false);
+  dup_dmp.learnFromDemonstration(with_dups);
+
+  EXPECT_EQ(dup_dmp.diagnostics().dropped_non_monotonic_samples, 5);
+  EXPECT_NEAR(dup_dmp.tau(), (N - 1) * dt, 1e-9);
+
+  for (int d = 0; d < 3; ++d) {
+    for (int i = 0; i < 25; ++i) {
+      EXPECT_NEAR(dup_dmp.weights()[d](i), clean_dmp.weights()[d](i), 1e-9)
+          << "weight mismatch at dim " << d << " basis " << i;
     }
-    ASSERT_EQ(with_dups.size(), clean.size() + 5);
-
-    DMP clean_dmp(25, 1.0, 25.0, 6.25, false);
-    clean_dmp.learnFromDemonstration(clean);
-    EXPECT_EQ(clean_dmp.diagnostics().dropped_non_monotonic_samples, 0);
-
-    DMP dup_dmp(25, 1.0, 25.0, 6.25, false);
-    dup_dmp.learnFromDemonstration(with_dups);
-
-    EXPECT_EQ(dup_dmp.diagnostics().dropped_non_monotonic_samples, 5);
-    EXPECT_NEAR(dup_dmp.tau(), (N - 1) * dt, 1e-9);
-
-    for (int d = 0; d < 3; ++d) {
-        for (int i = 0; i < 25; ++i) {
-            EXPECT_NEAR(dup_dmp.weights()[d](i), clean_dmp.weights()[d](i), 1e-9)
-                << "weight mismatch at dim " << d << " basis " << i;
-        }
-    }
+  }
 }

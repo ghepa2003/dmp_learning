@@ -25,21 +25,21 @@ namespace core {
 using franka_cartesian_control::core::RobotModel;
 
 struct IkParams {
-    double pos_tol_m = 1e-4;
-    double ori_tol_rad = 1e-3;
-    int max_iter = 300;
-    double damping = 0.05;         ///< DLS lambda of the primary (pose) task
-    double nullspace_gain = 1.0;   ///< nullspace pull toward q_ref (per iteration, step = 1)
-    double max_step_rad = 0.2;     ///< cap on max_j |dq_j| per iteration
+  double pos_tol_m = 1e-4;
+  double ori_tol_rad = 1e-3;
+  int max_iter = 300;
+  double damping = 0.05;        ///< DLS lambda of the primary (pose) task
+  double nullspace_gain = 1.0;  ///< nullspace pull toward q_ref (per iteration, step = 1)
+  double max_step_rad = 0.2;    ///< cap on max_j |dq_j| per iteration
 };
 
 struct IkResult {
-    bool converged = false;  ///< pose reached within tolerances AND limits_ok
-    RobotModel::JointVector q = RobotModel::JointVector::Zero();
-    double pos_err_m = 0.0;
-    double ori_err_rad = 0.0;
-    int iterations = 0;       ///< number of integration steps taken
-    bool limits_ok = false;   ///< final q inside [lower, upper] (guaranteed by per-step clamping)
+  bool converged = false;  ///< pose reached within tolerances AND limits_ok
+  RobotModel::JointVector q = RobotModel::JointVector::Zero();
+  double pos_err_m = 0.0;
+  double ori_err_rad = 0.0;
+  int iterations = 0;      ///< number of integration steps taken
+  bool limits_ok = false;  ///< final q inside [lower, upper] (guaranteed by per-step clamping)
 };
 
 /**
@@ -53,9 +53,9 @@ IkResult solvePoseIk(RobotModel& robot, const Eigen::Vector3d& position,
                      const RobotModel::JointVector& q_ref, const IkParams& params = IkParams());
 
 struct JointMargins {
-    RobotModel::JointVector margin_rad = RobotModel::JointVector::Zero();  ///< min(q - lo, hi - q) per joint
-    double min_margin_rad = 0.0;
-    int worst_joint = 0;  ///< 0-based index of the smallest margin
+  RobotModel::JointVector margin_rad = RobotModel::JointVector::Zero();  ///< min(q - lo, hi - q) per joint
+  double min_margin_rad = 0.0;
+  int worst_joint = 0;  ///< 0-based index of the smallest margin
 };
 
 JointMargins jointMargins(const RobotModel& robot, const RobotModel::JointVector& q);
@@ -64,9 +64,9 @@ JointMargins jointMargins(const RobotModel& robot, const RobotModel::JointVector
 double wTransAt(RobotModel& robot, const RobotModel::JointVector& q);
 
 struct Se3Distance {
-    double d = 0.0;
-    double pos_m = 0.0;
-    double ori_rad = 0.0;  ///< geodesic angle in [0, pi], invariant to q / -q
+  double d = 0.0;
+  double pos_m = 0.0;
+  double ori_rad = 0.0;  ///< geodesic angle in [0, pi], invariant to q / -q
 };
 
 /// d = sqrt(pos^2 / length_scale^2 + ori^2 / angle_scale^2). Scales must be finite and > 0.
@@ -75,30 +75,30 @@ Se3Distance se3Distance(const Eigen::Vector3d& p1, const Eigen::Quaterniond& q1,
                         double length_scale_m, double angle_scale_rad);
 
 struct DemoReference {
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
-    double w_trans_demo = 0.0;
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+  double w_trans_demo = 0.0;
 };
 
 /// FK of the end-effector frame plus w_trans at the demo's final joints.
 DemoReference demoReferenceFromEndJoints(RobotModel& robot, const RobotModel::JointVector& end_joints_rad);
 
 struct PoseEvaluation {
-    haptic_dmp_learning::core::GraspPointId k = haptic_dmp_learning::core::GraspPointId::kP0;
-    double theta_rad = 0.0;
-    double psi_rad = 0.0;     ///< deliberate roll about the local z_tcp (0 for evaluateGraspPose)
-    haptic_dmp_learning::core::GraspTargetPose pose;  ///< nominal pose from CubeSatelliteModel::graspPoseAt
-    bool wrist_flip = false;  ///< the chosen branch is q_nominal * Rz(pi) (inner/outer finger swapped)
-    IkResult ik;
-    double w_trans = 0.0;     ///< at ik.q
-    double w_hat = 0.0;       ///< w_trans / demo.w_trans_demo
-    JointMargins margins;     ///< at ik.q
-    Se3Distance dist_to_demo; ///< target pose of the CHOSEN branch vs the demo end pose
-    bool feasible_basic = false;  ///< ik.converged && ik.limits_ok (no w_hat / margin thresholds here)
-    /// Geodesic angle [rad] between demo.orientation (FK(q_start) in planGraspAndLaunchS1) and the target orientation of
-    /// branch 0 / 1, independent of IK convergence and of force_flip (both are always filled). The entry of the chosen
-    /// branch equals dist_to_demo.ori_rad bit for bit.
-    double branch_rot_rad[2] = {0.0, 0.0};
+  haptic_dmp_learning::core::GraspPointId k = haptic_dmp_learning::core::GraspPointId::kP0;
+  double theta_rad = 0.0;
+  double psi_rad = 0.0;                             ///< deliberate roll about the local z_tcp (0 for evaluateGraspPose)
+  haptic_dmp_learning::core::GraspTargetPose pose;  ///< nominal pose from CubeSatelliteModel::graspPoseAt
+  bool wrist_flip = false;                          ///< the chosen branch is q_nominal * Rz(pi) (inner/outer finger swapped)
+  IkResult ik;
+  double w_trans = 0.0;         ///< at ik.q
+  double w_hat = 0.0;           ///< w_trans / demo.w_trans_demo
+  JointMargins margins;         ///< at ik.q
+  Se3Distance dist_to_demo;     ///< target pose of the CHOSEN branch vs the demo end pose
+  bool feasible_basic = false;  ///< ik.converged && ik.limits_ok (no w_hat / margin thresholds here)
+  /// Geodesic angle [rad] between demo.orientation (FK(q_start) in planGraspAndLaunchS1) and the target orientation of
+  /// branch 0 / 1, independent of IK convergence and of force_flip (both are always filled). The entry of the chosen
+  /// branch equals dist_to_demo.ori_rad bit for bit.
+  double branch_rot_rad[2] = {0.0, 0.0};
 };
 
 /// Orientation of the CHOSEN branch of @p eval: applyRoll(q_nominal, psi + (wrist_flip ? pi : 0)). Rolls about the same
@@ -111,7 +111,8 @@ Eigen::Quaterniond goalOrientation(const PoseEvaluation& eval);
 ///            smaller ||q - q_start||.
 ///  kRotation: converged first; if both converged, the branch with the smaller geodesic angle between its target
 ///            orientation and demo.orientation; angles within 1 mrad: the kMargin rule. If not both converged, as kMargin.
-enum class BranchRule { kMargin, kRotation };
+enum class BranchRule { kMargin,
+                        kRotation };
 
 /// "margin" -> kMargin, "rotation" -> kRotation (exact, case-sensitive). @throws std::invalid_argument otherwise
 /// (no fallback to the default).
@@ -120,22 +121,22 @@ BranchRule parseBranchRule(const std::string& name);
 /// Per-branch diagnostics of evaluateGraspPoseDetailed (branch 0 = nominal orientation, 1 = nominal * Rz(pi)).
 /// The manipulability fields are filled only when compute_extra is true.
 struct BranchDetail {
-    bool converged = false;
-    bool limits_ok = false;
-    RobotModel::JointVector q = RobotModel::JointVector::Zero();
-    double pos_err_m = 0.0;
-    double ori_err_rad = 0.0;
-    int iterations = 0;
-    double min_margin_rad = 0.0;
-    int worst_joint = 0;
-    Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();  ///< the target orientation of this branch
-    double w_trans = 0.0, w_rot = 0.0, w_full = 0.0, smin_trans = 0.0, smin_rot = 0.0;
+  bool converged = false;
+  bool limits_ok = false;
+  RobotModel::JointVector q = RobotModel::JointVector::Zero();
+  double pos_err_m = 0.0;
+  double ori_err_rad = 0.0;
+  int iterations = 0;
+  double min_margin_rad = 0.0;
+  int worst_joint = 0;
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();  ///< the target orientation of this branch
+  double w_trans = 0.0, w_rot = 0.0, w_full = 0.0, smin_trans = 0.0, smin_rot = 0.0;
 };
 
 struct PoseEvaluationDetail {
-    PoseEvaluation eval;       ///< what evaluateGraspPose returns (chosen branch)
-    BranchDetail branch[2];
-    int selected = 0;          ///< index of the chosen branch (== eval.wrist_flip)
+  PoseEvaluation eval;  ///< what evaluateGraspPose returns (chosen branch)
+  BranchDetail branch[2];
+  int selected = 0;  ///< index of the chosen branch (== eval.wrist_flip)
 };
 
 /**

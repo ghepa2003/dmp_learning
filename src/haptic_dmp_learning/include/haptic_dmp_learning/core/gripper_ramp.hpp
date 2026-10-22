@@ -42,14 +42,14 @@ inline double interpolateGripperPosition(double elapsed_since_start,
                                          double ramp_duration_sec,
                                          double open_position,
                                          double closed_position) {
-    if (elapsed_since_start <= 0.0) {
-        return open_position;
-    }
-    if (!(ramp_duration_sec > 0.0) || elapsed_since_start >= ramp_duration_sec) {
-        return closed_position;
-    }
-    const double frac = elapsed_since_start / ramp_duration_sec;  // in (0, 1)
-    return open_position + frac * (closed_position - open_position);
+  if (elapsed_since_start <= 0.0) {
+    return open_position;
+  }
+  if (!(ramp_duration_sec > 0.0) || elapsed_since_start >= ramp_duration_sec) {
+    return closed_position;
+  }
+  const double frac = elapsed_since_start / ramp_duration_sec;  // in (0, 1)
+  return open_position + frac * (closed_position - open_position);
 }
 
 /**
@@ -61,12 +61,12 @@ inline double interpolateGripperPosition(double elapsed_since_start,
  */
 inline double gripperCommand(double elapsed_since_start, double ramp_duration_sec,
                              double open_position, double closed_position, double squeeze_position) {
-    if (elapsed_since_start > 0.0 &&
-        (!(ramp_duration_sec > 0.0) || elapsed_since_start >= ramp_duration_sec)) {
-        return squeeze_position;
-    }
-    return interpolateGripperPosition(elapsed_since_start, ramp_duration_sec, open_position,
-                                      closed_position);
+  if (elapsed_since_start > 0.0 &&
+      (!(ramp_duration_sec > 0.0) || elapsed_since_start >= ramp_duration_sec)) {
+    return squeeze_position;
+  }
+  return interpolateGripperPosition(elapsed_since_start, ramp_duration_sec, open_position,
+                                    closed_position);
 }
 
 /**
@@ -78,7 +78,7 @@ inline double gripperCommand(double elapsed_since_start, double ramp_duration_se
  */
 inline bool defaultGripperControl(const std::string& satellite_rotation_mode,
                                   const std::string& grasp_goal_source) {
-    return satellite_rotation_mode == "continuous" && grasp_goal_source == "grasp_command";
+  return satellite_rotation_mode == "continuous" && grasp_goal_source == "grasp_command";
 }
 
 }  // namespace gripper_ramp

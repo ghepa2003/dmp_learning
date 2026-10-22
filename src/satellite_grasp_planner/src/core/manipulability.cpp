@@ -9,10 +9,10 @@ Manipulability::Manipulability(
 
 double Manipulability::wTrans(
     const franka_cartesian_control::core::RobotModel::JointVector& q) const {
-    const franka_cartesian_control::core::RobotModel::JointVector dq_zero =
-        franka_cartesian_control::core::RobotModel::JointVector::Zero();
-    robot_model_->update(q, dq_zero);
-    return wTransFromJacobian(robot_model_->jacobian().topRows<3>());
+  const franka_cartesian_control::core::RobotModel::JointVector dq_zero =
+      franka_cartesian_control::core::RobotModel::JointVector::Zero();
+  robot_model_->update(q, dq_zero);
+  return wTransFromJacobian(robot_model_->jacobian().topRows<3>());
 }
 
 }  // namespace core

@@ -27,28 +27,28 @@ using satellite_grasp_planner::test_goal_data::readCsv;
 // Test 1: C++ wTrans() matches the already-validated Python analysis
 // ---------------------------------------------------------------------
 TEST(ManipulabilityTest, MatchesValidatedPythonValuesForAllFiveGoals) {
-    auto robot_model = loadPandaRobotModel();
-    ASSERT_NE(robot_model, nullptr);
-    Manipulability manip(robot_model);
+  auto robot_model = loadPandaRobotModel();
+  ASSERT_NE(robot_model, nullptr);
+  Manipulability manip(robot_model);
 
-    const std::vector<std::string> goal_runs = {
-        "reach_task_goal_1_prodmp", "reach_task_goal_2_prodmp", "reach_task_goal_3_prodmp",
-        "reach_task_goal_4_prodmp", "reach_task_goal_5_prodmp"};
+  const std::vector<std::string> goal_runs = {
+      "reach_task_goal_1_prodmp", "reach_task_goal_2_prodmp", "reach_task_goal_3_prodmp",
+      "reach_task_goal_4_prodmp", "reach_task_goal_5_prodmp"};
 
-    for (const auto& run : goal_runs) {
-        auto rows = readCsv(dataDir() + "/manipulability_" + run + ".csv");
-        ASSERT_FALSE(rows.empty()) << "run=" << run;
+  for (const auto& run : goal_runs) {
+    auto rows = readCsv(dataDir() + "/manipulability_" + run + ".csv");
+    ASSERT_FALSE(rows.empty()) << "run=" << run;
 
-        // Last row = steady-state / pre-clamp configuration, the same one
-        // compute_manipulability_goals.py reports as "pre-clamp" stats.
-        const auto& last_row = rows.back();
-        RobotModel::JointVector q = jointVectorFromRow(last_row);
-        double w_trans_python = last_row.at("w_trans");
+    // Last row = steady-state / pre-clamp configuration, the same one
+    // compute_manipulability_goals.py reports as "pre-clamp" stats.
+    const auto& last_row = rows.back();
+    RobotModel::JointVector q = jointVectorFromRow(last_row);
+    double w_trans_python = last_row.at("w_trans");
 
-        double w_trans_cpp = manip.wTrans(q);
+    double w_trans_cpp = manip.wTrans(q);
 
-        EXPECT_NEAR(w_trans_cpp, w_trans_python, 1e-6)
-            << "run=" << run << ": C++ wTrans() must match the validated Python "
-            << "compute_manipulability_goals.py value bit-for-bit (same URDF/frame/formula).";
-    }
+    EXPECT_NEAR(w_trans_cpp, w_trans_python, 1e-6)
+        << "run=" << run << ": C++ wTrans() must match the validated Python "
+        << "compute_manipulability_goals.py value bit-for-bit (same URDF/frame/formula).";
+  }
 }

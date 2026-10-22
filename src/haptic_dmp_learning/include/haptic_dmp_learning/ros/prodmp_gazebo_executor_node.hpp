@@ -71,354 +71,358 @@ namespace ros_wrapper {
  * this is active.
  */
 class ProDmpGazeboExecutorNode : public rclcpp::Node {
-public:
-    ProDmpGazeboExecutorNode();
-    /// Prints the axis-deviation summary (the status is erased 20 s after at_end).
-    ~ProDmpGazeboExecutorNode() override;
+ public:
+  ProDmpGazeboExecutorNode();
+  /// Prints the axis-deviation summary (the status is erased 20 s after at_end).
+  ~ProDmpGazeboExecutorNode() override;
 
-    /// True while the hold target (see startHold()) is the last target the controller received, i.e. it
-    /// was published at least once and the rollout has not started: any failure in this window leaves the
-    /// arm regulated to it (the controller has no watchdog). Used by main() for the same FATAL sentence.
-    bool holdRemainsInController() const { return hold_published_count_ > 0 && !hold_superseded_; }
+  /// True while the hold target (see startHold()) is the last target the controller received, i.e. it
+  /// was published at least once and the rollout has not started: any failure in this window leaves the
+  /// arm regulated to it (the controller has no watchdog). Used by main() for the same FATAL sentence.
+  bool holdRemainsInController() const { return hold_published_count_ > 0 && !hold_superseded_; }
 
-private:
-    void startTimer();
-    void stepCallback();
-    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+ private:
+  void startTimer();
+  void stepCallback();
+  void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
-    // ---- satellite_rotation_mode="continuous" (see class docs) ----
-    /// kWaitingCommand (grasp_goal_source="grasp_command" only): waiting for the GraspCommand, appended last
-    /// so the values of the other states are unchanged.
-    enum class ContinuousState { kIdle, kWaiting, kRunning, kFinished, kWaitingCommand };
-    /// Constructor part: reads/validates parameters (throws on any error), creates the
-    /// satellite odometry subscription (measured) and the status publisher.
-    void setupContinuous();
-    /// Called from startTimer() once ee_plan is known: logs the plan and starts waiting.
-    void beginContinuous(const Eigen::Vector3d& ee_plan);
-    void onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg);
-    // ---- grasp_goal_source="grasp_command" (unused when the source is "parameters") ----
-    /// Enters kWaitingCommand: syncs the controller (identity alignment) BEFORE waiting, then consumes an
-    /// already-received message, if any.
-    void beginWaitingForCommand(const Eigen::Vector3d& ee_plan);
-    /// One-shot: the first message wins, later ones only log a WARN. Stored until kWaitingCommand is entered.
-    void onGraspCommand(const satellite_grasp_msgs::msg::GraspCommand::SharedPtr msg);
-    /// Validates the message (core::satellite_intercept::validateGraspCommand), then arms the trigger and
-    /// moves to kWaiting. Throws (after a FATAL log) on any rejection.
-    void acceptGraspCommand(const satellite_grasp_msgs::msg::GraspCommand& msg);
-    void onModelPhaseTick();
-    void onPhaseSample(double stamp_s, double theta_rad, const Eigen::Matrix3d& R_rel);
-    void startContinuousRollout(double theta_at_trigger_rad);
-    void finishContinuousRollout(const Eigen::Vector3d& commanded_after);
-    void publishContinuousStatus();
+  // ---- satellite_rotation_mode="continuous" (see class docs) ----
+  /// kWaitingCommand (grasp_goal_source="grasp_command" only): waiting for the GraspCommand, appended last
+  /// so the values of the other states are unchanged.
+  enum class ContinuousState { kIdle,
+                               kWaiting,
+                               kRunning,
+                               kFinished,
+                               kWaitingCommand };
+  /// Constructor part: reads/validates parameters (throws on any error), creates the
+  /// satellite odometry subscription (measured) and the status publisher.
+  void setupContinuous();
+  /// Called from startTimer() once ee_plan is known: logs the plan and starts waiting.
+  void beginContinuous(const Eigen::Vector3d& ee_plan);
+  void onSatelliteOdom(const nav_msgs::msg::Odometry::SharedPtr msg);
+  // ---- grasp_goal_source="grasp_command" (unused when the source is "parameters") ----
+  /// Enters kWaitingCommand: syncs the controller (identity alignment) BEFORE waiting, then consumes an
+  /// already-received message, if any.
+  void beginWaitingForCommand(const Eigen::Vector3d& ee_plan);
+  /// One-shot: the first message wins, later ones only log a WARN. Stored until kWaitingCommand is entered.
+  void onGraspCommand(const satellite_grasp_msgs::msg::GraspCommand::SharedPtr msg);
+  /// Validates the message (core::satellite_intercept::validateGraspCommand), then arms the trigger and
+  /// moves to kWaiting. Throws (after a FATAL log) on any rejection.
+  void acceptGraspCommand(const satellite_grasp_msgs::msg::GraspCommand& msg);
+  void onModelPhaseTick();
+  void onPhaseSample(double stamp_s, double theta_rad, const Eigen::Matrix3d& R_rel);
+  void startContinuousRollout(double theta_at_trigger_rad);
+  void finishContinuousRollout(const Eigen::Vector3d& commanded_after);
+  void publishContinuousStatus();
 
-    // ---- continuous-mode gripper (gripper_control) ----
-    /// Publishes gripper_open_position_ (step) at 10 Hz until AT_END / the CSV ramp starts.
-    void gripperOpenTick();
-    /// AT_END: starts the close ramp (core::gripper_ramp), 20 ms ticks, unless the CSV path owns the close.
-    void startGripperClose();
-    void gripperCloseTick();
-    /// AT_END: republishes @p final_pose at 10 Hz for post_grasp_hold_s, no other motion.
-    void startPostGraspHold(const geometry_msgs::msg::PoseStamped& final_pose);
-    void postGraspHoldTick();
-    /// Rotation of the satellite since AT_END [rad]: measured phase if a sample is fresh, else omega*(t - t_at_end).
-    double followDtheta(double now_s) const;
-    /// Single non-blocking TF lookup world_frame_ -> ee_frame_; false if unavailable.
-    bool lookupEeNonBlocking(Eigen::Vector3d& ee);
-    /// Same lookup, position AND orientation (TF quaternion, x y z w as stored by tf2).
-    bool lookupEePoseNonBlocking(Eigen::Vector3d& position, Eigen::Quaterniond& orientation);
+  // ---- continuous-mode gripper (gripper_control) ----
+  /// Publishes gripper_open_position_ (step) at 10 Hz until AT_END / the CSV ramp starts.
+  void gripperOpenTick();
+  /// AT_END: starts the close ramp (core::gripper_ramp), 20 ms ticks, unless the CSV path owns the close.
+  void startGripperClose();
+  void gripperCloseTick();
+  /// AT_END: republishes @p final_pose at 10 Hz for post_grasp_hold_s, no other motion.
+  void startPostGraspHold(const geometry_msgs::msg::PoseStamped& final_pose);
+  void postGraspHoldTick();
+  /// Rotation of the satellite since AT_END [rad]: measured phase if a sample is fresh, else omega*(t - t_at_end).
+  double followDtheta(double now_s) const;
+  /// Single non-blocking TF lookup world_frame_ -> ee_frame_; false if unavailable.
+  bool lookupEeNonBlocking(Eigen::Vector3d& ee);
+  /// Same lookup, position AND orientation (TF quaternion, x y z w as stored by tf2).
+  bool lookupEePoseNonBlocking(Eigen::Vector3d& position, Eigen::Quaterniond& orientation);
 
-    // ---- hold target (grasp_goal_source="grasp_command" only, see ros/hold_target.hpp) ----
-    /// Reads the EE pose from TF ONCE and starts republishing it on target_pose_topic at hold_target_rate_hz,
-    /// so the controller (zero torque until its first target, no watchdog afterwards) keeps the TCP still
-    /// while the node waits for the GraspCommand and for the trigger. Must be called AFTER the controller's
-    /// skip_initial_alignment=true is in place. Throws (FATAL) if the TF pose is unavailable or invalid.
-    void startHold();
-    void publishHold();
-    /// Idempotent: cancels the hold timer. Does NOT change holdRemainsInController() (the controller keeps
-    /// the last hold message regardless of this node's timer).
-    void stopHold(const char* reason);
-    /// Called when the rollout takes over: the hold is no longer the controller's last target.
-    void supersedeHold();
-    /// Logs the angle between the orientation TF reports now and @p commanded (log only, never throws).
-    /// WARN above 1 deg. @p when names the moment (acceptance, trigger, at_end).
-    void logOrientationVsCommanded(const char* when, const Eigen::Quaterniond& commanded);
-    /// grasp_orientation_mode == "planner_goal" (grasp_command mode only).
-    bool orientationPlannerGoal() const {
-        return grasp_command_mode_ && orientation_mode_ == core::grasp_orientation::Mode::kPlannerGoal;
-    }
-    /// message + the "hold target remains active in the controller (no watchdog)" sentence when it applies.
-    std::string withHoldNote(const std::string& message) const {
-        return hold_target::withHoldNote(message, holdRemainsInController());
-    }
+  // ---- hold target (grasp_goal_source="grasp_command" only, see ros/hold_target.hpp) ----
+  /// Reads the EE pose from TF ONCE and starts republishing it on target_pose_topic at hold_target_rate_hz,
+  /// so the controller (zero torque until its first target, no watchdog afterwards) keeps the TCP still
+  /// while the node waits for the GraspCommand and for the trigger. Must be called AFTER the controller's
+  /// skip_initial_alignment=true is in place. Throws (FATAL) if the TF pose is unavailable or invalid.
+  void startHold();
+  void publishHold();
+  /// Idempotent: cancels the hold timer. Does NOT change holdRemainsInController() (the controller keeps
+  /// the last hold message regardless of this node's timer).
+  void stopHold(const char* reason);
+  /// Called when the rollout takes over: the hold is no longer the controller's last target.
+  void supersedeHold();
+  /// Logs the angle between the orientation TF reports now and @p commanded (log only, never throws).
+  /// WARN above 1 deg. @p when names the moment (acceptance, trigger, at_end).
+  void logOrientationVsCommanded(const char* when, const Eigen::Quaterniond& commanded);
+  /// grasp_orientation_mode == "planner_goal" (grasp_command mode only).
+  bool orientationPlannerGoal() const {
+    return grasp_command_mode_ && orientation_mode_ == core::grasp_orientation::Mode::kPlannerGoal;
+  }
+  /// message + the "hold target remains active in the controller (no watchdog)" sentence when it applies.
+  std::string withHoldNote(const std::string& message) const {
+    return hold_target::withHoldNote(message, holdRemainsInController());
+  }
 
-    /// @brief Looks up world_frame_ -> ee_frame_ via TF, retrying every 0.1 s
-    /// against odom_wait_start_/target_odom_timeout_sec_ until it succeeds or
-    /// the shared timeout fires (fail-loud, throws). Factored out of
-    /// startTimer() so BOTH the live-target retarget branch and the satellite
-    /// rotation branch (which also needs a real EE anchor for
-    /// prodmp_.setInitialConditions(), regardless of where the goal itself
-    /// comes from) share one implementation instead of two copies.
-    /// @return true if ee_now was resolved; false if the caller should return
-    ///         and wait for the next 0.1 s re-poll (startTimer() reschedules
-    ///         itself before returning false - this function never re-arms
-    ///         the timer itself, to keep timer ownership in one place).
-    bool lookupEeNowWithRetry(Eigen::Vector3d& ee_now);
+  /// @brief Looks up world_frame_ -> ee_frame_ via TF, retrying every 0.1 s
+  /// against odom_wait_start_/target_odom_timeout_sec_ until it succeeds or
+  /// the shared timeout fires (fail-loud, throws). Factored out of
+  /// startTimer() so BOTH the live-target retarget branch and the satellite
+  /// rotation branch (which also needs a real EE anchor for
+  /// prodmp_.setInitialConditions(), regardless of where the goal itself
+  /// comes from) share one implementation instead of two copies.
+  /// @return true if ee_now was resolved; false if the caller should return
+  ///         and wait for the next 0.1 s re-poll (startTimer() reschedules
+  ///         itself before returning false - this function never re-arms
+  ///         the timer itself, to keep timer ownership in one place).
+  bool lookupEeNowWithRetry(Eigen::Vector3d& ee_now);
 
-    /// @brief Sets core::controller_param_sync::kInitialAlignmentPositionOverrideParamName on the
-    /// cartesian_impedance_controller node to `ee_now` (the SAME value used to anchor
-    /// prodmp_.setInitialConditions() at the call site), BEFORE step_timer_ starts publishing
-    /// /target_pose. Eliminates the FrameAligner race described in controller_param_sync.hpp.
-    /// Fail-loud (throws) if the controller cannot be reached or rejects the parameter within
-    /// controller_param_sync_timeout_sec_ - no silent fallback to the old racy behavior.
-    ///
-    /// Frozen/baseline mode ONLY for now: called from the 3 non-continuous branches of
-    /// startTimer() (satellite_rotation mode="frozen", target_odom_required_=false, and the
-    /// live-target retarget), all of which resolve a real ee_now via TF right before arming
-    /// step_timer_. The continuous branch (beginContinuous()/startContinuousRollout()) is NOT
-    /// wired up yet: its step_timer_ starts later, from a phase-crossing event during the wait
-    /// loop rather than at startup, and its "ee_now" (ee_start_, captured at the trigger, not at
-    /// beginContinuous()) is a different quantity than the ee_plan anchor used earlier - wiring
-    /// it in cleanly needs its own look at where exactly to call this, not a copy-paste of the
-    /// frozen call site. Left for a follow-up.
-    void syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now);
+  /// @brief Sets core::controller_param_sync::kInitialAlignmentPositionOverrideParamName on the
+  /// cartesian_impedance_controller node to `ee_now` (the SAME value used to anchor
+  /// prodmp_.setInitialConditions() at the call site), BEFORE step_timer_ starts publishing
+  /// /target_pose. Eliminates the FrameAligner race described in controller_param_sync.hpp.
+  /// Fail-loud (throws) if the controller cannot be reached or rejects the parameter within
+  /// controller_param_sync_timeout_sec_ - no silent fallback to the old racy behavior.
+  ///
+  /// Frozen/baseline mode ONLY for now: called from the 3 non-continuous branches of
+  /// startTimer() (satellite_rotation mode="frozen", target_odom_required_=false, and the
+  /// live-target retarget), all of which resolve a real ee_now via TF right before arming
+  /// step_timer_. The continuous branch (beginContinuous()/startContinuousRollout()) is NOT
+  /// wired up yet: its step_timer_ starts later, from a phase-crossing event during the wait
+  /// loop rather than at startup, and its "ee_now" (ee_start_, captured at the trigger, not at
+  /// beginContinuous()) is a different quantity than the ee_plan anchor used earlier - wiring
+  /// it in cleanly needs its own look at where exactly to call this, not a copy-paste of the
+  /// frozen call site. Left for a follow-up.
+  void syncControllerAlignmentOverride(const Eigen::Vector3d& ee_now);
 
-    /// @brief Sets core::controller_param_sync::kSkipInitialAlignmentParamName on the
-    /// cartesian_impedance_controller node, BEFORE step_timer_ starts publishing /target_pose.
-    /// Called TOGETHER with syncControllerAlignmentOverride() (same call sites, same client, same
-    /// fail-loud convention) from the satellite_rotation and target_odom_required branches only -
-    /// see those call sites in startTimer() for why: both already anchor init_pos_/goal in
-    /// absolute world coordinates via anchorAndRotate(), and world/fer_link0 are confirmed
-    /// coincident, so any FrameAligner offset there - INCLUDING the
-    /// initial_alignment_position_override-based one from syncControllerAlignmentOverride() - is
-    /// pure noise. The baseline/pure-replay branch (target_odom_required_=false) is deliberately
-    /// left untouched: alignment is still needed there.
-    void syncControllerSkipInitialAlignment(bool skip);
+  /// @brief Sets core::controller_param_sync::kSkipInitialAlignmentParamName on the
+  /// cartesian_impedance_controller node, BEFORE step_timer_ starts publishing /target_pose.
+  /// Called TOGETHER with syncControllerAlignmentOverride() (same call sites, same client, same
+  /// fail-loud convention) from the satellite_rotation and target_odom_required branches only -
+  /// see those call sites in startTimer() for why: both already anchor init_pos_/goal in
+  /// absolute world coordinates via anchorAndRotate(), and world/fer_link0 are confirmed
+  /// coincident, so any FrameAligner offset there - INCLUDING the
+  /// initial_alignment_position_override-based one from syncControllerAlignmentOverride() - is
+  /// pure noise. The baseline/pure-replay branch (target_odom_required_=false) is deliberately
+  /// left untouched: alignment is still needed there.
+  void syncControllerSkipInitialAlignment(bool skip);
 
-    /// @brief Lazily creates param_sync_helper_node_/controller_param_client_ if not already
-    /// present, shared by syncControllerAlignmentOverride() and
-    /// syncControllerSkipInitialAlignment() so both parameters go through the SAME client/helper
-    /// node instead of each reconnecting separately.
-    ///
-    /// @details Why a whole extra rclcpp::Node, not just rclcpp::SyncParametersClient(this, ...):
-    /// rclcpp::Node tracks, PER NODE (not per executor instance), whether it is currently
-    /// associated with an executor. By the time startTimer() runs, `this` is already added to the
-    /// process's main executor (rclcpp::spin(node) in main()). SyncParametersClient's blocking
-    /// calls (set_parameters_atomically(), wait_for_service() does NOT need this, but the actual
-    /// RPC does) internally do their OWN executor_->add_node(node_base_interface) /
-    /// spin_until_future_complete() / remove_node() around the wait - and that add_node() throws
-    /// "Node has already been added to an executor." the moment it's tried on `this`, REGARDLESS
-    /// of whether executor_ is a brand-new, otherwise-unused rclcpp::Executor instance (confirmed
-    /// against the actual rclcpp Humble build in
-    /// test/test_param_client_executor_regression.cpp - passing an explicit fresh executor to
-    /// SyncParametersClient does NOT sidestep this; the conflict is the NODE's state, not which
-    /// executor object is used). The only way to make a blocking parameter-client call from
-    /// inside a node that is already spinning itself is to route it through a genuinely different
-    /// node that was never added to any executor - hence param_sync_helper_node_, a small
-    /// dedicated rclcpp::Node used ONLY as the parameter client's node identity (never spun
-    /// directly; SyncParametersClient manages its own private executor around it). This is the
-    /// standard ROS 2 Humble workaround for "synchronous service/parameter call from within a
-    /// node's own callback" (the same reason e.g. MoveGroupInterface keeps a private internal
-    /// node for its own synchronous calls).
-    ///
-    /// Lifetime: created once, lazily, on first use, and intentionally never destroyed - it lives
-    /// for the rest of the process (a plain member, torn down implicitly when `this` is). That
-    /// means "prodmp_param_sync_helper" is visible in `ros2 node list` for the process's whole
-    /// lifetime after the first call, not just around the 2 blocking calls it's actually used for
-    /// - graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
-    /// in the process, never recreated). Acceptable given this node's actual deployment: a fresh
-    /// subprocess per rollout (see run_satellite_rotation_experiment.py), so the extra node dies
-    /// with the process and never accumulates across runs. Revisit if this node is ever
-    /// refactored into a long-lived, multi-rollout process.
-    void ensureControllerParamClient();
+  /// @brief Lazily creates param_sync_helper_node_/controller_param_client_ if not already
+  /// present, shared by syncControllerAlignmentOverride() and
+  /// syncControllerSkipInitialAlignment() so both parameters go through the SAME client/helper
+  /// node instead of each reconnecting separately.
+  ///
+  /// @details Why a whole extra rclcpp::Node, not just rclcpp::SyncParametersClient(this, ...):
+  /// rclcpp::Node tracks, PER NODE (not per executor instance), whether it is currently
+  /// associated with an executor. By the time startTimer() runs, `this` is already added to the
+  /// process's main executor (rclcpp::spin(node) in main()). SyncParametersClient's blocking
+  /// calls (set_parameters_atomically(), wait_for_service() does NOT need this, but the actual
+  /// RPC does) internally do their OWN executor_->add_node(node_base_interface) /
+  /// spin_until_future_complete() / remove_node() around the wait - and that add_node() throws
+  /// "Node has already been added to an executor." the moment it's tried on `this`, REGARDLESS
+  /// of whether executor_ is a brand-new, otherwise-unused rclcpp::Executor instance (confirmed
+  /// against the actual rclcpp Humble build in
+  /// test/test_param_client_executor_regression.cpp - passing an explicit fresh executor to
+  /// SyncParametersClient does NOT sidestep this; the conflict is the NODE's state, not which
+  /// executor object is used). The only way to make a blocking parameter-client call from
+  /// inside a node that is already spinning itself is to route it through a genuinely different
+  /// node that was never added to any executor - hence param_sync_helper_node_, a small
+  /// dedicated rclcpp::Node used ONLY as the parameter client's node identity (never spun
+  /// directly; SyncParametersClient manages its own private executor around it). This is the
+  /// standard ROS 2 Humble workaround for "synchronous service/parameter call from within a
+  /// node's own callback" (the same reason e.g. MoveGroupInterface keeps a private internal
+  /// node for its own synchronous calls).
+  ///
+  /// Lifetime: created once, lazily, on first use, and intentionally never destroyed - it lives
+  /// for the rest of the process (a plain member, torn down implicitly when `this` is). That
+  /// means "prodmp_param_sync_helper" is visible in `ros2 node list` for the process's whole
+  /// lifetime after the first call, not just around the 2 blocking calls it's actually used for
+  /// - graph noise, not a leak (RAII via shared_ptr; no accumulation - reused across ALL calls
+  /// in the process, never recreated). Acceptable given this node's actual deployment: a fresh
+  /// subprocess per rollout (see run_satellite_rotation_experiment.py), so the extra node dies
+  /// with the process and never accumulates across runs. Revisit if this node is ever
+  /// refactored into a long-lived, multi-rollout process.
+  void ensureControllerParamClient();
 
-    // ROS interfaces
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
-    // Velocity feedforward companion to pose_pub_: prodmp_.velocity() / qdmp_.omega()
-    // are native analytic state (see core::ProDMP::velocity(), core::QuaternionDMP::
-    // omega()), not a finite-difference reconstruction. Published in the SAME
-    // demo-local frame as pose_pub_ (no TF/offset applied here - the downstream
-    // CartesianVelocityController's FrameAligner rotates it into the robot base
-    // frame using the same offset it captures for the pose). Always published,
-    // regardless of whether any consumer has feedforward enabled.
-    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
-    std::string target_twist_topic_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr target_odom_sub_;
-    // TF (world -> EE) for the retarget in startTimer(); created only when
-    // target_odom_required_ is true.
-    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
-    // One-shot event: the replay gripper close ramp has finished (fingers at
-    // gripper_closed_position_). grasp_force_calibration_node captures force on this.
-    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
-    rclcpp::TimerBase::SharedPtr startup_timer_;
-    rclcpp::TimerBase::SharedPtr step_timer_;
-    // Hold target (grasp_command mode). hold_pose_ is set once by startHold() and never updated.
-    bool hold_enabled_ = false;                          ///< parameter hold_target_enabled
-    double hold_rate_hz_ = 10.0;                         ///< parameter hold_target_rate_hz
-    rclcpp::TimerBase::SharedPtr hold_timer_;
-    std::optional<hold_target::HoldPose> hold_pose_;
-    std::uint64_t hold_published_count_ = 0;
-    bool hold_superseded_ = false;                       ///< the rollout has taken over
+  // ROS interfaces
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  // Velocity feedforward companion to pose_pub_: prodmp_.velocity() / qdmp_.omega()
+  // are native analytic state (see core::ProDMP::velocity(), core::QuaternionDMP::
+  // omega()), not a finite-difference reconstruction. Published in the SAME
+  // demo-local frame as pose_pub_ (no TF/offset applied here - the downstream
+  // CartesianVelocityController's FrameAligner rotates it into the robot base
+  // frame using the same offset it captures for the pose). Always published,
+  // regardless of whether any consumer has feedforward enabled.
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+  std::string target_twist_topic_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_pub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr target_odom_sub_;
+  // TF (world -> EE) for the retarget in startTimer(); created only when
+  // target_odom_required_ is true.
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  // One-shot event: the replay gripper close ramp has finished (fingers at
+  // gripper_closed_position_). grasp_force_calibration_node captures force on this.
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_pub_;
+  rclcpp::TimerBase::SharedPtr startup_timer_;
+  rclcpp::TimerBase::SharedPtr step_timer_;
+  // Hold target (grasp_command mode). hold_pose_ is set once by startHold() and never updated.
+  bool hold_enabled_ = false;   ///< parameter hold_target_enabled
+  double hold_rate_hz_ = 10.0;  ///< parameter hold_target_rate_hz
+  rclcpp::TimerBase::SharedPtr hold_timer_;
+  std::optional<hold_target::HoldPose> hold_pose_;
+  std::uint64_t hold_published_count_ = 0;
+  bool hold_superseded_ = false;  ///< the rollout has taken over
 
-    // Core mathematical models. ProDMP for position, QuaternionDMP for orientation.
-    core::ProDMP prodmp_;
-    core::QuaternionDMP qdmp_;
+  // Core mathematical models. ProDMP for position, QuaternionDMP for orientation.
+  core::ProDMP prodmp_;
+  core::QuaternionDMP qdmp_;
 
-    // Demonstrated initial conditions restored from the ProDMP weights YAML.
-    // Used to rewind the integrator on the no-retarget path (ProDMP has no
-    // reset(); re-seating the initial conditions is the rewind).
-    Eigen::Vector3d demo_init_pos_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d demo_init_vel_ = Eigen::Vector3d::Zero();
+  // Demonstrated initial conditions restored from the ProDMP weights YAML.
+  // Used to rewind the integrator on the no-retarget path (ProDMP has no
+  // reset(); re-seating the initial conditions is the rewind).
+  Eigen::Vector3d demo_init_pos_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d demo_init_vel_ = Eigen::Vector3d::Zero();
 
-    // Rollout tracking state
-    double dt_;
-    double elapsed_;
-    bool finished_;
-    // Frozen/baseline mode only (rollout_clock_ null): mirrors
-    // MeasuredTimeBase::update()'s ticks_==0 case - the first stepCallback() tick
-    // publishes s=0 exact (step_dt=0.0) instead of s=dt_/tau, so init_pos_ is not
-    // distorted before the FrameAligner captures its offset. Cleared after the
-    // first tick; unused in continuous mode.
-    bool frozen_first_tick_pending_ = true;
-    double gripper_trigger_t_ = -1.0;
-    bool gripper_trigger_sent_ = false;
+  // Rollout tracking state
+  double dt_;
+  double elapsed_;
+  bool finished_;
+  // Frozen/baseline mode only (rollout_clock_ null): mirrors
+  // MeasuredTimeBase::update()'s ticks_==0 case - the first stepCallback() tick
+  // publishes s=0 exact (step_dt=0.0) instead of s=dt_/tau, so init_pos_ is not
+  // distorted before the FrameAligner captures its offset. Cleared after the
+  // first tick; unused in continuous mode.
+  bool frozen_first_tick_pending_ = true;
+  double gripper_trigger_t_ = -1.0;
+  bool gripper_trigger_sent_ = false;
 
-    // Gripper close ramp state (see core/gripper_ramp.hpp). elapsed_ is reused as
-    // the monotonic sim-time base - no second clock, no extra timer.
-    bool gripper_ramp_active_ = false;
-    double gripper_ramp_start_elapsed_ = -1.0;
+  // Gripper close ramp state (see core/gripper_ramp.hpp). elapsed_ is reused as
+  // the monotonic sim-time base - no second clock, no extra timer.
+  bool gripper_ramp_active_ = false;
+  double gripper_ramp_start_elapsed_ = -1.0;
 
-    // One-shot translational retarget toward the live free_target_object position.
-    // qdmp_ / orientation is intentionally left untouched.
-    bool target_odom_required_;        ///< false => no odom wait/retarget, replay the demo's original goal as-is
-    std::string target_odom_topic_;
-    std::string world_frame_;          ///< TF frame the target odometry is expressed in
-    std::string ee_frame_;             ///< TF end-effector (TCP) frame, looked up as world_frame_ -> ee_frame_
-    double target_odom_timeout_sec_;   ///< fail-loud if no odometry within this many seconds (only when required)
-    bool target_odom_received_ = false;
-    bool odom_wait_started_ = false;   ///< true once startTimer() began counting toward the timeout
-    rclcpp::Time odom_wait_start_;     ///< node-clock instant the odometry wait started
-    Eigen::Vector3d target_position_ = Eigen::Vector3d::Zero();
+  // One-shot translational retarget toward the live free_target_object position.
+  // qdmp_ / orientation is intentionally left untouched.
+  bool target_odom_required_;  ///< false => no odom wait/retarget, replay the demo's original goal as-is
+  std::string target_odom_topic_;
+  std::string world_frame_;         ///< TF frame the target odometry is expressed in
+  std::string ee_frame_;            ///< TF end-effector (TCP) frame, looked up as world_frame_ -> ee_frame_
+  double target_odom_timeout_sec_;  ///< fail-loud if no odometry within this many seconds (only when required)
+  bool target_odom_received_ = false;
+  bool odom_wait_started_ = false;  ///< true once startTimer() began counting toward the timeout
+  rclcpp::Time odom_wait_start_;    ///< node-clock instant the odometry wait started
+  Eigen::Vector3d target_position_ = Eigen::Vector3d::Zero();
 
-    // syncControllerAlignmentOverride()/syncControllerSkipInitialAlignment() target: the
-    // cartesian_impedance_controller ROS 2 node name/timeout, and a lazily-created parameters
-    // client reused across calls (only 2 calls per rollout today, but a future caller doing
-    // several retargets in the same process should not reconnect each time). See
-    // controller_param_sync.hpp for the parameters themselves.
-    std::string cartesian_controller_node_name_;
-    double controller_param_sync_timeout_sec_;
-    // Dedicated node used ONLY as controller_param_client_'s identity - never `this`, and never
-    // spun directly. See ensureControllerParamClient()'s doc comment for exactly why `this` can't
-    // be used here (a node already added to an executor breaks SyncParametersClient's blocking
-    // calls) and why never explicitly destroying this is fine given how this node is deployed.
-    std::shared_ptr<rclcpp::Node> param_sync_helper_node_;
-    std::shared_ptr<rclcpp::SyncParametersClient> controller_param_client_;
+  // syncControllerAlignmentOverride()/syncControllerSkipInitialAlignment() target: the
+  // cartesian_impedance_controller ROS 2 node name/timeout, and a lazily-created parameters
+  // client reused across calls (only 2 calls per rollout today, but a future caller doing
+  // several retargets in the same process should not reconnect each time). See
+  // controller_param_sync.hpp for the parameters themselves.
+  std::string cartesian_controller_node_name_;
+  double controller_param_sync_timeout_sec_;
+  // Dedicated node used ONLY as controller_param_client_'s identity - never `this`, and never
+  // spun directly. See ensureControllerParamClient()'s doc comment for exactly why `this` can't
+  // be used here (a node already added to an executor breaks SyncParametersClient's blocking
+  // calls) and why never explicitly destroying this is fine given how this node is deployed.
+  std::shared_ptr<rclcpp::Node> param_sync_helper_node_;
+  std::shared_ptr<rclcpp::SyncParametersClient> controller_param_client_;
 
-    // Satellite rotation model (position-only reach test; see class docs and
-    // startTimer()). p_grasp_demo, captured once right after the ProDMP load
-    // and never touched afterward (prodmp_.goal() would already be
-    // overwritten by the time the target_odom_required_ branch runs its own
-    // retarget).
-    Eigen::Vector3d demo_grasp_goal_ = Eigen::Vector3d::Zero();
-    bool satellite_rotation_enabled_;
-    std::string satellite_rotation_mode_;  ///< "frozen" (impl.) | "continuous" (not yet)
-    Eigen::Vector3d satellite_rotation_axis_;
-    Eigen::Vector3d satellite_rotation_center_;
-    double satellite_rotation_angular_velocity_deg_s_;
-    double satellite_rotation_frozen_phase_deg_;
+  // Satellite rotation model (position-only reach test; see class docs and
+  // startTimer()). p_grasp_demo, captured once right after the ProDMP load
+  // and never touched afterward (prodmp_.goal() would already be
+  // overwritten by the time the target_odom_required_ branch runs its own
+  // retarget).
+  Eigen::Vector3d demo_grasp_goal_ = Eigen::Vector3d::Zero();
+  bool satellite_rotation_enabled_;
+  std::string satellite_rotation_mode_;  ///< "frozen" (impl.) | "continuous" (not yet)
+  Eigen::Vector3d satellite_rotation_axis_;
+  Eigen::Vector3d satellite_rotation_center_;
+  double satellite_rotation_angular_velocity_deg_s_;
+  double satellite_rotation_frozen_phase_deg_;
 
-    // ---- continuous mode state (unused unless satellite_rotation_mode == "continuous") ----
-    bool continuous_ = false;                           ///< enabled && mode == "continuous"
-    std::optional<core::satellite_intercept::ContinuousConfig> cc_;
-    ContinuousState cstate_ = ContinuousState::kIdle;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr satellite_odom_sub_;
-    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr continuous_status_pub_;
-    rclcpp::TimerBase::SharedPtr continuous_status_timer_;
-    rclcpp::TimerBase::SharedPtr model_phase_timer_;
-    std::unique_ptr<core::satellite_intercept::PhaseTracker> phase_tracker_;
-    /// Deviation from the configured axis, recorded on every measured sample (see onSatelliteOdom).
-    core::satellite_intercept::AxisDeviationMonitor axis_deviation_{0.25, 0.5};
-    /// Parameter axis_deviation_fatal_after_trigger (default true = off-axis > 0.5 deg is fatal in every state).
-    bool axis_deviation_fatal_after_trigger_ = true;
-    std::unique_ptr<core::satellite_intercept::PhaseConsistencyChecker> phase_checker_;
-    std::unique_ptr<core::satellite_intercept::InterceptTrigger> trigger_;
-    std::unique_ptr<core::satellite_intercept::MeasuredTimeBase> rollout_clock_;
-    bool satellite_first_sample_seen_ = false;
-    bool wait_expected_logged_ = false;
-    Eigen::Vector3d ee_plan_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d p0_ = Eigen::Vector3d::Zero();          ///< grasp point at theta = 0 (world)
-    Eigen::Vector3d p_goal_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d ee_start_ = Eigen::Vector3d::Zero();
-    Eigen::Matrix3d latest_R_rel_ = Eigen::Matrix3d::Identity();
-    // ---- grasp_goal_source="grasp_command" state ----
-    std::string grasp_goal_source_ = "parameters";      ///< "parameters" (default) | "grasp_command"
-    bool grasp_command_mode_ = false;
-    std::string grasp_command_topic_;
-    double grasp_command_timeout_s_ = 0.0;
-    double grasp_command_max_age_s_ = 0.0;              ///< <= 0: age check off
-    double omega_consistency_tol_rad_s_ = 0.0;
-    double grasp_command_phase_tol_rad_ = 0.0;
-    std::string weights_sha256_;                        ///< sha256FileHex(weights_yaml_path_)
-    // Rollout orientation (grasp_command mode). Parameter grasp_orientation_mode, mandatory, no default.
-    core::grasp_orientation::Mode orientation_mode_ = core::grasp_orientation::Mode::kDemoNative;
-    Eigen::Quaterniond q_goal_cmd_ = Eigen::Quaterniond::Identity();    ///< message goal_pose.orientation (planner_goal)
-    Eigen::Quaterniond q_slerp_start_ = Eigen::Quaterniond::Identity(); ///< hold quaternion, set at the trigger
-    Eigen::Quaterniond q_slerp_goal_ = Eigen::Quaterniond::Identity();  ///< q_goal_cmd_ in the hemisphere of q_slerp_start_
-    Eigen::Vector3d omega_slerp_ = Eigen::Vector3d::Zero();             ///< constant angular velocity of the SLERP [rad/s]
-    double angle_hold_to_goal_deg_ = std::nan("");
-    rclcpp::Subscription<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr grasp_command_sub_;
-    satellite_grasp_msgs::msg::GraspCommand::SharedPtr pending_command_;  ///< received before kWaitingCommand
-    bool command_seen_ = false;
-    bool phase_coherence_pending_ = false;
-    Eigen::Vector3d p_start_cmd_ = Eigen::Vector3d::Zero();  ///< the message's start_position
-    double snapshot_theta_rad_ = 0.0, snapshot_t_s_ = 0.0, command_omega_rad_s_ = 0.0;
-    double t_cmd_wait_start_ = 0.0;
-    bool have_phase_ = false;
-    double theta_sat_ = 0.0;                                ///< latest unwrapped phase [rad]
-    double phase_stamp_s_ = 0.0;                            ///< header.stamp (or clock) of that sample
-    double phase_latency_s_ = 0.0;                          ///< node clock - stamp of the latest sample
-    double t_wait_start_ = 0.0, t_trigger_ = 0.0, t_at_end_ = 0.0, last_wait_log_ = 0.0;
-    double theta_at_trigger_ = 0.0, trigger_e_rad_ = 0.0;
-    double duration_sim_ = 0.0, dtheta_at_end_rad_ = 0.0;
-    bool timing_ok_ = true;
-    Eigen::Vector3d last_cmd_pos_ = Eigen::Vector3d::Zero();
-    bool have_last_cmd_ = false;
-    Eigen::Vector3d cmd_after_ = Eigen::Vector3d::Zero();
-    bool at_end_recorded_ = false;
+  // ---- continuous mode state (unused unless satellite_rotation_mode == "continuous") ----
+  bool continuous_ = false;  ///< enabled && mode == "continuous"
+  std::optional<core::satellite_intercept::ContinuousConfig> cc_;
+  ContinuousState cstate_ = ContinuousState::kIdle;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr satellite_odom_sub_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr continuous_status_pub_;
+  rclcpp::TimerBase::SharedPtr continuous_status_timer_;
+  rclcpp::TimerBase::SharedPtr model_phase_timer_;
+  std::unique_ptr<core::satellite_intercept::PhaseTracker> phase_tracker_;
+  /// Deviation from the configured axis, recorded on every measured sample (see onSatelliteOdom).
+  core::satellite_intercept::AxisDeviationMonitor axis_deviation_{0.25, 0.5};
+  /// Parameter axis_deviation_fatal_after_trigger (default true = off-axis > 0.5 deg is fatal in every state).
+  bool axis_deviation_fatal_after_trigger_ = true;
+  std::unique_ptr<core::satellite_intercept::PhaseConsistencyChecker> phase_checker_;
+  std::unique_ptr<core::satellite_intercept::InterceptTrigger> trigger_;
+  std::unique_ptr<core::satellite_intercept::MeasuredTimeBase> rollout_clock_;
+  bool satellite_first_sample_seen_ = false;
+  bool wait_expected_logged_ = false;
+  Eigen::Vector3d ee_plan_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d p0_ = Eigen::Vector3d::Zero();  ///< grasp point at theta = 0 (world)
+  Eigen::Vector3d p_goal_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d ee_start_ = Eigen::Vector3d::Zero();
+  Eigen::Matrix3d latest_R_rel_ = Eigen::Matrix3d::Identity();
+  // ---- grasp_goal_source="grasp_command" state ----
+  std::string grasp_goal_source_ = "parameters";  ///< "parameters" (default) | "grasp_command"
+  bool grasp_command_mode_ = false;
+  std::string grasp_command_topic_;
+  double grasp_command_timeout_s_ = 0.0;
+  double grasp_command_max_age_s_ = 0.0;  ///< <= 0: age check off
+  double omega_consistency_tol_rad_s_ = 0.0;
+  double grasp_command_phase_tol_rad_ = 0.0;
+  std::string weights_sha256_;  ///< sha256FileHex(weights_yaml_path_)
+  // Rollout orientation (grasp_command mode). Parameter grasp_orientation_mode, mandatory, no default.
+  core::grasp_orientation::Mode orientation_mode_ = core::grasp_orientation::Mode::kDemoNative;
+  Eigen::Quaterniond q_goal_cmd_ = Eigen::Quaterniond::Identity();     ///< message goal_pose.orientation (planner_goal)
+  Eigen::Quaterniond q_slerp_start_ = Eigen::Quaterniond::Identity();  ///< hold quaternion, set at the trigger
+  Eigen::Quaterniond q_slerp_goal_ = Eigen::Quaterniond::Identity();   ///< q_goal_cmd_ in the hemisphere of q_slerp_start_
+  Eigen::Vector3d omega_slerp_ = Eigen::Vector3d::Zero();              ///< constant angular velocity of the SLERP [rad/s]
+  double angle_hold_to_goal_deg_ = std::nan("");
+  rclcpp::Subscription<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr grasp_command_sub_;
+  satellite_grasp_msgs::msg::GraspCommand::SharedPtr pending_command_;  ///< received before kWaitingCommand
+  bool command_seen_ = false;
+  bool phase_coherence_pending_ = false;
+  Eigen::Vector3d p_start_cmd_ = Eigen::Vector3d::Zero();  ///< the message's start_position
+  double snapshot_theta_rad_ = 0.0, snapshot_t_s_ = 0.0, command_omega_rad_s_ = 0.0;
+  double t_cmd_wait_start_ = 0.0;
+  bool have_phase_ = false;
+  double theta_sat_ = 0.0;        ///< latest unwrapped phase [rad]
+  double phase_stamp_s_ = 0.0;    ///< header.stamp (or clock) of that sample
+  double phase_latency_s_ = 0.0;  ///< node clock - stamp of the latest sample
+  double t_wait_start_ = 0.0, t_trigger_ = 0.0, t_at_end_ = 0.0, last_wait_log_ = 0.0;
+  double theta_at_trigger_ = 0.0, trigger_e_rad_ = 0.0;
+  double duration_sim_ = 0.0, dtheta_at_end_rad_ = 0.0;
+  bool timing_ok_ = true;
+  Eigen::Vector3d last_cmd_pos_ = Eigen::Vector3d::Zero();
+  bool have_last_cmd_ = false;
+  Eigen::Vector3d cmd_after_ = Eigen::Vector3d::Zero();
+  bool at_end_recorded_ = false;
 
-    // Parameters
-    std::string weights_yaml_path_;             ///< ProDMP position weights (prodmp_weights_<run_id>.yaml)
-    std::string orientation_weights_yaml_path_; ///< classic combined file for the quaternion_dmp section
-    std::string demo_csv_path_;
-    std::string target_pose_topic_;
-    std::string frame_id_;
-    double control_rate_hz_;
-    double startup_delay_sec_;
-    double gripper_open_position_;
-    double gripper_closed_position_;
-    double gripper_close_ramp_duration_sec_;
-    double gripper_squeeze_position_ = 0.0;   ///< command after the close ramp (default = gripper_closed_position_)
-    bool gripper_squeeze_active_ = false;     ///< set when the close ramp is done and squeeze != closed
+  // Parameters
+  std::string weights_yaml_path_;              ///< ProDMP position weights (prodmp_weights_<run_id>.yaml)
+  std::string orientation_weights_yaml_path_;  ///< classic combined file for the quaternion_dmp section
+  std::string demo_csv_path_;
+  std::string target_pose_topic_;
+  std::string frame_id_;
+  double control_rate_hz_;
+  double startup_delay_sec_;
+  double gripper_open_position_;
+  double gripper_closed_position_;
+  double gripper_close_ramp_duration_sec_;
+  double gripper_squeeze_position_ = 0.0;  ///< command after the close ramp (default = gripper_closed_position_)
+  bool gripper_squeeze_active_ = false;    ///< set when the close ramp is done and squeeze != closed
 
-    // gripper_control (continuous mode, see core::gripper_ramp::defaultGripperControl).
-    bool gripper_control_ = false;
-    double post_grasp_hold_s_ = 120.0;
-    double post_grasp_follow_s_ = 3.0;        ///< co-rotation lasts this long after AT_END, then frozen (<=0: whole hold)
-    bool gripper_open_logged_ = false;
-    rclcpp::TimerBase::SharedPtr gripper_open_timer_;
-    rclcpp::TimerBase::SharedPtr gripper_close_timer_;
-    double gripper_close_t0_ = 0.0;
-    rclcpp::TimerBase::SharedPtr post_hold_timer_;
-    geometry_msgs::msg::PoseStamped post_hold_pose_;
-    double post_hold_t0_ = 0.0;
-    // post_grasp_follow: the held target co-rotates with the satellite (see core/pose_rotation.hpp).
-    bool post_grasp_follow_ = false;
-    double theta_at_end_ = 0.0;      ///< satellite phase at AT_END [rad] (measured or model, as at the trigger)
-    double follow_dtheta_frozen_ = 0.0;  ///< last co-rotation angle while following [rad]
-    bool follow_ended_logged_ = false;
-    double follow_t_end_ = 0.0;      ///< node clock at AT_END [s]
-    double follow_last_log_ = 0.0;
+  // gripper_control (continuous mode, see core::gripper_ramp::defaultGripperControl).
+  bool gripper_control_ = false;
+  double post_grasp_hold_s_ = 120.0;
+  double post_grasp_follow_s_ = 3.0;  ///< co-rotation lasts this long after AT_END, then frozen (<=0: whole hold)
+  bool gripper_open_logged_ = false;
+  rclcpp::TimerBase::SharedPtr gripper_open_timer_;
+  rclcpp::TimerBase::SharedPtr gripper_close_timer_;
+  double gripper_close_t0_ = 0.0;
+  rclcpp::TimerBase::SharedPtr post_hold_timer_;
+  geometry_msgs::msg::PoseStamped post_hold_pose_;
+  double post_hold_t0_ = 0.0;
+  // post_grasp_follow: the held target co-rotates with the satellite (see core/pose_rotation.hpp).
+  bool post_grasp_follow_ = false;
+  double theta_at_end_ = 0.0;          ///< satellite phase at AT_END [rad] (measured or model, as at the trigger)
+  double follow_dtheta_frozen_ = 0.0;  ///< last co-rotation angle while following [rad]
+  bool follow_ended_logged_ = false;
+  double follow_t_end_ = 0.0;  ///< node clock at AT_END [s]
+  double follow_last_log_ = 0.0;
 };
 
 }  // namespace ros_wrapper

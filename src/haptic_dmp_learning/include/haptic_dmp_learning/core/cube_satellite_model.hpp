@@ -7,12 +7,15 @@
 namespace haptic_dmp_learning {
 namespace core {
 
-enum class GraspPointId { kP0 = 0, kP90, kP180, kP270 };  // phi_k = 0/90/180/270 deg
+enum class GraspPointId { kP0 = 0,
+                          kP90,
+                          kP180,
+                          kP270 };  // phi_k = 0/90/180/270 deg
 
 struct GraspTargetPose {
-    Eigen::Vector3d position_world;
-    Eigen::Quaterniond orientation_nominal_world;  // reference psi = 0
-    Eigen::Vector3d approach_axis_world;           // = z_tcp; also the roll axis for psi
+  Eigen::Vector3d position_world;
+  Eigen::Quaterniond orientation_nominal_world;  // reference psi = 0
+  Eigen::Vector3d approach_axis_world;           // = z_tcp; also the roll axis for psi
 };
 
 /**
@@ -27,50 +30,50 @@ struct GraspTargetPose {
  * are pure functions of (k, theta_rad, params_).
  */
 class CubeSatelliteModel {
-public:
-    struct Params {
-        Eigen::Vector3d center_world = Eigen::Vector3d::Zero();
-        Eigen::Vector3d axis_world = Eigen::Vector3d::UnitZ();       // normalized at construction
-        double cube_side_m = 0.150;       // real satellite (CAD)
-        double standoff_m = 0.08;         // along the normal, beyond the face
-        double collar_radius_m = 0.0725;  // OUTER radius of the hollow cylinder (collision, SDF)
-        Eigen::Vector3d face_normal_body = Eigen::Vector3d::UnitX();  // must be lateral
-        double wall_thickness_m = 0.009;  // hollow-cylinder wall (inner radius 0.0635)
-        /// Radius of the grasp points on the rim (mid-wall, 0.068 in the real satellite). Used ONLY by
-        /// graspPoseAt(). Unset (default) = collar_radius_m, which replicates the previous behaviour
-        /// where one radius served both purposes; collar_radius_m stays the outer radius of the cylinder.
-        std::optional<double> grasp_radius_m;
-        /// How far INSIDE the collar (toward the cube, along -face_normal_body) the grasp point sits, measured
-        /// from the rim at x = cube_side_m/2 + standoff_m: x_c = rim - grasp_depth_m. 0 (default) = on the rim,
-        /// the previous behaviour. Used ONLY by graspPoseAt(), the single place the contact point is defined.
-        double grasp_depth_m = 0.0;
-    };
+ public:
+  struct Params {
+    Eigen::Vector3d center_world = Eigen::Vector3d::Zero();
+    Eigen::Vector3d axis_world = Eigen::Vector3d::UnitZ();        // normalized at construction
+    double cube_side_m = 0.150;                                   // real satellite (CAD)
+    double standoff_m = 0.08;                                     // along the normal, beyond the face
+    double collar_radius_m = 0.0725;                              // OUTER radius of the hollow cylinder (collision, SDF)
+    Eigen::Vector3d face_normal_body = Eigen::Vector3d::UnitX();  // must be lateral
+    double wall_thickness_m = 0.009;                              // hollow-cylinder wall (inner radius 0.0635)
+    /// Radius of the grasp points on the rim (mid-wall, 0.068 in the real satellite). Used ONLY by
+    /// graspPoseAt(). Unset (default) = collar_radius_m, which replicates the previous behaviour
+    /// where one radius served both purposes; collar_radius_m stays the outer radius of the cylinder.
+    std::optional<double> grasp_radius_m;
+    /// How far INSIDE the collar (toward the cube, along -face_normal_body) the grasp point sits, measured
+    /// from the rim at x = cube_side_m/2 + standoff_m: x_c = rim - grasp_depth_m. 0 (default) = on the rim,
+    /// the previous behaviour. Used ONLY by graspPoseAt(), the single place the contact point is defined.
+    double grasp_depth_m = 0.0;
+  };
 
-    /// Normalizes axis_world / face_normal_body. Throws std::invalid_argument if either has
-    /// ~zero norm, if the face is not lateral (|axis . n| > kLateralTolerance), or if
-    /// wall_thickness_m <= 0 or >= collar_radius_m, or if grasp_depth_m is not in [0, standoff_m].
-    explicit CubeSatelliteModel(Params params);
+  /// Normalizes axis_world / face_normal_body. Throws std::invalid_argument if either has
+  /// ~zero norm, if the face is not lateral (|axis . n| > kLateralTolerance), or if
+  /// wall_thickness_m <= 0 or >= collar_radius_m, or if grasp_depth_m is not in [0, standoff_m].
+  explicit CubeSatelliteModel(Params params);
 
-    GraspTargetPose graspPoseAt(GraspPointId k, double theta_rad) const;
+  GraspTargetPose graspPoseAt(GraspPointId k, double theta_rad) const;
 
-    Eigen::Vector3d faceNormalWorld(double theta_rad) const;                       // R(theta) * n
+  Eigen::Vector3d faceNormalWorld(double theta_rad) const;  // R(theta) * n
 
-    // Cube body pose (pure geometry): centered at center_world, rotated by R(theta) about axis_world.
-    Eigen::Vector3d cubeCenterWorld() const;
-    Eigen::Vector3d axisWorld() const;  // normalized spin axis (theta-independent)
+  // Cube body pose (pure geometry): centered at center_world, rotated by R(theta) about axis_world.
+  Eigen::Vector3d cubeCenterWorld() const;
+  Eigen::Vector3d axisWorld() const;  // normalized spin axis (theta-independent)
 
-    /// Tolerance on |axis . n| for "face is lateral". 1e-6 (~1 microrad) is far above double
-    /// round-off on unit vectors (~1e-16), so exactly-perpendicular inputs always pass, yet
-    /// tight enough that the frame u/v/n stays orthonormal to well below any geometric
-    /// effect on the millimetre-scale grasp poses. A tilted face is a modelling error, not
-    /// something to absorb silently.
-    static constexpr double kLateralTolerance = 1e-6;
+  /// Tolerance on |axis . n| for "face is lateral". 1e-6 (~1 microrad) is far above double
+  /// round-off on unit vectors (~1e-16), so exactly-perpendicular inputs always pass, yet
+  /// tight enough that the frame u/v/n stays orthonormal to well below any geometric
+  /// effect on the millimetre-scale grasp poses. A tilted face is a modelling error, not
+  /// something to absorb silently.
+  static constexpr double kLateralTolerance = 1e-6;
 
-private:
-    Eigen::Vector3d radialDirectionBody(GraspPointId k) const;
-    Eigen::Matrix3d rotation(double theta_rad) const;
+ private:
+  Eigen::Vector3d radialDirectionBody(GraspPointId k) const;
+  Eigen::Matrix3d rotation(double theta_rad) const;
 
-    Params params_;
+  Params params_;
 };
 
 }  // namespace core

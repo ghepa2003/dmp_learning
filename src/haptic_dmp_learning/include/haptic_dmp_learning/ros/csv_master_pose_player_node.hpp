@@ -24,39 +24,39 @@ namespace ros_wrapper {
  *   triggering downstream recorder and DMP learning nodes (`LiveDemoRecorderNode`).
  */
 class CsvMasterPosePlayerNode : public rclcpp::Node {
-public:
-    CsvMasterPosePlayerNode();
+ public:
+  CsvMasterPosePlayerNode();
 
-private:
-    void beginPlayback();
-    void playbackCallback();
+ private:
+  void beginPlayback();
+  void playbackCallback();
 
-    void publishButtons(int32_t button0, int32_t button1);
-    void publishRow(const core::Sample& row);
+  void publishButtons(int32_t button0, int32_t button1);
+  void publishRow(const core::Sample& row);
 
-    // ROS interfaces
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr buttons_pub_;
-    rclcpp::TimerBase::SharedPtr startup_timer_;
-    rclcpp::TimerBase::SharedPtr start_edge_timer_;
-    rclcpp::TimerBase::SharedPtr playback_timer_;
+  // ROS interfaces
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr buttons_pub_;
+  rclcpp::TimerBase::SharedPtr startup_timer_;
+  rclcpp::TimerBase::SharedPtr start_edge_timer_;
+  rclcpp::TimerBase::SharedPtr playback_timer_;
 
-    // In-memory trajectory buffer
-    std::vector<core::Sample> rows_;
+  // In-memory trajectory buffer
+  std::vector<core::Sample> rows_;
 
-    // Playback state
-    rclcpp::Time playback_start_time_;
-    size_t next_row_idx_;
-    bool finished_;
+  // Playback state
+  rclcpp::Time playback_start_time_;
+  size_t next_row_idx_;
+  bool finished_;
 
-    // Parameters
-    std::string demo_csv_path_;
-    std::string master_pose_topic_;
-    std::string buttons_topic_;
-    std::string frame_id_;
-    double publish_rate_hz_;
-    double dt_;
-    double startup_delay_sec_;
+  // Parameters
+  std::string demo_csv_path_;
+  std::string master_pose_topic_;
+  std::string buttons_topic_;
+  std::string frame_id_;
+  double publish_rate_hz_;
+  double dt_;
+  double startup_delay_sec_;
 };
 
 }  // namespace ros_wrapper

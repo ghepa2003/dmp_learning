@@ -47,58 +47,59 @@ namespace ros_wrapper {
  * topics — it never publishes onto a control topic.
  */
 class GraspForceCalibrationNode : public rclcpp::Node {
-public:
-    GraspForceCalibrationNode();
+ public:
+  GraspForceCalibrationNode();
 
-private:
-    enum class Mode { kCalibrate, kVerify };
+ private:
+  enum class Mode { kCalibrate,
+                    kVerify };
 
-    void geometricCallback(const std_msgs::msg::Bool::SharedPtr msg);
-    void gripperCloseCompleteCallback(const std_msgs::msg::Empty::SharedPtr msg);
-    void forceCallback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
-    void finishCaptureWindow();  ///< closes the time window, fired by capture_timer_
-    void onWindowComplete(double median_force_norm);
+  void geometricCallback(const std_msgs::msg::Bool::SharedPtr msg);
+  void gripperCloseCompleteCallback(const std_msgs::msg::Empty::SharedPtr msg);
+  void forceCallback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
+  void finishCaptureWindow();  ///< closes the time window, fired by capture_timer_
+  void onWindowComplete(double median_force_norm);
 
-    void writeCalibrationYaml(double median_force_norm) const;
-    bool loadCalibrationYaml();  ///< returns true if f_calib_ was populated
-    static double median(std::vector<double> v);
+  void writeCalibrationYaml(double median_force_norm) const;
+  bool loadCalibrationYaml();  ///< returns true if f_calib_ was populated
+  static double median(std::vector<double> v);
 
-    // ROS interfaces
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr geom_sub_;
-    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
-    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr verified_pub_;  ///< verify mode only
-    rclcpp::TimerBase::SharedPtr capture_timer_;  ///< one-shot, closes the capture window
+  // ROS interfaces
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr geom_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr gripper_close_complete_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr verified_pub_;  ///< verify mode only
+  rclcpp::TimerBase::SharedPtr capture_timer_;                      ///< one-shot, closes the capture window
 
-    // Parameters
-    Mode mode_;
-    std::string run_id_;
-    std::string geometric_confirmed_topic_;
-    std::string gripper_close_complete_topic_;
-    std::string force_estimate_topic_;
-    double capture_window_sec_;
-    std::string calibration_dir_;
-    double tolerance_ratio_;
-    double tolerance_floor_n_;
-    double min_valid_force_n_;  ///< reject a capture whose median is below this
-    std::string calibration_file_path_;
+  // Parameters
+  Mode mode_;
+  std::string run_id_;
+  std::string geometric_confirmed_topic_;
+  std::string gripper_close_complete_topic_;
+  std::string force_estimate_topic_;
+  double capture_window_sec_;
+  std::string calibration_dir_;
+  double tolerance_ratio_;
+  double tolerance_floor_n_;
+  double min_valid_force_n_;  ///< reject a capture whose median is below this
+  std::string calibration_file_path_;
 
-    // Gate for the force capture: last value seen on the geometric-grasp signal.
-    // The capture is triggered by the /gripper_close_complete event, and only
-    // runs while this is true (double confirmation: EE in position AND close
-    // ramp finished).
-    bool geometric_confirmed_ = false;
+  // Gate for the force capture: last value seen on the geometric-grasp signal.
+  // The capture is triggered by the /gripper_close_complete event, and only
+  // runs while this is true (double confirmation: EE in position AND close
+  // ramp finished).
+  bool geometric_confirmed_ = false;
 
-    // Capture window
-    bool capturing_ = false;
-    rclcpp::Time capture_start_time_;
-    std::vector<double> buffer_;
+  // Capture window
+  bool capturing_ = false;
+  rclcpp::Time capture_start_time_;
+  std::vector<double> buffer_;
 
-    // verify mode state
-    bool calib_loaded_ = false;
-    double f_calib_ = 0.0;
-    bool warned_missing_file_ = false;
-    bool last_verified_ = false;
+  // verify mode state
+  bool calib_loaded_ = false;
+  double f_calib_ = 0.0;
+  bool warned_missing_file_ = false;
+  bool last_verified_ = false;
 };
 
 }  // namespace ros_wrapper

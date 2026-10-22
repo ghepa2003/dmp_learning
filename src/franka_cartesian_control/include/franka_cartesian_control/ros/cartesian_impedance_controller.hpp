@@ -27,68 +27,68 @@ namespace ros_wrapper {
 // by Gazebo automatically), commands effort interfaces. Second stage after
 // CartesianVelocityController, reusing RobotModel/CartesianError unchanged.
 class CartesianImpedanceController : public controller_interface::ControllerInterface {
-public:
-    controller_interface::InterfaceConfiguration command_interface_configuration() const override;
-    controller_interface::InterfaceConfiguration state_interface_configuration() const override;
+ public:
+  controller_interface::InterfaceConfiguration command_interface_configuration() const override;
+  controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
-    controller_interface::CallbackReturn on_init() override;
-    controller_interface::CallbackReturn on_configure(
-        const rclcpp_lifecycle::State& previous_state) override;
-    controller_interface::CallbackReturn on_activate(
-        const rclcpp_lifecycle::State& previous_state) override;
-    controller_interface::CallbackReturn on_deactivate(
-        const rclcpp_lifecycle::State& previous_state) override;
+  controller_interface::CallbackReturn on_init() override;
+  controller_interface::CallbackReturn on_configure(
+      const rclcpp_lifecycle::State& previous_state) override;
+  controller_interface::CallbackReturn on_activate(
+      const rclcpp_lifecycle::State& previous_state) override;
+  controller_interface::CallbackReturn on_deactivate(
+      const rclcpp_lifecycle::State& previous_state) override;
 
-    controller_interface::return_type update(
-        const rclcpp::Time& time, const rclcpp::Duration& period) override;
+  controller_interface::return_type update(
+      const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
-private:
-    void targetPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+ private:
+  void targetPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
-    // initial_alignment_position_override support: see FrameAligner::setInitialAlignmentPositionOverride()
-    // in ros_utils.hpp for why this parameter exists. onSetParameters() handles `ros2 param set` at
-    // runtime; on_init() applies the parameter's initial value the same way, so a value supplied via
-    // launch file (before the callback is even registered) is also picked up.
-    // skip_initial_alignment follows the exact same on_init()/onSetParameters() pattern - see
-    // FrameAligner::setIdentityAlignment() in ros_utils.hpp.
-    rcl_interfaces::msg::SetParametersResult onSetParameters(const std::vector<rclcpp::Parameter>& parameters);
-    void applyInitialAlignmentPositionOverride(const std::vector<double>& values);
-    void applySkipInitialAlignment(bool skip);
-    rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr on_set_parameters_callback_handle_;
+  // initial_alignment_position_override support: see FrameAligner::setInitialAlignmentPositionOverride()
+  // in ros_utils.hpp for why this parameter exists. onSetParameters() handles `ros2 param set` at
+  // runtime; on_init() applies the parameter's initial value the same way, so a value supplied via
+  // launch file (before the callback is even registered) is also picked up.
+  // skip_initial_alignment follows the exact same on_init()/onSetParameters() pattern - see
+  // FrameAligner::setIdentityAlignment() in ros_utils.hpp.
+  rcl_interfaces::msg::SetParametersResult onSetParameters(const std::vector<rclcpp::Parameter>& parameters);
+  void applyInitialAlignmentPositionOverride(const std::vector<double>& values);
+  void applySkipInitialAlignment(bool skip);
+  rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr on_set_parameters_callback_handle_;
 
-    // params
-    std::vector<std::string> joint_names_;
-    std::string ee_frame_name_;
-    std::string target_pose_topic_;
-    bool enable_nullspace_leak_diagnostics_ = false;
-    bool enable_contact_force_estimation_ = false;
+  // params
+  std::vector<std::string> joint_names_;
+  std::string ee_frame_name_;
+  std::string target_pose_topic_;
+  bool enable_nullspace_leak_diagnostics_ = false;
+  bool enable_contact_force_estimation_ = false;
 
-    // core objects
-    std::unique_ptr<core::RobotModel> robot_model_;
-    core::CartesianImpedanceSolver impedance_solver_;
+  // core objects
+  std::unique_ptr<core::RobotModel> robot_model_;
+  core::CartesianImpedanceSolver impedance_solver_;
 
-    // rate-saturation state: torque commanded in the previous cycle
-    core::RobotModel::JointVector tau_prev_ = core::RobotModel::JointVector::Zero();
+  // rate-saturation state: torque commanded in the previous cycle
+  core::RobotModel::JointVector tau_prev_ = core::RobotModel::JointVector::Zero();
 
-    // target pose
-    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_sub_;
-    realtime_tools::RealtimeBuffer<geometry_msgs::msg::PoseStamped> target_pose_buffer_;
-    std::atomic<bool> target_received_{false};
+  // target pose
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_sub_;
+  realtime_tools::RealtimeBuffer<geometry_msgs::msg::PoseStamped> target_pose_buffer_;
+  std::atomic<bool> target_received_{false};
 
-    // frame aligner
-    FrameAligner frame_aligner_;
+  // frame aligner
+  FrameAligner frame_aligner_;
 
-    // debug publishers
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr aligned_target_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr actual_pose_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_aligned_target_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_actual_pose_pub_;
+  // debug publishers
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr aligned_target_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr actual_pose_pub_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_aligned_target_pub_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>> rt_actual_pose_pub_;
 
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr nullspace_leak_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Float64MultiArray>> rt_nullspace_leak_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr nullspace_leak_pub_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Float64MultiArray>> rt_nullspace_leak_pub_;
 
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr contact_wrench_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>> rt_contact_wrench_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr contact_wrench_pub_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>> rt_contact_wrench_pub_;
 };
 
 }  // namespace ros_wrapper
