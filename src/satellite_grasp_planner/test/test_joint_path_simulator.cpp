@@ -15,16 +15,16 @@
 
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "satellite_grasp_planner/core/joint_path_simulator.hpp"
-#include "satellite_grasp_planner/core/manipulability.hpp"
+#include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 #include "test_fixtures.hpp"
 #include "test_goal_data.hpp"
 
 using satellite_grasp_planner::core::CartesianSample;
 using satellite_grasp_planner::core::createStrategyForController;
 using satellite_grasp_planner::core::JointPathSimulator;
-using satellite_grasp_planner::core::Manipulability;
 using satellite_grasp_planner::core::MinNormDlsResolution;
 using satellite_grasp_planner::core::NullspaceBiasedResolution;
+using satellite_grasp_planner::core::wTransAt;
 using RobotModel = franka_cartesian_control::core::RobotModel;
 using satellite_grasp_planner::test_fixtures::loadPandaRobotModel;
 using satellite_grasp_planner::test_goal_data::dataDir;
@@ -38,7 +38,6 @@ using satellite_grasp_planner::test_goal_data::readCsv;
 TEST(JointPathSimulatorTest, StrategyComparisonVsRealImpedanceControlGoals) {
   auto robot_model = loadPandaRobotModel();
   ASSERT_NE(robot_model, nullptr);
-  Manipulability manip(robot_model);
   const double kDeg2Rad = M_PI / 180.0;
 
   struct GoalTestCase {
@@ -93,7 +92,7 @@ TEST(JointPathSimulatorTest, StrategyComparisonVsRealImpedanceControlGoals) {
     auto dls_steps = dls_sim.simulate(trajectory, q0);
     ASSERT_FALSE(dls_steps.empty());
     RobotModel::JointVector q_dls = dls_steps.back().q;
-    double w_dls = manip.wTrans(q_dls);
+    double w_dls = wTransAt(*robot_model, q_dls);
 
     // 2. NullspaceBiasedResolution (impedance control proxy)
     JointPathSimulator::Params ns_params;
@@ -103,9 +102,9 @@ TEST(JointPathSimulatorTest, StrategyComparisonVsRealImpedanceControlGoals) {
     auto ns_steps = ns_sim.simulate(trajectory, q0);
     ASSERT_FALSE(ns_steps.empty());
     RobotModel::JointVector q_ns = ns_steps.back().q;
-    double w_ns = manip.wTrans(q_ns);
+    double w_ns = wTransAt(*robot_model, q_ns);
 
-    double w_real = manip.wTrans(tc.q_real_impedance);
+    double w_real = wTransAt(*robot_model, tc.q_real_impedance);
     double gap_dls_pct = 100.0 * (w_dls - w_real) / w_real;
     double gap_ns_pct = 100.0 * (w_ns - w_real) / w_real;
 

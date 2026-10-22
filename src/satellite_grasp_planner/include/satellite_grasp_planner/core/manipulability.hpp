@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <memory>
 #include <stdexcept>
 #include <Eigen/Dense>
 #include <Eigen/SVD>
@@ -90,31 +89,6 @@ FullManipulability fullManipulability(const Eigen::MatrixBase<Derived>& J) {
   prodMin(Jm, out.w_full, unused);
   return out;
 }
-
-/**
- * @brief Convenience wrapper: w_trans(q) for a given joint configuration,
- *        via a shared franka_cartesian_control::core::RobotModel.
- *
- * @details
- * Calls RobotModel::update(q, 0) (which additionally computes gravity,
- * Coriolis and the mass matrix via RNEA/CRBA - unused here, but RobotModel
- * offers no cheaper "kinematics only" path today) and reads back the cached
- * Jacobian. When scoring MANY configurations along an already-simulated
- * joint path, prefer calling wTransFromJacobian()
- * directly on the Jacobian already computed by JointPathSimulator's own
- * RobotModel::update() call for the DLS step, instead of this method - it
- * avoids a second full Pinocchio pass (FK + Jacobian + RNEA + CRBA) per
- * sample.
- */
-class Manipulability {
- public:
-  explicit Manipulability(std::shared_ptr<franka_cartesian_control::core::RobotModel> robot_model);
-
-  double wTrans(const franka_cartesian_control::core::RobotModel::JointVector& q) const;
-
- private:
-  std::shared_ptr<franka_cartesian_control::core::RobotModel> robot_model_;
-};
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

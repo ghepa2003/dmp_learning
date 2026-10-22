@@ -15,7 +15,6 @@
 #include "test_fixtures.hpp"
 #include "haptic_dmp_learning/core/cube_satellite_model.hpp"
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
-#include "satellite_grasp_planner/core/manipulability.hpp"
 
 using namespace satellite_grasp_planner::core;
 using haptic_dmp_learning::core::CubeSatelliteModel;
@@ -160,18 +159,6 @@ TEST(GraspPoseEvalTest, JointMargins) {
   const JointMargins m2 = jointMargins(*robot, q);
   EXPECT_NEAR(m2.min_margin_rad, 0.1, 1e-12);
   EXPECT_EQ(m2.worst_joint, 5);
-}
-
-TEST(GraspPoseEvalTest, WTransAtMatchesManipulability) {
-  REQUIRE_URDF_OR_SKIP();
-  auto robot = tf::loadPandaRobotModel();
-  ASSERT_NE(robot, nullptr);
-  const Manipulability manip(robot);
-  RobotModel::JointVector q = readyQ6Pi();
-  q(0) += 0.2;
-  q(3) += 0.15;
-  EXPECT_NEAR(wTransAt(*robot, q), manip.wTrans(q), 1e-12);
-  EXPECT_NEAR(wTransAt(*robot, RobotModel::readyPose()), manip.wTrans(RobotModel::readyPose()), 1e-12);
 }
 
 TEST(GraspPoseEvalTest, Se3Distance) {
