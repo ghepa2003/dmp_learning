@@ -4,10 +4,6 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <string>
-
-#include "haptic_dmp_learning/core/tcp_roll.hpp"
-#include "haptic_dmp_learning/core/math_utils.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {

@@ -1,7 +1,5 @@
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <stdexcept>
 
 #include "haptic_dmp_learning/core/math_utils.hpp"

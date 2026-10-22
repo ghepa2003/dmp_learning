@@ -1,6 +1,5 @@
 #include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 

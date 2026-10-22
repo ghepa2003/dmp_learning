@@ -16,7 +16,6 @@
 // variants change ONLY the goal orientation.
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>

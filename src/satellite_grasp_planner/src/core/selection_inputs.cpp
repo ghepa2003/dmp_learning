@@ -5,7 +5,6 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 #include "haptic_dmp_learning/core/demo_params.hpp"

@@ -47,7 +47,6 @@
 #include "satellite_grasp_planner/core/grasp_s3_selection.hpp"
 #include "satellite_grasp_planner/core/launch_plan.hpp"
 #include "satellite_grasp_planner/core/start_state.hpp"
-#include "satellite_grasp_planner/ros/grasp_planner_checks.hpp"
 
 namespace satellite_grasp_planner {
 namespace ros_wrapper {

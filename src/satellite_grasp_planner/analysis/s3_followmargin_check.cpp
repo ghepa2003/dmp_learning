@@ -28,11 +28,9 @@
 // Not reproduced here (not in the scenario above): anything about clearance or the selector.
 
 #include <cmath>
-#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <string>
 #include <vector>
 
