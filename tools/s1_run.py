@@ -770,8 +770,6 @@ def check_tilt_not_overridden(a):
 
 
 def build_commands(a, paths):
-    weights = paths["weights"]
-    demo = paths["demo_params"]
     c = a.center_xyz
     ov = omega_values(a.omega_deg_s)
     check_omega_consistent(a.omega_deg_s)

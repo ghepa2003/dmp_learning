@@ -590,7 +590,6 @@ def _cmd_diagnose_perturbation(args, demo_csv, run_dir, label):
     fs = 1.0 / dt_avg
     b, a = scipy.signal.butter(2, cutoff_hz, btype="low", fs=fs)
 
-    summary_csv = run_dir / "summary.csv"
     max_weights, endpoint_errors = [], []
     for r in range(n_realizations):
         rng = np.random.RandomState(seed_base + r * 100)

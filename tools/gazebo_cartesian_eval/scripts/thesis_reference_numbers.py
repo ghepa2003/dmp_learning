@@ -33,9 +33,7 @@ DEFINITIONS & CONVENTIONS CONGELATE (FROZEN DEFINITIONS):
 from __future__ import annotations
 
 import os
-import sys
 import csv
-import math
 import numpy as np
 
 # ==============================================================================
@@ -166,8 +164,6 @@ def compute_run_analysis(key: str, info: dict):
     idx_settle_act = min(max(idx_settle_act, 0), len(t_act) - 1)
 
     # 2. Final steady-state (t_final / t_last)
-    idx_final_tgt = len(t_tgt) - 1
-    idx_final_act = len(t_act) - 1
     t_final = t_tgt[-1]
 
     # Target & Actual positions
@@ -177,8 +173,6 @@ def compute_run_analysis(key: str, info: dict):
     p_act_final = p_act[-1]
 
     # Distances from base (origin [0, 0, 0])
-    d_tgt_settle = np.linalg.norm(p_tgt_settle)
-    d_act_settle = np.linalg.norm(p_act_settle)
     d_tgt_final = np.linalg.norm(p_tgt_final)
     d_act_final = np.linalg.norm(p_act_final)
 
@@ -213,7 +207,7 @@ def main():
     print(f"WS Root:  {WS_ROOT}")
     print(f"Data Dir: {DATA_DIR}")
     print(f"Frozen Tol Clamp: {TOL_CLAMP_M*1000:.2f} mm")
-    print(f"Frozen t_settle Definition: t_settle := t_clamp (arrival instant at tau)")
+    print("Frozen t_settle Definition: t_settle := t_clamp (arrival instant at tau)")
     print("=" * 110)
 
     results = {}

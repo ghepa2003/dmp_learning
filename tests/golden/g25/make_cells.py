@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import os
-import math
 import numpy as np
 
 # Add tools/ to sys.path

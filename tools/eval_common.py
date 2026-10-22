@@ -5,7 +5,6 @@ Include gestione processi, sincronizzazione clock/sim_time, estrazione bag, cine
 """
 
 import os
-import sys
 import hashlib
 import time
 import subprocess
@@ -539,8 +538,8 @@ class SimTimeClockMonitor:
 def get_current_sim_time():
     """Legge il tempo simulato istantaneo dal topic /clock via ROS 2."""
     cmd = (
-        f"source /opt/ros/humble/setup.bash && "
-        f"ros2 topic echo /clock rosgraph_msgs/msg/Clock --once 2>/dev/null"
+        "source /opt/ros/humble/setup.bash && "
+        "ros2 topic echo /clock rosgraph_msgs/msg/Clock --once 2>/dev/null"
     )
     try:
         res = subprocess.run(cmd, shell=True, executable="/bin/bash", capture_output=True, text=True, timeout=5)
@@ -895,7 +894,6 @@ def compute_metrics(target_records, actual_records, clock_records):
     pos_mediana = float(np.median(pos_errs))
     pos_p95 = float(np.percentile(pos_errs, 95))
     pos_max = float(np.max(pos_errs))
-    t_max = float(times_matched[np.argmax(pos_errs)])
 
     mask_1s = times_matched >= 1.0
     pos_max_1s = float(np.max(pos_errs[mask_1s])) if np.any(mask_1s) else pos_max

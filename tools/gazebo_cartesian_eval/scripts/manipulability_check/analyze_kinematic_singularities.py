@@ -139,7 +139,6 @@ def analyze_run(run_key, label):
     # SVD di J_t = U * S * V^T
     U, S, Vt = np.linalg.svd(Jp)
     w_trans = math.sqrt(max(0.0, np.linalg.det(Jp @ Jp.T)))
-    sigma_min = S[2]
     u_min = U[:, 2].copy()
 
     # Convenzione di segno per confronto coerente (forziamo componente x > 0)
