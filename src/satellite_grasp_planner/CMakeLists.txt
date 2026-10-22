@@ -126,73 +126,64 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# ---- Helpers for the uniform test / analysis targets ----
+# add_planner_gtest(<name> [INCLUDE_DIRS ...] [LIBS ...] [DEPS ...])
+#   gtest test/<name>.cpp linked to ${PROJECT_NAME}_core + pinocchio::pinocchio, with the
+#   haptic_dmp_learning / franka_cartesian_control ament deps; LIBS / DEPS are appended after those,
+#   INCLUDE_DIRS (private) are added before them, as in a hand-written target.
+#   Only call it inside if(BUILD_TESTING). New test = one line: add_planner_gtest(test_foo)
+# add_planner_analysis(<name> [INCLUDE_DIRS ...] [LIBS ...] [DEPS ...])
+#   Same for analysis/<name>.cpp (executable), also installed to lib/${PROJECT_NAME}.
+#   Only call it inside if(BUILD_ANALYSIS_TOOLS). New tool = one line: add_planner_analysis(foo)
+# Anything else (different link order, other sources) stays as explicit lines
+# after the call, or the target is written out by hand.
+function(add_planner_gtest name)
+  cmake_parse_arguments(ARG "" "" "INCLUDE_DIRS;LIBS;DEPS" ${ARGN})
+  ament_add_gtest(${name} test/${name}.cpp)
+  if(ARG_INCLUDE_DIRS)
+    target_include_directories(${name} PRIVATE ${ARG_INCLUDE_DIRS})
+  endif()
+  target_link_libraries(${name}
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+    ${ARG_LIBS}
+  )
+  ament_target_dependencies(${name}
+    haptic_dmp_learning
+    franka_cartesian_control
+    ${ARG_DEPS}
+  )
+endfunction()
+
+function(add_planner_analysis name)
+  cmake_parse_arguments(ARG "" "" "INCLUDE_DIRS;LIBS;DEPS" ${ARGN})
+  add_executable(${name} analysis/${name}.cpp)
+  if(ARG_INCLUDE_DIRS)
+    target_include_directories(${name} PRIVATE ${ARG_INCLUDE_DIRS})
+  endif()
+  target_link_libraries(${name}
+    ${PROJECT_NAME}_core
+    pinocchio::pinocchio
+    ${ARG_LIBS}
+  )
+  ament_target_dependencies(${name}
+    haptic_dmp_learning
+    franka_cartesian_control
+    ${ARG_DEPS}
+  )
+  install(TARGETS ${name}
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+endfunction()
+
 # ---- Optional offline analysis executables (default OFF: no existing build changes) ----
 option(BUILD_ANALYSIS_TOOLS "Build offline analysis executables" OFF)
 if(BUILD_ANALYSIS_TOOLS)
-  add_executable(orientation_law_compare analysis/orientation_law_compare.cpp)
-  target_link_libraries(orientation_law_compare
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(orientation_law_compare
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  install(TARGETS orientation_law_compare
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
-
-  add_executable(orientation_path_check analysis/orientation_path_check.cpp)
-  target_link_libraries(orientation_path_check
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(orientation_path_check
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  install(TARGETS orientation_path_check
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
-  add_executable(s3_landscape analysis/s3_landscape.cpp)
-  target_include_directories(s3_landscape PRIVATE analysis)
-  target_link_libraries(s3_landscape
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(s3_landscape
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  install(TARGETS s3_landscape
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
-
-  add_executable(s3_clearance analysis/s3_clearance.cpp)
-  target_link_libraries(s3_clearance
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(s3_clearance
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  install(TARGETS s3_clearance
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
-
-  add_executable(s3_followmargin_check analysis/s3_followmargin_check.cpp)
-  target_link_libraries(s3_followmargin_check
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(s3_followmargin_check
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  install(TARGETS s3_followmargin_check
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
+  add_planner_analysis(orientation_law_compare)
+  add_planner_analysis(orientation_path_check)
+  add_planner_analysis(s3_landscape INCLUDE_DIRS analysis)
+  add_planner_analysis(s3_clearance)
+  add_planner_analysis(s3_followmargin_check)
 endif()
 
 if(BUILD_TESTING)
@@ -200,85 +191,14 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_manipulability test/test_manipulability.cpp)
-  target_link_libraries(test_manipulability
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_manipulability
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_joint_path_simulator test/test_joint_path_simulator.cpp)
-  target_link_libraries(test_joint_path_simulator
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_joint_path_simulator
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_kinematic_feasibility test/test_kinematic_feasibility.cpp)
-  target_link_libraries(test_kinematic_feasibility
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_kinematic_feasibility
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_follow_margin test/test_follow_margin.cpp)
-  target_link_libraries(test_follow_margin
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_follow_margin
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_selection_inputs test/test_selection_inputs.cpp)
-  target_link_libraries(test_selection_inputs
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_selection_inputs
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_start_state test/test_start_state.cpp)
-  target_link_libraries(test_start_state
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_start_state
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_launch_delay test/test_launch_delay.cpp)
-  target_link_libraries(test_launch_delay
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_launch_delay
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_launch_plan test/test_launch_plan.cpp)
-  target_link_libraries(test_launch_plan
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_launch_plan
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
+  add_planner_gtest(test_manipulability)
+  add_planner_gtest(test_joint_path_simulator)
+  add_planner_gtest(test_kinematic_feasibility)
+  add_planner_gtest(test_follow_margin)
+  add_planner_gtest(test_selection_inputs)
+  add_planner_gtest(test_start_state)
+  add_planner_gtest(test_launch_delay)
+  add_planner_gtest(test_launch_plan)
 
   # ---- grasp_planner_node tests (Task 1 of 2) ----
   ament_add_gtest(test_grasp_planner_checks test/test_grasp_planner_checks.cpp)
@@ -286,6 +206,8 @@ if(BUILD_TESTING)
     grasp_planner_ros_lib
   )
 
+  # not uniform: grasp_planner_ros_lib is linked BEFORE ${PROJECT_NAME}_core and rclcpp/satellite_grasp_msgs
+  # come first in the ament deps, so the helper (core first, fixed deps first) would change the order.
   ament_add_gtest(test_grasp_command_conversion test/test_grasp_command_conversion.cpp)
   target_link_libraries(test_grasp_command_conversion
     grasp_planner_ros_lib
@@ -299,53 +221,11 @@ if(BUILD_TESTING)
     franka_cartesian_control
   )
 
-  ament_add_gtest(test_grasp_s3_selection test/test_grasp_s3_selection.cpp)
-  target_link_libraries(test_grasp_s3_selection
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_grasp_s3_selection
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-
-  ament_add_gtest(test_theta_convention test/test_theta_convention.cpp)
-  target_link_libraries(test_theta_convention
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_theta_convention
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  ament_add_gtest(test_grasp_pose_eval test/test_grasp_pose_eval.cpp)
-  target_link_libraries(test_grasp_pose_eval
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_grasp_pose_eval
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  ament_add_gtest(test_approach_clearance test/test_approach_clearance.cpp)
-  target_link_libraries(test_approach_clearance
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_approach_clearance
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
-  ament_add_gtest(test_s3_landscape_log test/test_s3_landscape_log.cpp)
-  target_include_directories(test_s3_landscape_log PRIVATE analysis)
-  target_link_libraries(test_s3_landscape_log
-    ${PROJECT_NAME}_core
-    pinocchio::pinocchio
-  )
-  ament_target_dependencies(test_s3_landscape_log
-    haptic_dmp_learning
-    franka_cartesian_control
-  )
+  add_planner_gtest(test_grasp_s3_selection)
+  add_planner_gtest(test_theta_convention)
+  add_planner_gtest(test_grasp_pose_eval)
+  add_planner_gtest(test_approach_clearance)
+  add_planner_gtest(test_s3_landscape_log INCLUDE_DIRS analysis)
 endif()
 
 ament_export_include_directories(include)
