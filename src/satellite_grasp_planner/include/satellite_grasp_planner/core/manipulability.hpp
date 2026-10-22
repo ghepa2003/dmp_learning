@@ -5,8 +5,6 @@
 #include <Eigen/Dense>
 #include <Eigen/SVD>
 
-#include "franka_cartesian_control/core/robot_model.hpp"
-
 namespace satellite_grasp_planner {
 namespace core {
 
