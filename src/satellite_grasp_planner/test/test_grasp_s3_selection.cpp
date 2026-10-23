@@ -1481,3 +1481,361 @@ TEST(GraspS3MarginTest, ForceKeepsTheCandidateAndWarns) {
   EXPECT_TRUE(r.v2_finalists[0].margin_rejected);  // below threshold, but kept
   EXPECT_TRUE(r.v2_finalists[0].winner);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Characterization (L6a0) of the post-hoc branches of selectGraspS3 that no other test reaches: they pin the CURRENT
+// behaviour (also where it looks odd) before the function is split. Written without being able to build/run: every test
+// asserts the discard strings / counts that prove the target branch was traversed; a test is skipped only if the fixture
+// yields no candidate at all (nothing to characterize).
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// |v_target - v_ee| is of the order of mm/s: with this limit every velocity check fails.
+constexpr double kTinyDv = 1e-9;
+const char kVelocityReason[] = "velocita' relativa";
+
+bool startsWith(const std::string& s, const std::string& prefix) { return s.compare(0, prefix.size(), prefix) == 0; }
+
+bool endsWith(const std::string& s, const std::string& suffix) {
+  return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+/// Rollout-feasible finalists with a finite J: the only ones the eager flow (s3PickWinnerV2) can pick.
+std::size_t countPickable(const S3Result& r) {
+  std::size_t n = 0;
+  for (const auto& f : r.v2_finalists) n += (f.rollout_feasible && std::isfinite(f.j)) ? 1 : 0;
+  return n;
+}
+
+/// Finalists that passed rollout and margin in the lazy flow, in J_static order.
+std::vector<std::size_t> marginAdmissible(const S3Result& r) {
+  std::vector<std::size_t> idx;
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    if (r.v2_finalists[i].margin_done && !r.v2_finalists[i].margin_rejected) idx.push_back(i);
+  }
+  return idx;
+}
+
+}  // namespace
+
+// Characterization (L6a0): v2 lazy flow, velocity discard of every margin-admissible finalist (discard_reason "velocity").
+TEST(GraspS3PosthocCharacterizationTest, V2LazyVelocityDiscardsAdmissibleFinalists) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base_p = v2MarginParams(0.0);  // use_margin, no force => lazy; velocity check off
+  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base_p);
+  if (base.status != S3Result::kSelected) GTEST_SKIP() << "no margin-admissible finalist in this fixture: " << base.note;
+  std::size_t w = base.v2_finalists.size();  // lazy baseline winner = first admissible finalist
+  for (std::size_t i = 0; i < base.v2_finalists.size(); ++i) {
+    if (base.v2_finalists[i].winner) w = i;
+  }
+  ASSERT_LT(w, base.v2_finalists.size());
+
+  S3Params p = base_p;
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = kTinyDv;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const std::vector<std::size_t> adm = marginAdmissible(r);
+  ASSERT_FALSE(adm.empty());
+  EXPECT_EQ(adm.front(), w);  // the margin stage does not depend on the velocity check
+  EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+  EXPECT_NE(r.note.find("v2: no finalist passed the rollout and the post-hoc checks"), std::string::npos) << r.note;
+  EXPECT_EQ(r.posthoc_checks, static_cast<int>(adm.size()));
+  ASSERT_EQ(r.posthoc_log.size(), adm.size());
+  EXPECT_EQ(r.posthoc_dv_m_s, 0.0);  // nothing chosen: not copied from the log
+  for (std::size_t j = 0; j < adm.size(); ++j) {
+    const S3FinalistRecord& f = r.v2_finalists[adm[j]];
+    const S3PosthocEntry& e = r.posthoc_log[j];
+    EXPECT_EQ(f.discard_reason, "velocity") << "finalist " << adm[j];
+    EXPECT_FALSE(f.winner);
+    EXPECT_TRUE(startsWith(e.reject_reason, kVelocityReason)) << e.reject_reason;
+    EXPECT_FALSE(e.accepted);
+    EXPECT_FALSE(e.path_checked);  // the rollout is the path check in v2; the entry is logged before it is marked
+    EXPECT_GT(e.dv_m_s, kTinyDv);
+    EXPECT_EQ(e.k, f.cand.eval.k);
+    EXPECT_EQ(e.theta_rad, f.cand.eval.theta_rad);
+  }
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {  // the others were discarded earlier, by rollout or margin
+    if (std::find(adm.begin(), adm.end(), i) != adm.end()) continue;
+    const S3FinalistRecord& f = r.v2_finalists[i];
+    EXPECT_TRUE(f.rollout_done) << i;
+    EXPECT_TRUE(f.discard_reason == "rollout" || f.discard_reason == "margin") << i << ": " << f.discard_reason;
+  }
+
+  // Limit set to the smallest dv: a later finalist wins, the first one stays discarded (only checkable if its dv is larger).
+  std::size_t jmin = 0;
+  for (std::size_t j = 1; j < r.posthoc_log.size(); ++j) {
+    if (r.posthoc_log[j].dv_m_s < r.posthoc_log[jmin].dv_m_s) jmin = j;
+  }
+  if (jmin > 0) {
+    S3Params p2 = p;
+    p2.delta_v_max_m_s = r.posthoc_log[jmin].dv_m_s;
+    const S3Result r2 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p2);
+    ASSERT_EQ(r2.status, S3Result::kSelected) << r2.note;
+    const std::size_t win = adm[jmin];
+    ASSERT_EQ(r2.v2_finalists.size(), r.v2_finalists.size());
+    EXPECT_NE(win, w);
+    EXPECT_EQ(r2.v2_finalists[w].discard_reason, "velocity");
+    EXPECT_TRUE(r2.v2_finalists[win].winner);
+    EXPECT_EQ(r2.chosen.eval.k, r2.v2_finalists[win].cand.eval.k);
+    EXPECT_EQ(r2.chosen.eval.theta_rad, r2.v2_finalists[win].cand.eval.theta_rad);
+    EXPECT_EQ(r2.posthoc_checks, static_cast<int>(jmin) + 1);
+    ASSERT_EQ(r2.posthoc_log.size(), jmin + 1);
+    EXPECT_TRUE(r2.posthoc_log.back().accepted);
+    EXPECT_DOUBLE_EQ(r2.posthoc_dv_m_s, r.posthoc_log[jmin].dv_m_s);
+    EXPECT_DOUBLE_EQ(r2.posthoc_min_margin_rad, r2.v2_finalists[win].rollout_min_margin_rad);
+    for (std::size_t i = win + 1; i < r2.v2_finalists.size(); ++i) EXPECT_FALSE(r2.v2_finalists[i].rollout_done) << i;  // lazy
+  }
+}
+
+// Characterization (L6a0): v2 eager flow, velocity discard (alive[fi] = 0): the picked finalists fail one by one, none wins.
+TEST(GraspS3PosthocCharacterizationTest, V2EagerVelocityDiscardsPickedFinalistsInOrder) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base_p = v2LooseParams();  // no use_margin => eager
+  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base_p);
+  if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+
+  S3Params p = base_p;
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = kTinyDv;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const std::size_t pickable = countPickable(r);
+  ASSERT_GE(pickable, 1u);
+  EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+  EXPECT_NE(r.note.find("v2: no finalist passed the rollout and the post-hoc checks"), std::string::npos) << r.note;
+  ASSERT_EQ(r.posthoc_log.size(), pickable);
+  EXPECT_EQ(r.posthoc_checks, static_cast<int>(pickable));
+  EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
+  // the first pick is the finalist the run without velocity check chose
+  EXPECT_EQ(r.posthoc_log.front().k, base.chosen.eval.k);
+  EXPECT_EQ(r.posthoc_log.front().theta_rad, base.chosen.eval.theta_rad);
+  for (const S3PosthocEntry& e : r.posthoc_log) {
+    EXPECT_TRUE(startsWith(e.reject_reason, kVelocityReason)) << e.reject_reason;
+    EXPECT_FALSE(e.accepted);
+    EXPECT_FALSE(e.path_checked);
+    EXPECT_GT(e.dv_m_s, kTinyDv);
+    int matches = 0;  // each logged check belongs to exactly one pickable finalist
+    for (const S3FinalistRecord& f : r.v2_finalists) {
+      if (f.rollout_feasible && std::isfinite(f.j) && f.cand.eval.k == e.k && f.cand.eval.theta_rad == e.theta_rad) ++matches;
+    }
+    EXPECT_EQ(matches, 1);
+  }
+  for (const S3FinalistRecord& f : r.v2_finalists) {
+    EXPECT_FALSE(f.winner);
+    EXPECT_TRUE(f.discard_reason.empty()) << f.discard_reason;  // eager: discard_reason is never set (lazy only)
+  }
+  int ranked_velocity = 0;  // the discard reason is on the accepted candidate, visible in ranked
+  for (const S3Candidate& c : r.ranked) ranked_velocity += startsWith(c.reject_reason, kVelocityReason) ? 1 : 0;
+  EXPECT_EQ(ranked_velocity, static_cast<int>(pickable));
+}
+
+// Characterization (L6a0): v2 with max_posthoc_candidates = 0 (lazy ~l.689 and eager ~l.774): winner taken without any check.
+TEST(GraspS3PosthocCharacterizationTest, V2MaxPosthocZeroSelectsWithoutAnyCheck) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params eager_base_p = v2LooseParams();
+  const S3Result eager_base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, eager_base_p);
+  const S3Params lazy_base_p = v2MarginParams(0.0);
+  const S3Result lazy_base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, lazy_base_p);
+  const bool eager_ok = eager_base.status == S3Result::kSelected;
+  const bool lazy_ok = lazy_base.status == S3Result::kSelected;
+  if (!eager_ok && !lazy_ok) GTEST_SKIP() << "no v2 candidate in this fixture: " << eager_base.note << " / " << lazy_base.note;
+
+  // With the velocity check on and an impossible limit, any check would fail: kSelected proves that none was made.
+  auto checkNoPosthoc = [&](const S3Params& base_params, const S3Result& base) {
+    S3Params p = base_params;
+    p.posthoc_velocity_check = true;
+    p.delta_v_max_m_s = kTinyDv;
+    p.max_posthoc_candidates = 0;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+    EXPECT_EQ(r.posthoc_checks, 0);
+    EXPECT_TRUE(r.posthoc_log.empty());
+    EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
+    EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
+    EXPECT_TRUE(r.chosen.reject_reason.empty()) << r.chosen.reject_reason;
+    EXPECT_EQ(r.chosen.eval.k, base.chosen.eval.k);
+    EXPECT_EQ(r.chosen.eval.theta_rad, base.chosen.eval.theta_rad);
+    EXPECT_EQ(r.chosen.eval.wrist_flip, base.chosen.eval.wrist_flip);
+    int winners = 0;
+    for (const S3FinalistRecord& f : r.v2_finalists) {
+      winners += f.winner ? 1 : 0;
+      EXPECT_TRUE(f.discard_reason.empty() || f.discard_reason == "rollout" || f.discard_reason == "margin") << f.discard_reason;
+    }
+    EXPECT_EQ(winners, 1);
+    EXPECT_EQ(r.rollouts_done, base.rollouts_done);
+  };
+  if (eager_ok) checkNoPosthoc(eager_base_p, eager_base);
+  if (lazy_ok) checkNoPosthoc(lazy_base_p, lazy_base);
+}
+
+// Characterization (L6a0): v2 with the post-hoc cap reached (lazy ~l.694 and eager ~l.779): max_posthoc_candidates = 1, first discarded.
+TEST(GraspS3PosthocCharacterizationTest, V2MaxPosthocCapStopsAfterFirstDiscard) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  S3Params eager_p = v2LooseParams();
+  eager_p.posthoc_velocity_check = true;
+  eager_p.delta_v_max_m_s = kTinyDv;
+  S3Params lazy_p = v2MarginParams(0.0);
+  lazy_p.posthoc_velocity_check = true;
+  lazy_p.delta_v_max_m_s = kTinyDv;
+  // Uncapped runs (max_posthoc_candidates 10 > finalists_n 4): every checkable finalist is checked and discarded.
+  const S3Result eager_all = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, eager_p);
+  const S3Result lazy_all = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, lazy_p);
+  const bool eager_ok = eager_all.posthoc_log.size() >= 2;  // a second check is needed to hit the cap
+  const std::vector<std::size_t> adm = marginAdmissible(lazy_all);
+  const bool lazy_ok = adm.size() >= 2;
+  if (!eager_ok && !lazy_ok) GTEST_SKIP() << "fewer than 2 checkable finalists in this fixture (eager " << eager_all.posthoc_log.size()
+                                          << ", lazy " << adm.size() << "): the cap cannot be reached";
+
+  if (eager_ok) {
+    S3Params p = eager_p;
+    p.max_posthoc_candidates = 1;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+    EXPECT_EQ(r.posthoc_checks, 1);
+    ASSERT_EQ(r.posthoc_log.size(), 1u);  // the uncapped run logs >= 2: the cap stopped the loop
+    EXPECT_TRUE(startsWith(r.posthoc_log[0].reject_reason, kVelocityReason)) << r.posthoc_log[0].reject_reason;
+    EXPECT_EQ(r.posthoc_log[0].k, eager_all.posthoc_log[0].k);
+    EXPECT_EQ(r.posthoc_log[0].theta_rad, eager_all.posthoc_log[0].theta_rad);
+    EXPECT_DOUBLE_EQ(r.posthoc_log[0].dv_m_s, eager_all.posthoc_log[0].dv_m_s);
+    EXPECT_NE(r.note.find("1 post-hoc checks)"), std::string::npos) << r.note;
+    EXPECT_EQ(r.rollouts_done, eager_all.rollouts_done);  // eager: all rollouts are done before the post-hoc stage
+    for (const S3FinalistRecord& f : r.v2_finalists) EXPECT_FALSE(f.winner);
+  }
+  if (lazy_ok) {
+    S3Params p = lazy_p;
+    p.max_posthoc_candidates = 1;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+    EXPECT_EQ(r.posthoc_checks, 1);
+    ASSERT_EQ(r.posthoc_log.size(), 1u);
+    EXPECT_TRUE(startsWith(r.posthoc_log[0].reject_reason, kVelocityReason)) << r.posthoc_log[0].reject_reason;
+    EXPECT_EQ(r.v2_finalists[adm[0]].discard_reason, "velocity");
+    // The second admissible finalist was rolled out and passed margin, then the cap stopped the loop before its check:
+    // not discarded, no finalist after it was rolled out.
+    EXPECT_TRUE(r.v2_finalists[adm[1]].margin_done);
+    EXPECT_TRUE(r.v2_finalists[adm[1]].discard_reason.empty()) << r.v2_finalists[adm[1]].discard_reason;
+    EXPECT_FALSE(r.v2_finalists[adm[1]].winner);
+    EXPECT_EQ(r.rollouts_done, static_cast<int>(adm[1]) + 1);
+    for (std::size_t i = adm[1] + 1; i < r.v2_finalists.size(); ++i) EXPECT_FALSE(r.v2_finalists[i].rollout_done) << i;
+  }
+}
+
+// Characterization (L6a0): legacy with max_posthoc_candidates == 0 (~l.826): the best ranked candidate is taken, no check made.
+TEST(GraspS3PosthocCharacterizationTest, LegacyMaxPosthocZeroSelectsRankedFrontWithoutAnyCheck) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base_p = looseParams();
+  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base_p);
+  if (base.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << base.note;
+
+  S3Params p = base_p;
+  p.posthoc_velocity_check = true;  // with an impossible limit and one check allowed the status would be kPosthocFailed
+  p.posthoc_path_check = true;
+  p.delta_v_max_m_s = kTinyDv;
+  p.max_posthoc_candidates = 0;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+  EXPECT_EQ(r.posthoc_checks, 0);
+  EXPECT_TRUE(r.posthoc_log.empty());
+  EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
+  EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
+  ASSERT_FALSE(r.ranked.empty());
+  EXPECT_EQ(r.chosen.eval.k, r.ranked.front().eval.k);
+  EXPECT_EQ(r.chosen.eval.theta_rad, r.ranked.front().eval.theta_rad);
+  EXPECT_EQ(r.chosen.cost, r.ranked.front().cost);
+  EXPECT_TRUE(r.chosen.reject_reason.empty()) << r.chosen.reject_reason;
+  EXPECT_EQ(r.chosen.eval.k, base.chosen.eval.k);  // same winner as the run without post-hoc stage
+  EXPECT_EQ(r.chosen.eval.theta_rad, base.chosen.eval.theta_rad);
+  EXPECT_TRUE(r.forced_violations.empty());
+}
+
+// Characterization (L6a0): legacy force + force_ignore_constraints, every post-hoc check fails (~l.817-825): fallback to the forced candidate.
+TEST(GraspS3PosthocCharacterizationTest, LegacyForceIgnoreFallbackAfterPosthocDiscardsAll) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  S3Params p = looseParams();
+  p.force = true;
+  p.force_k = 0;
+  p.force_theta_deg = 0.0;
+  p.force_ignore_constraints = true;  // the forced candidate is accepted whatever its a-priori verdict
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = kTinyDv;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.evaluations, 1);
+  ASSERT_EQ(r.posthoc_log.size(), 1u);
+  const S3PosthocEntry& e = r.posthoc_log.front();
+  EXPECT_EQ(r.posthoc_checks, 1);
+  EXPECT_TRUE(startsWith(e.reject_reason, kVelocityReason)) << e.reject_reason;
+  EXPECT_FALSE(e.accepted);
+  EXPECT_GT(e.dv_m_s, kTinyDv);
+  // The failure is reported, not obeyed: kSelected on the forced candidate, with the log entry copied into the result.
+  EXPECT_EQ(r.status, S3Result::kSelected) << r.note;
+  EXPECT_EQ(r.chosen.eval.k, e.k);
+  EXPECT_EQ(r.chosen.eval.theta_rad, e.theta_rad);
+  EXPECT_TRUE(startsWith(r.chosen.reject_reason, kVelocityReason)) << r.chosen.reject_reason;
+  EXPECT_EQ(r.posthoc_dv_m_s, e.dv_m_s);
+  EXPECT_EQ(r.posthoc_min_margin_rad, e.min_margin_rad);
+  EXPECT_TRUE(endsWith(r.forced_violations, "post-hoc: " + e.reject_reason)) << r.forced_violations;
+  EXPECT_TRUE(r.forced);
+}
+
+// Characterization (L6a0): v2 force + force_ignore_constraints, no finalist passes (~l.810-814): the candidate is taken anyway.
+TEST(GraspS3PosthocCharacterizationTest, V2ForceIgnoreFallbackAfterNoFinalistPasses) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+  if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+  const double theta_deg = base.chosen.eval.theta_rad * 180.0 / M_PI;
+  if (std::abs(theta_deg) > 180.0) GTEST_SKIP() << "winner theta outside [-180, 180]";
+
+  S3Params p = v2LooseParams();
+  p.force = true;
+  p.force_k = static_cast<int>(base.chosen.eval.k);
+  p.force_theta_deg = theta_deg;
+  p.force_flip = base.chosen.eval.wrist_flip ? 1 : 0;
+  p.posthoc_velocity_check = true;  // the forced finalist fails the velocity check (or the rollout)
+  p.delta_v_max_m_s = kTinyDv;
+
+  const S3Result strict = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_EQ(strict.status, S3Result::kPosthocFailed) << strict.note;  // without force_ignore_constraints: reported as failure
+
+  p.force_ignore_constraints = true;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.v2_finalists.size(), 1u);
+  const S3FinalistRecord& f = r.v2_finalists.front();
+  EXPECT_EQ(r.evaluations, 1);
+  EXPECT_TRUE(f.rollout_done);
+  EXPECT_EQ(r.status, S3Result::kSelected) << r.note;
+  EXPECT_EQ(r.chosen.eval.k, f.cand.eval.k);
+  EXPECT_EQ(r.chosen.eval.theta_rad, f.cand.eval.theta_rad);
+  EXPECT_FALSE(f.winner);  // chosen by the fallback, not by a passing check: no finalist is flagged as winner
+  EXPECT_TRUE(endsWith(r.forced_violations, "v2: no finalist passed the rollout / post-hoc checks")) << r.forced_violations;
+  // The v2 fallback does not copy anything from the post-hoc log (the legacy one does).
+  EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
+  EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
+  const bool checked = f.rollout_feasible && std::isfinite(f.j);  // otherwise the eager flow has nothing to pick
+  EXPECT_EQ(r.posthoc_checks, checked ? 1 : 0);
+  ASSERT_EQ(r.posthoc_log.size(), checked ? 1u : 0u);
+  if (checked) {
+    EXPECT_TRUE(startsWith(r.posthoc_log[0].reject_reason, kVelocityReason)) << r.posthoc_log[0].reject_reason;
+    EXPECT_FALSE(r.posthoc_log[0].accepted);
+  }
+}
