@@ -1,8 +1,6 @@
 #include "satellite_grasp_planner/core/selection_inputs.hpp"
 
-#include <cmath>
 #include <iomanip>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
