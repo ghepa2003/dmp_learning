@@ -1286,7 +1286,7 @@ TEST(GraspS3MarginTest, Run15LegacyWinnerUnchanged) {
   REQUIRE_URDF_OR_SKIP();
   const char* home = std::getenv("HOME");
   const std::string weights =
-      std::string(home ? home : "/root") + "/thesis_ws/runs/20261015_095418_fit_demo_20261014T150851/weights_demo_params.yaml";
+      std::string(home ? home : "/root") + "/thesis_ws/tests/golden/g25/weights_demo_params.yaml";
   if (!std::ifstream(weights).good()) GTEST_SKIP() << "RUN15 demo parameters not found: " << weights;
 
   SatelliteSnapshot snap;

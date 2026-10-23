@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    const std::string weights_dir = "runs/20261015_095418_fit_demo_20261014T150851";
+    const std::string weights_dir = "tests/golden/g25";
     const std::string demo_params = weights_dir + "/weights_demo_params.yaml";
     const std::string urdf = "fer_flat_effort.urdf";
 
