@@ -33,17 +33,26 @@ void validateStartJoints(const std::vector<double>& values, const RobotModel::Jo
   }
 }
 
-StartState makeStartStateFromOverride(const std::vector<double>& values, const std::string& urdf_path) {
-  std::ifstream urdf(urdf_path);
+std::string readUrdfText(const std::string& path, const std::string& error_prefix) {
+  std::ifstream urdf(path);
   if (!urdf.is_open()) {
-    throw std::runtime_error("makeStartStateFromOverride: cannot open URDF " + urdf_path);
+    throw std::runtime_error(error_prefix + "cannot open URDF " + path);
   }
   std::stringstream text;
   text << urdf.rdbuf();
+  return text.str();
+}
+
+std::shared_ptr<RobotModel> makeFerRobotModel(const std::string& urdf_path, const std::string& error_prefix) {
+  const std::string urdf_text = readUrdfText(urdf_path, error_prefix);
   std::vector<std::string> joint_names;
   for (int i = 1; i <= RobotModel::kNumJoints; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
-  const RobotModel robot(text.str(), joint_names, "fer_hand_tcp");
-  validateStartJoints(values, robot.jointLowerLimits(), robot.jointUpperLimits());
+  return std::make_shared<RobotModel>(urdf_text, joint_names, "fer_hand_tcp");
+}
+
+StartState makeStartStateFromOverride(const std::vector<double>& values, const std::string& urdf_path) {
+  const std::shared_ptr<RobotModel> robot = makeFerRobotModel(urdf_path, "makeStartStateFromOverride: ");
+  validateStartJoints(values, robot->jointLowerLimits(), robot->jointUpperLimits());
 
   StartState s;
   for (int i = 0; i < RobotModel::kNumJoints; ++i) s.q(i) = values[static_cast<std::size_t>(i)];

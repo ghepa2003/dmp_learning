@@ -21,6 +21,7 @@
 #include <coal/shape/geometric_shapes.h>
 
 #include "haptic_dmp_learning/core/math_utils.hpp"
+#include "satellite_grasp_planner/core/start_state.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -544,11 +545,7 @@ HandMesh loadHandMeshFile(const std::string& path) {
 }
 
 HandMesh loadHandCollisionMesh(const std::string& urdf_path) {
-  std::ifstream f(urdf_path);
-  if (!f) throw std::runtime_error("cannot open URDF " + urdf_path);
-  std::stringstream buf;
-  buf << f.rdbuf();
-  const std::string uri = handCollisionMeshUri(buf.str());  // throws on <origin> / scale
+  const std::string uri = handCollisionMeshUri(readUrdfText(urdf_path));  // throws on <origin> / scale
   const char* ap = std::getenv("AMENT_PREFIX_PATH");
   if (!ap) throw std::runtime_error("AMENT_PREFIX_PATH is not set: cannot resolve " + uri);
   return loadHandMeshFile(resolvePackageUri(uri, ap));

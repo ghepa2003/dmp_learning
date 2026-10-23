@@ -4,6 +4,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "haptic_dmp_learning/core/math_utils.hpp"
+
 namespace satellite_grasp_planner {
 namespace ros_wrapper {
 
@@ -54,7 +56,7 @@ void checkQRefOnAxis(const Eigen::Quaterniond& q_ref, const Eigen::Vector3d& rot
   const Eigen::AngleAxisd aa(q_ref.normalized());
   const Eigen::Vector3d v = aa.angle() * aa.axis();
   const double off_rad = (v - v.dot(axis) * axis).norm();
-  const double off_deg = off_rad * 180.0 / M_PI;
+  const double off_deg = haptic_dmp_learning::core::radToDeg(off_rad);
   if (off_deg > tol_deg) {
     std::ostringstream m;
     m << "satellite_q_ref is not a rotation about satellite_rotation_axis (orthogonal component "

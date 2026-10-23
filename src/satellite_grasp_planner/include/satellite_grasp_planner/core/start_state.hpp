@@ -7,6 +7,7 @@
  *        live here (RobotModel + Eigen only, no ROS) so they are unit-testable.
  */
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,15 @@ namespace core {
 
 /// Name of the planner's ROS parameter (double[7], fer_joint1..7 order; empty = readyPose).
 inline constexpr const char* kStartJointsParameterName = "start_joints_override_rad";
+
+/// Whole file @p path as text (the URDFs of the planner are read with it).
+/// @throws std::runtime_error "<error_prefix>cannot open URDF <path>" if the file cannot be opened.
+std::string readUrdfText(const std::string& path, const std::string& error_prefix = "");
+
+/// RobotModel of the Franka FER from @p urdf_path: joints fer_joint1..7, end-effector frame "fer_hand_tcp".
+/// @throws std::runtime_error as readUrdfText(); whatever the RobotModel constructor throws on a bad URDF.
+std::shared_ptr<franka_cartesian_control::core::RobotModel> makeFerRobotModel(const std::string& urdf_path,
+                                                                              const std::string& error_prefix = "");
 
 struct StartState {
   franka_cartesian_control::core::RobotModel::JointVector q =

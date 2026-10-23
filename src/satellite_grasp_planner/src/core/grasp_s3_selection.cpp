@@ -182,7 +182,7 @@ unsigned s3AprioriRejectMaskV2(const PoseEvaluation& eval, double d_pos_m, const
   if (!eval.feasible_basic) mask |= kRejectIk;
   if (!(d_pos_m <= params.r_trust_m)) mask |= kRejectRTrust;
   if (params.max_start_goal_deg < 180.0 &&
-      eval.dist_to_demo.ori_rad * 180.0 / haptic_dmp_learning::core::kPi > params.max_start_goal_deg) {
+      haptic_dmp_learning::core::radToDeg(eval.dist_to_demo.ori_rad) > params.max_start_goal_deg) {
     mask |= kRejectStartGoal;
   }
   return mask;
@@ -359,8 +359,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     return c;
   };
 
-  const double step = params.theta_step_deg * kPi / 180.0;
-  const double refine = params.theta_refine_step_deg * kPi / 180.0;
+  const double step = haptic_dmp_learning::core::degToRad(params.theta_step_deg);
+  const double refine = haptic_dmp_learning::core::degToRad(params.theta_refine_step_deg);
   const int n_theta = static_cast<int>(std::ceil(2.0 * kPi / step - 1e-9));  // [-pi, pi)
   const int n_refine = static_cast<int>(std::floor(step / refine + 1e-9));
 
@@ -368,8 +368,8 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
   if (params.force) {
     // Test mode: only this candidate; everything after the scans (ranking, post-hoc, outputs) is unchanged.
     const GraspPointId kf = kAllK[params.force_k];
-    const double theta_f = params.force_theta_deg * kPi / 180.0;
-    const double psi_f = params.force_psi_deg * kPi / 180.0;
+    const double theta_f = haptic_dmp_learning::core::degToRad(params.force_theta_deg);
+    const double psi_f = haptic_dmp_learning::core::degToRad(params.force_psi_deg);
     S3Candidate c = evalOne(kf, theta_f, false, psi_f, params.force_flip);
     if (c.passes_constraints) {
       accepted.push_back(c);
@@ -426,7 +426,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
   const std::shared_ptr<RobotModel> robot_ptr(&robot, [](RobotModel*) {});  // non-owning
 
   int chosen_idx = -1;
-  const double cluster_rad = params.posthoc_cluster_deg * kPi / 180.0;
+  const double cluster_rad = haptic_dmp_learning::core::degToRad(params.posthoc_cluster_deg);
   std::vector<std::pair<int, double>> checked;  // (k, theta) of the candidates already examined
   auto inCluster = [&](const S3Candidate& c) {
     for (const auto& kt : checked) {
@@ -434,6 +434,30 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       if (thetaDistRad(c.eval.theta_rad, kt.second) < cluster_rad) return true;
     }
     return false;
+  };
+  // Post-hoc velocity check shared by the legacy loop and both v2 flows (lazy, eager). Without the check: true, dv and
+  // @p entry untouched. With it: fills entry.v_ee / v_target / dv_m_s and @p dv; false = discarded (reject_reason set
+  // on @p c and on the entry, entry appended to the log). What the discard also does (continue, discard_reason,
+  // alive) stays at the call site.
+  auto posthocVelocityPasses = [&](S3Candidate& c, S3PosthocEntry& entry, double& dv) -> bool {
+    if (!params.posthoc_velocity_check) return true;
+    const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
+    const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
+    const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
+        model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
+    dv = (v_t - v_ee).norm();
+    entry.v_ee = v_ee;
+    entry.v_target = v_t;
+    entry.dv_m_s = dv;
+    if (!(dv <= params.delta_v_max_m_s)) {
+      std::ostringstream m;
+      m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
+      c.reject_reason = m.str();
+      entry.reject_reason = c.reject_reason;
+      res.posthoc_log.push_back(entry);
+      return false;
+    }
+    return true;
   };
   for (std::size_t i = 0; !v2 && i < accepted.size() && chosen_idx < 0 && res.posthoc_checks < params.max_posthoc_candidates;
        ++i) {
@@ -446,24 +470,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     entry.theta_rad = c.eval.theta_rad;
     entry.wait_s = c.wait_s;
     double dv = 0.0;
-    if (params.posthoc_velocity_check) {
-      const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-      const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
-      const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
-          model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
-      dv = (v_t - v_ee).norm();
-      entry.v_ee = v_ee;
-      entry.v_target = v_t;
-      entry.dv_m_s = dv;
-      if (!(dv <= params.delta_v_max_m_s)) {
-        std::ostringstream m;
-        m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
-        c.reject_reason = m.str();
-        entry.reject_reason = c.reject_reason;
-        res.posthoc_log.push_back(entry);
-        continue;
-      }
-    }
+    if (!posthocVelocityPasses(c, entry, dv)) continue;
     double margin = 0.0;
     if (params.posthoc_path_check) {
       // applyRoll(qn, psi + (flip ? pi : 0)): rolls about the same axis (z_tcp) commute.
@@ -639,6 +646,18 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       f.clearance_rejected = !(cr.min_mm_no_tail >= params.min_clearance_mm);
       return cr.min_mm_no_tail;
     };
+    // Accept in the rollout-based flows (lazy, eager): the rollout is the path check, @p rec becomes the winner.
+    auto acceptRolloutWinner = [&](S3FinalistRecord& rec, S3PosthocEntry& entry, double dv) {
+      entry.path_checked = true;  // the rollout is the path check
+      entry.path_ok = true;
+      entry.min_margin_rad = rec.rollout_min_margin_rad;
+      entry.accepted = true;
+      res.posthoc_log.push_back(entry);
+      chosen_idx = rec.accepted_index;
+      rec.winner = true;
+      res.posthoc_dv_m_s = dv;
+      res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
+    };
     // ---- use_margin without force: lazy flow in J_static order (S3Params::use_margin). Per finalist: rollout (w, margin
     //      on [start, tau]) -> followMargin -> clearance -> post-hoc velocity check; stop at the first that passes all of
     //      them. No rollout is done on the finalists after it. ----
@@ -679,34 +698,11 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
         entry.theta_rad = c.eval.theta_rad;
         entry.wait_s = c.wait_s;
         double dv = 0.0;
-        if (params.posthoc_velocity_check) {
-          const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-          const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
-          const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
-              model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
-          dv = (v_t - v_ee).norm();
-          entry.v_ee = v_ee;
-          entry.v_target = v_t;
-          entry.dv_m_s = dv;
-          if (!(dv <= params.delta_v_max_m_s)) {
-            std::ostringstream m;
-            m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
-            c.reject_reason = m.str();
-            entry.reject_reason = c.reject_reason;
-            res.posthoc_log.push_back(entry);
-            rec.discard_reason = "velocity";
-            continue;
-          }
+        if (!posthocVelocityPasses(c, entry, dv)) {
+          rec.discard_reason = "velocity";
+          continue;
         }
-        entry.path_checked = true;  // the rollout above is the path check
-        entry.path_ok = true;
-        entry.min_margin_rad = rec.rollout_min_margin_rad;
-        entry.accepted = true;
-        res.posthoc_log.push_back(entry);
-        chosen_idx = rec.accepted_index;
-        rec.winner = true;
-        res.posthoc_dv_m_s = dv;
-        res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
+        acceptRolloutWinner(rec, entry, dv);
       }
       if (chosen_idx < 0 && any_rollout_ok && !any_admissible) {
         // No finalist satisfies rollout + margin (+ clearance): kNoCandidate, no fallback.
@@ -787,34 +783,11 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       entry.theta_rad = c.eval.theta_rad;
       entry.wait_s = c.wait_s;
       double dv = 0.0;
-      if (params.posthoc_velocity_check) {
-        const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-        const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
-        const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
-            model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
-        dv = (v_t - v_ee).norm();
-        entry.v_ee = v_ee;
-        entry.v_target = v_t;
-        entry.dv_m_s = dv;
-        if (!(dv <= params.delta_v_max_m_s)) {
-          std::ostringstream m;
-          m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
-          c.reject_reason = m.str();
-          entry.reject_reason = c.reject_reason;
-          res.posthoc_log.push_back(entry);
-          alive[fi] = 0;
-          continue;
-        }
+      if (!posthocVelocityPasses(c, entry, dv)) {
+        alive[fi] = 0;
+        continue;
       }
-      entry.path_checked = true;  // the rollout above is the path check
-      entry.path_ok = true;
-      entry.min_margin_rad = rec.rollout_min_margin_rad;
-      entry.accepted = true;
-      res.posthoc_log.push_back(entry);
-      chosen_idx = rec.accepted_index;
-      rec.winner = true;
-      res.posthoc_dv_m_s = dv;
-      res.posthoc_min_margin_rad = rec.rollout_min_margin_rad;
+      acceptRolloutWinner(rec, entry, dv);
     }
     res.v2_finalists = fin;
     if (!lazy && use_clearance && !params.force && chosen_idx < 0 && any_rollout_feasible && !clearance_any_admissible) {

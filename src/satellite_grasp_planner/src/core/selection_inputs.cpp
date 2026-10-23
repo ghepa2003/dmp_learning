@@ -1,7 +1,6 @@
 #include "satellite_grasp_planner/core/selection_inputs.hpp"
 
 #include <cmath>
-#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -10,7 +9,8 @@
 
 #include "haptic_dmp_learning/core/demo_params.hpp"
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
-#include "satellite_grasp_planner/core/manipulability.hpp"
+#include "haptic_dmp_learning/core/math_utils.hpp"
+#include "satellite_grasp_planner/core/grasp_pose_eval.hpp"
 
 namespace satellite_grasp_planner {
 namespace core {
@@ -65,15 +65,7 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
   in.weights_sha256 = demo.weights_sha256;  // == actual file hash: verifyWeightsAlignment threw otherwise
 
   // b) robot, q0, p0 (from the robot kinematics)
-  std::ifstream urdf(urdf_path);
-  if (!urdf.is_open()) {
-    throw std::runtime_error("buildSelectionInputs: cannot open URDF " + urdf_path);
-  }
-  std::stringstream urdf_text;
-  urdf_text << urdf.rdbuf();
-  std::vector<std::string> joint_names;
-  for (int i = 1; i <= RobotModel::kNumJoints; ++i) joint_names.push_back("fer_joint" + std::to_string(i));
-  in.robot = std::make_shared<RobotModel>(urdf_text.str(), joint_names, "fer_hand_tcp");
+  in.robot = makeFerRobotModel(urdf_path, "buildSelectionInputs: ");
 
   const bool q0_from_start = start.has_value();
   const bool q0_from_demo = !q0_from_start && demo.start_joints_rad.has_value();
@@ -123,9 +115,8 @@ SelectionInputs buildSelectionInputs(const std::string& demo_params_path, const 
   }
   RobotModel::JointVector q_end;
   for (int i = 0; i < RobotModel::kNumJoints; ++i) q_end(i) = (*demo.end_joints_rad)[static_cast<std::size_t>(i)];
-  in.robot->update(q_end, zero);
-  in.w_trans_demo = wTransFromJacobian(in.robot->jacobian().topRows<3>());
-  in.robot->update(in.q0, zero);  // leave the robot at q0
+  in.w_trans_demo = wTransAt(*in.robot, q_end);  // update(q_end, 0) + wTransFromJacobian(J.topRows<3>())
+  in.robot->update(in.q0, zero);                 // leave the robot at q0
 
   // f) flags
   in.contact_assumed_at_end = !demo.t_contact_s.has_value();
@@ -161,8 +152,8 @@ std::string describeStartState(const SelectionInputs& in) {
   o << "start state: q0 source = " << in.q0_source << "\n"
     << "  q0 = " << jointsStr(in.q0) << "\n"
     << "  p0 = " << vecStr(in.p0) << "\n"
-    << "  distance from readyPose: joints norm " << d.joint_norm_rad << " rad (" << d.joint_norm_rad * 180.0 / M_PI
-    << " deg), max " << d.joint_max_rad << " rad (" << d.joint_max_rad * 180.0 / M_PI << " deg) on fer_joint"
+    << "  distance from readyPose: joints norm " << d.joint_norm_rad << " rad (" << haptic_dmp_learning::core::radToDeg(d.joint_norm_rad)
+    << " deg), max " << d.joint_max_rad << " rad (" << haptic_dmp_learning::core::radToDeg(d.joint_max_rad) << " deg) on fer_joint"
     << d.joint_max_index << "; task space " << d.task_mm << " mm\n"
     << "  provenance:";
   for (const std::string& line : in.provenance) o << "\n    - " << line;
