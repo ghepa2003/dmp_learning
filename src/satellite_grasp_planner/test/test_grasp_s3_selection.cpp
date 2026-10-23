@@ -1564,31 +1564,6 @@ TEST(GraspS3PosthocCharacterizationTest, V2LazyVelocityDiscardsAdmissibleFinalis
     EXPECT_TRUE(f.rollout_done) << i;
     EXPECT_TRUE(f.discard_reason == "rollout" || f.discard_reason == "margin") << i << ": " << f.discard_reason;
   }
-
-  // Limit set to the smallest dv: a later finalist wins, the first one stays discarded (only checkable if its dv is larger).
-  std::size_t jmin = 0;
-  for (std::size_t j = 1; j < r.posthoc_log.size(); ++j) {
-    if (r.posthoc_log[j].dv_m_s < r.posthoc_log[jmin].dv_m_s) jmin = j;
-  }
-  if (jmin > 0) {
-    S3Params p2 = p;
-    p2.delta_v_max_m_s = r.posthoc_log[jmin].dv_m_s;
-    const S3Result r2 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p2);
-    ASSERT_EQ(r2.status, S3Result::kSelected) << r2.note;
-    const std::size_t win = adm[jmin];
-    ASSERT_EQ(r2.v2_finalists.size(), r.v2_finalists.size());
-    EXPECT_NE(win, w);
-    EXPECT_EQ(r2.v2_finalists[w].discard_reason, "velocity");
-    EXPECT_TRUE(r2.v2_finalists[win].winner);
-    EXPECT_EQ(r2.chosen.eval.k, r2.v2_finalists[win].cand.eval.k);
-    EXPECT_EQ(r2.chosen.eval.theta_rad, r2.v2_finalists[win].cand.eval.theta_rad);
-    EXPECT_EQ(r2.posthoc_checks, static_cast<int>(jmin) + 1);
-    ASSERT_EQ(r2.posthoc_log.size(), jmin + 1);
-    EXPECT_TRUE(r2.posthoc_log.back().accepted);
-    EXPECT_DOUBLE_EQ(r2.posthoc_dv_m_s, r.posthoc_log[jmin].dv_m_s);
-    EXPECT_DOUBLE_EQ(r2.posthoc_min_margin_rad, r2.v2_finalists[win].rollout_min_margin_rad);
-    for (std::size_t i = win + 1; i < r2.v2_finalists.size(); ++i) EXPECT_FALSE(r2.v2_finalists[i].rollout_done) << i;  // lazy
-  }
 }
 
 // Characterization (L6a0): v2 eager flow, velocity discard (alive[fi] = 0): the picked finalists fail one by one, none wins.
@@ -1838,4 +1813,260 @@ TEST(GraspS3PosthocCharacterizationTest, V2ForceIgnoreFallbackAfterNoFinalistPas
     EXPECT_TRUE(startsWith(r.posthoc_log[0].reject_reason, kVelocityReason)) << r.posthoc_log[0].reject_reason;
     EXPECT_FALSE(r.posthoc_log[0].accepted);
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Characterization (L6a0b): branches left uncovered by the L6a0 tests (gcov): velocity check passed, a-priori r_trust /
+// start_goal rejections, legacy path violation, lazy rollout discard. Same rules: the discard string / counter that proves
+// the branch was traversed is asserted unconditionally; a test whose fixture cannot reach the branch is SKIPPED (= failure).
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// |v_target - v_ee| is far below this: every velocity check passes.
+constexpr double kPassDv = 1e3;
+const char kPathViolationReason[] = "percorso: violazione limiti";
+
+/// v2 (flow decided by @p base_p: lazy with use_margin, else eager): velocity check ON with a limit that always passes. The
+/// winner must be the one of the run without velocity check, and the measured dv must reach the result.
+void expectV2VelocityPassPropagatesDv(S3TestSetup& s, const S3Params& base_p) {
+  const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base_p);  // velocity check off
+  if (ref.status != S3Result::kSelected) {
+    GTEST_SKIP() << "no v2 winner in this fixture: " << ref.note;
+  }
+  S3Params p = base_p;
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = kPassDv;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+  ASSERT_EQ(r.posthoc_checks, 1);
+  ASSERT_EQ(r.posthoc_log.size(), 1u);
+  const S3PosthocEntry& e = r.posthoc_log.front();
+  EXPECT_TRUE(e.accepted);
+  EXPECT_TRUE(e.reject_reason.empty()) << e.reject_reason;
+  EXPECT_GT(e.dv_m_s, 0.0);
+  EXPECT_LT(e.dv_m_s, kPassDv);
+  EXPECT_GT(e.v_target.norm(), 0.0);  // the check really measured something (surface velocity of the spinning cube)
+  EXPECT_DOUBLE_EQ(e.dv_m_s, (e.v_target - e.v_ee).norm());
+  EXPECT_TRUE(e.path_checked);  // the rollout is the path check (acceptRolloutWinner)
+  EXPECT_TRUE(e.path_ok);
+  EXPECT_EQ(r.posthoc_dv_m_s, e.dv_m_s);  // dv travels lambda -> acceptRolloutWinner -> result
+  const S3FinalistRecord* win = nullptr;
+  int winners = 0;
+  for (const S3FinalistRecord& f : r.v2_finalists) {
+    if (f.winner) {
+      win = &f;
+      ++winners;
+    }
+  }
+  ASSERT_EQ(winners, 1);
+  EXPECT_TRUE(win->discard_reason.empty()) << win->discard_reason;
+  EXPECT_EQ(r.posthoc_min_margin_rad, win->rollout_min_margin_rad);
+  EXPECT_EQ(e.min_margin_rad, win->rollout_min_margin_rad);
+  EXPECT_EQ(e.k, win->cand.eval.k);
+  EXPECT_EQ(e.theta_rad, win->cand.eval.theta_rad);
+  EXPECT_EQ(r.chosen.eval.k, ref.chosen.eval.k);
+  EXPECT_EQ(r.chosen.eval.theta_rad, ref.chosen.eval.theta_rad);
+  EXPECT_EQ(r.chosen.eval.wrist_flip, ref.chosen.eval.wrist_flip);
+  EXPECT_TRUE(r.chosen.reject_reason.empty()) << r.chosen.reject_reason;
+}
+
+}  // namespace
+
+// Characterization (L6a0b): legacy, velocity check active and PASSED (posthocVelocityPasses `return true` ~l.460, dv -> res.posthoc_dv_m_s).
+TEST(GraspS3PosthocCharacterizationTest, LegacyVelocityPassKeepsMeasuredDv) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params ref_p = looseParams();  // no post-hoc stage
+  const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, ref_p);
+  if (ref.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << ref.note;
+
+  S3Params p = ref_p;
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = kPassDv;
+  p.posthoc_path_check = false;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+  ASSERT_EQ(r.posthoc_checks, 1);
+  ASSERT_EQ(r.posthoc_log.size(), 1u);
+  const S3PosthocEntry& e = r.posthoc_log.front();
+  EXPECT_TRUE(e.accepted);
+  EXPECT_TRUE(e.reject_reason.empty()) << e.reject_reason;
+  EXPECT_GT(e.dv_m_s, 0.0);
+  EXPECT_LT(e.dv_m_s, kPassDv);
+  EXPECT_GT(e.v_target.norm(), 0.0);
+  EXPECT_DOUBLE_EQ(e.dv_m_s, (e.v_target - e.v_ee).norm());
+  EXPECT_FALSE(e.path_checked);           // path check off
+  EXPECT_EQ(r.posthoc_dv_m_s, e.dv_m_s);  // legacy accept branch: the dv set by the lambda goes to the result
+  EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
+  EXPECT_EQ(r.chosen.eval.k, ref.chosen.eval.k);
+  EXPECT_EQ(r.chosen.eval.theta_rad, ref.chosen.eval.theta_rad);
+  EXPECT_EQ(r.chosen.eval.wrist_flip, ref.chosen.eval.wrist_flip);
+  EXPECT_EQ(e.k, r.chosen.eval.k);
+  EXPECT_EQ(e.theta_rad, r.chosen.eval.theta_rad);
+}
+
+// Characterization (L6a0b): v2 lazy flow, velocity check PASSED: acceptRolloutWinner propagates dv and the rollout margin (~l.650-660, call ~705).
+TEST(GraspS3PosthocCharacterizationTest, V2LazyVelocityPassPropagatesDvToResult) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  expectV2VelocityPassPropagatesDv(s, v2MarginParams(0.0));
+}
+
+// Characterization (L6a0b): v2 eager flow, velocity check PASSED: acceptRolloutWinner propagates dv and the rollout margin (~l.650-660, call ~790).
+TEST(GraspS3PosthocCharacterizationTest, V2EagerVelocityPassPropagatesDvToResult) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  expectV2VelocityPassPropagatesDv(s, v2LooseParams());
+}
+
+// Characterization (L6a0b): evalOne a-priori rejection "r_trust" (~l.323-324, needs a converged IK): the reference winner, forced and made untrusted.
+TEST(GraspS3PosthocCharacterizationTest, PriorRejectionRTrust) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params ref_p = looseParams();  // w_hat_min = margin_min_rad = 0: only ik and r_trust can reject
+  const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, ref_p);
+  ASSERT_EQ(ref.status, S3Result::kSelected) << ref.note;  // the winner has a converged IK
+  const double theta_deg = ref.chosen.eval.theta_rad * 180.0 / M_PI;
+  ASSERT_LE(std::abs(theta_deg), 180.0) << "winner theta outside [-180, 180]";
+
+  std::vector<S3EvalRecord> log;
+  s.ctx.eval_log = &log;
+  S3Params p = ref_p;
+  p.r_trust_m = 1e-6;  // d_pos of any candidate is centimetres
+  p.force = true;
+  p.force_k = static_cast<int>(ref.chosen.eval.k);
+  p.force_theta_deg = theta_deg;
+  p.force_flip = ref.chosen.eval.wrist_flip ? 1 : 0;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const std::size_t ki = static_cast<std::size_t>(ref.chosen.eval.k);
+  EXPECT_EQ(r.evaluations, 1);
+  ASSERT_EQ(log.size(), 1u);
+  EXPECT_FALSE(log[0].passes_constraints);
+  EXPECT_NE(log[0].reject_mask & kRejectRTrust, 0u);
+  EXPECT_EQ(log[0].reject_mask & kRejectIk, 0u);
+  EXPECT_EQ(r.status, S3Result::kNoCandidate);
+  EXPECT_TRUE(r.ranked.empty());  // not among the accepted candidates
+  EXPECT_NE(r.note.find("r_trust"), std::string::npos) << r.note;
+  EXPECT_FALSE(r.best_per_k[ki].passes_constraints);
+  EXPECT_NE(r.best_per_k[ki].reject_mask & kRejectRTrust, 0u);
+  EXPECT_TRUE(r.best_per_k[ki].eval.feasible_basic);  // converged IK within limits: the cascade got past "ik"
+  EXPECT_TRUE(r.best_per_k[ki].eval.ik.converged);
+  EXPECT_EQ(r.best_per_k[ki].reject_reason, "r_trust");  // first failing constraint of the cascade
+}
+
+// Characterization (L6a0b): evalOne a-priori rejection "start_goal" (~l.325-326, v2 max_start_goal_deg, needs a converged IK): the reference winner, forced.
+TEST(GraspS3PosthocCharacterizationTest, PriorRejectionStartGoal) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params ref_p = v2LooseParams();  // v2: only ik, r_trust (100 m here) and start_goal can reject
+  const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, ref_p);
+  ASSERT_EQ(ref.status, S3Result::kSelected) << ref.note;  // the winner has a converged IK
+  const double theta_deg = ref.chosen.eval.theta_rad * 180.0 / M_PI;
+  ASSERT_LE(std::abs(theta_deg), 180.0) << "winner theta outside [-180, 180]";
+
+  std::vector<S3EvalRecord> log;
+  s.ctx.eval_log = &log;
+  S3Params p = ref_p;
+  p.max_start_goal_deg = 0.0;  // any candidate rotated at all from FK(q_start) exceeds it
+  p.force = true;
+  p.force_k = static_cast<int>(ref.chosen.eval.k);
+  p.force_theta_deg = theta_deg;
+  p.force_flip = ref.chosen.eval.wrist_flip ? 1 : 0;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const std::size_t ki = static_cast<std::size_t>(ref.chosen.eval.k);
+  EXPECT_EQ(r.evaluations, 1);
+  ASSERT_EQ(log.size(), 1u);
+  EXPECT_FALSE(log[0].passes_constraints);
+  EXPECT_NE(log[0].reject_mask & kRejectStartGoal, 0u);
+  EXPECT_EQ(log[0].reject_mask & kRejectIk, 0u);
+  EXPECT_EQ(r.status, S3Result::kNoCandidate);
+  EXPECT_TRUE(r.ranked.empty());
+  EXPECT_TRUE(r.v2_finalists.empty());
+  EXPECT_NE(r.note.find("start_goal"), std::string::npos) << r.note;
+  EXPECT_FALSE(r.best_per_k[ki].passes_constraints);
+  EXPECT_NE(r.best_per_k[ki].reject_mask & kRejectStartGoal, 0u);
+  EXPECT_TRUE(r.best_per_k[ki].eval.feasible_basic);  // converged IK within limits: the cascade got past "ik"
+  EXPECT_TRUE(r.best_per_k[ki].eval.ik.converged);
+  EXPECT_EQ(r.best_per_k[ki].reject_reason, "start_goal");  // r_trust cannot fail (100 m)
+}
+
+// Characterization (L6a0b): legacy post-hoc path check FAILS (~l.483-490): "percorso: violazione limiti", logged, next candidate examined.
+TEST(GraspS3PosthocCharacterizationTest, LegacyPathViolationLogsAndContinues) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  // Lever without touching production code: q_start with joint 7 beyond its upper limit. The TCP lies on the joint-7 axis (p0
+  // unchanged), the IK clamps its seed to the limits, and the path simulation starts AT q_start (JointPathSimulator: output[0].q
+  // == q0), so every path check violates the limit by at least this amount (cf. KinematicFeasibilityTest.StartBeyondJointLimit...).
+  const double excess = 0.1;
+  s.q_start(6) = s.robot->jointUpperLimits()(6) + excess;
+  S3Params p = looseParams();
+  p.posthoc_path_check = true;
+  p.posthoc_velocity_check = false;
+  p.posthoc_cluster_deg = 0.0;  // no cluster skip: consecutive ranked candidates are examined
+  p.max_posthoc_candidates = 3;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no IK-feasible candidate from this q_start: " << r.note;
+  const std::size_t expected = std::min<std::size_t>(3, r.ranked.size());
+  ASSERT_GE(expected, 2u);  // a second candidate is needed to show that the loop goes on
+  EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+  EXPECT_EQ(static_cast<std::size_t>(r.posthoc_checks), expected);
+  ASSERT_EQ(r.posthoc_log.size(), expected);
+  for (std::size_t i = 0; i < expected; ++i) {
+    const S3PosthocEntry& e = r.posthoc_log[i];
+    EXPECT_TRUE(startsWith(e.reject_reason, kPathViolationReason)) << i << ": " << e.reject_reason;
+    EXPECT_NE(e.reject_reason.find(" rad (giunto "), std::string::npos) << e.reject_reason;
+    EXPECT_TRUE(e.path_checked) << i;
+    EXPECT_FALSE(e.path_ok) << i;
+    EXPECT_FALSE(e.accepted) << i;
+    EXPECT_EQ(e.dv_m_s, 0.0) << i;            // velocity check off
+    EXPECT_EQ(e.min_margin_rad, 0.0) << i;    // not set on a violation
+    EXPECT_EQ(e.k, r.ranked[i].eval.k) << i;  // examined in ranked order
+    EXPECT_EQ(e.theta_rad, r.ranked[i].eval.theta_rad) << i;
+    EXPECT_EQ(r.ranked[i].reject_reason, e.reject_reason) << i;
+    // the violation printed is at least the excess of the start configuration (6 significant digits)
+    const double printed = std::stod(e.reject_reason.substr(std::string(kPathViolationReason).size() + 1));
+    EXPECT_GE(printed, excess - 1e-5) << e.reject_reason;
+  }
+  EXPECT_NE(r.note.find("post-hoc candidates failed"), std::string::npos) << r.note;
+}
+
+// Characterization (L6a0b): v2 lazy flow, rollout infeasible (rec.discard_reason = "rollout", ~l.671-674): every finalist is discarded in turn.
+TEST(GraspS3PosthocCharacterizationTest, V2LazyRolloutInfeasibleFinalistIsDiscarded) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const double excess = 0.1;  // same lever as LegacyPathViolationLogsAndContinues: every rollout starts beyond joint 7's limit
+  s.q_start(6) = s.robot->jointUpperLimits()(6) + excess;
+  const S3Params p = v2MarginParams(0.0);  // use_margin, no force => lazy
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  if (r.v2_finalists.size() < 2) GTEST_SKIP() << "fewer than 2 finalists from this q_start: " << r.note;
+  // rollouts_done == finalists: the loop went on after each discard instead of stopping at the first
+  EXPECT_EQ(r.rollouts_done, static_cast<int>(r.v2_finalists.size()));
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    const S3FinalistRecord& f = r.v2_finalists[i];
+    EXPECT_TRUE(f.rollout_done) << i;
+    EXPECT_FALSE(f.rollout_feasible) << i;
+    EXPECT_EQ(f.discard_reason, "rollout") << i;
+    EXPECT_FALSE(f.margin_done) << i;  // lazy: the margin is evaluated only after a feasible rollout
+    EXPECT_FALSE(f.winner) << i;
+  }
+  EXPECT_EQ(r.margin_evals_done, 0);
+  EXPECT_EQ(r.posthoc_checks, 0);
+  EXPECT_TRUE(r.posthoc_log.empty());
+  EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
+  EXPECT_NE(r.note.find("v2: no finalist passed the rollout and the post-hoc checks"), std::string::npos) << r.note;
 }
