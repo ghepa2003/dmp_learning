@@ -262,6 +262,99 @@ double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& cont
   return ((goal - p0) - delta_g_demo).norm();
 }
 
+namespace {
+
+/// Note of the lazy use_margin flow when no finalist is admissible: counts of the discards by margin / clearance and the
+/// finalist with the best margin. Read only.
+std::string noAdmissibleMarginNote(const std::vector<S3FinalistRecord>& fin, const S3Result& res, const S3Params& params,
+                                   double kRad2Deg) {
+  const S3FinalistRecord* best = nullptr;
+  int n_margin = 0, n_clearance = 0;
+  for (const auto& f : fin) {
+    if (f.discard_reason == "margin") ++n_margin;
+    if (f.discard_reason == "clearance") ++n_clearance;
+    if (f.margin_done && (!best || f.margin_deg > best->margin_deg)) best = &f;
+  }
+  std::ostringstream m;
+  m << "v2 margin/clearance: no finalist is admissible (" << fin.size() << " finalists, " << res.rollouts_done
+    << " rollouts, " << n_margin << " discarded by margin < " << params.min_margin_deg << " deg, " << n_clearance
+    << " by clearance < " << params.min_clearance_mm << " mm)";
+  if (best) {
+    m << "; best margin " << best->margin_deg << " deg for k=" << static_cast<int>(best->cand.eval.k)
+      << " branch " << (best->cand.eval.wrist_flip ? 'B' : 'A') << " theta="
+      << best->cand.eval.theta_rad * kRad2Deg << " deg (fer_joint" << best->margin_joint + 1 << " at t_rel "
+      << best->margin_t_rel_s << " s)";
+  }
+  return m.str();
+}
+
+/// res.ranked (first kRankedSize candidates by cost; v2: the rollout-feasible finalists by J) and res.best_per_k.
+void fillRankedAndBestPerK(S3Result& res, const std::vector<S3Candidate>& accepted, bool v2,
+                           const S3Candidate (&least_bad)[4], const bool (&have_least)[4]) {
+  const std::size_t n_ranked = std::min(kRankedSize, accepted.size());
+  // n_ranked <= accepted.size() by construction (std::min); with an empty `accepted` n_ranked == 0 and assign(begin, begin) is
+  // valid. cppcheck reports containerOutOfBounds here because it does not propagate std::min (false positive).
+  res.ranked.assign(accepted.begin(), accepted.begin() + static_cast<std::ptrdiff_t>(n_ranked));
+  if (v2) {  // finalists that passed the rollout, by J
+    std::vector<const S3FinalistRecord*> fs;
+    for (const auto& f : res.v2_finalists) {
+      if (f.rollout_feasible) fs.push_back(&f);
+    }
+    std::stable_sort(fs.begin(), fs.end(), [](const S3FinalistRecord* a, const S3FinalistRecord* b) { return a->j < b->j; });
+    res.ranked.clear();
+    for (const auto* f : fs) {
+      if (res.ranked.size() >= kRankedSize) break;
+      res.ranked.push_back(accepted[static_cast<std::size_t>(f->accepted_index)]);
+    }
+  }
+  for (int ki = 0; ki < 4; ++ki) {
+    bool found = false;
+    for (const auto& c : accepted) {
+      if (static_cast<int>(c.eval.k) == ki) {
+        res.best_per_k[static_cast<std::size_t>(ki)] = c;
+        found = true;
+        break;
+      }
+    }
+    if (!found && have_least[ki]) res.best_per_k[static_cast<std::size_t>(ki)] = least_bad[ki];
+    if (!found && !have_least[ki]) res.best_per_k[static_cast<std::size_t>(ki)].eval.k = kAllK[ki];
+  }
+}
+
+/// res.status, res.note and res.chosen from the outcome of the selection stages.
+void finalizeStatus(S3Result& res, const std::vector<S3Candidate>& accepted, const S3Params& params, bool v2,
+                    bool clearance_no_candidate, const std::string& clearance_note, int chosen_idx) {
+  if (clearance_no_candidate) {
+    res.status = S3Result::kNoCandidate;
+    res.note = clearance_note;
+  } else if (accepted.empty()) {
+    res.status = S3Result::kNoCandidate;
+    if (!params.force) {
+      res.note = v2 ? "no candidate satisfies the v2 constraints (ik, d_pos <= r_trust, start_goal <= max_start_goal_deg)"
+                    : "no candidate satisfies the constraints (ik, w_hat >= w_hat_min, margin >= margin_min, d_pos <= r_trust)";
+    }
+  } else if (chosen_idx < 0) {
+    res.status = S3Result::kPosthocFailed;
+    std::ostringstream m;
+    m << "all " << res.posthoc_checks << " post-hoc candidates failed (of " << accepted.size()
+      << " constraint-passing); first: " << accepted.front().reject_reason;
+    res.note = (params.force ? "FORCED candidate: " : "") + m.str();
+    if (v2) {
+      int n_feasible = 0;
+      for (const auto& f : res.v2_finalists) n_feasible += f.rollout_feasible ? 1 : 0;
+      std::ostringstream m2;
+      m2 << "v2: no finalist passed the rollout and the post-hoc checks (" << res.v2_finalists.size()
+         << " finalists, " << n_feasible << " rollout-feasible, " << res.posthoc_checks << " post-hoc checks)";
+      res.note = (params.force ? "FORCED candidate: " : "") + m2.str();
+    }
+  } else {
+    res.status = S3Result::kSelected;
+    res.chosen = accepted[static_cast<std::size_t>(chosen_idx)];
+  }
+}
+
+}  // namespace
+
 S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& model, RobotModel& robot,
                        const RobotModel::JointVector& q_start, const DemoReference& demo,
                        const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
@@ -707,24 +800,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       if (chosen_idx < 0 && any_rollout_ok && !any_admissible) {
         // No finalist satisfies rollout + margin (+ clearance): kNoCandidate, no fallback.
         clearance_no_candidate = true;  // (flag shared with the clearance constraint: it selects kNoCandidate + clearance_note)
-        const S3FinalistRecord* best = nullptr;
-        int n_margin = 0, n_clearance = 0;
-        for (const auto& f : fin) {
-          if (f.discard_reason == "margin") ++n_margin;
-          if (f.discard_reason == "clearance") ++n_clearance;
-          if (f.margin_done && (!best || f.margin_deg > best->margin_deg)) best = &f;
-        }
-        std::ostringstream m;
-        m << "v2 margin/clearance: no finalist is admissible (" << fin.size() << " finalists, " << res.rollouts_done
-          << " rollouts, " << n_margin << " discarded by margin < " << params.min_margin_deg << " deg, " << n_clearance
-          << " by clearance < " << params.min_clearance_mm << " mm)";
-        if (best) {
-          m << "; best margin " << best->margin_deg << " deg for k=" << static_cast<int>(best->cand.eval.k)
-            << " branch " << (best->cand.eval.wrist_flip ? 'B' : 'A') << " theta="
-            << best->cand.eval.theta_rad * kRad2Deg << " deg (fer_joint" << best->margin_joint + 1 << " at t_rel "
-            << best->margin_t_rel_s << " s)";
-        }
-        clearance_note = m.str();
+        clearance_note = noAdmissibleMarginNote(fin, res, params, kRad2Deg);
       }
       any_rollout_feasible = any_rollout_ok;
     }
@@ -826,62 +902,9 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
   if (!v2 && params.max_posthoc_candidates == 0 && !accepted.empty()) chosen_idx = 0;  // max_posthoc_candidates == 0: no post-hoc stage
 
   // ---- outputs ----
-  const std::size_t n_ranked = std::min(kRankedSize, accepted.size());
-  // n_ranked <= accepted.size() by construction (std::min); with an empty `accepted` n_ranked == 0 and assign(begin, begin) is
-  // valid. cppcheck reports containerOutOfBounds here because it does not propagate std::min (false positive).
-  res.ranked.assign(accepted.begin(), accepted.begin() + static_cast<std::ptrdiff_t>(n_ranked));
-  if (v2) {  // finalists that passed the rollout, by J
-    std::vector<const S3FinalistRecord*> fs;
-    for (const auto& f : res.v2_finalists) {
-      if (f.rollout_feasible) fs.push_back(&f);
-    }
-    std::stable_sort(fs.begin(), fs.end(), [](const S3FinalistRecord* a, const S3FinalistRecord* b) { return a->j < b->j; });
-    res.ranked.clear();
-    for (const auto* f : fs) {
-      if (res.ranked.size() >= kRankedSize) break;
-      res.ranked.push_back(accepted[static_cast<std::size_t>(f->accepted_index)]);
-    }
-  }
-  for (int ki = 0; ki < 4; ++ki) {
-    bool found = false;
-    for (const auto& c : accepted) {
-      if (static_cast<int>(c.eval.k) == ki) {
-        res.best_per_k[static_cast<std::size_t>(ki)] = c;
-        found = true;
-        break;
-      }
-    }
-    if (!found && have_least[ki]) res.best_per_k[static_cast<std::size_t>(ki)] = least_bad[ki];
-    if (!found && !have_least[ki]) res.best_per_k[static_cast<std::size_t>(ki)].eval.k = kAllK[ki];
-  }
+  fillRankedAndBestPerK(res, accepted, v2, least_bad, have_least);
 
-  if (clearance_no_candidate) {
-    res.status = S3Result::kNoCandidate;
-    res.note = clearance_note;
-  } else if (accepted.empty()) {
-    res.status = S3Result::kNoCandidate;
-    if (!params.force) {
-      res.note = v2 ? "no candidate satisfies the v2 constraints (ik, d_pos <= r_trust, start_goal <= max_start_goal_deg)"
-                    : "no candidate satisfies the constraints (ik, w_hat >= w_hat_min, margin >= margin_min, d_pos <= r_trust)";
-    }
-  } else if (chosen_idx < 0) {
-    res.status = S3Result::kPosthocFailed;
-    std::ostringstream m;
-    m << "all " << res.posthoc_checks << " post-hoc candidates failed (of " << accepted.size()
-      << " constraint-passing); first: " << accepted.front().reject_reason;
-    res.note = (params.force ? "FORCED candidate: " : "") + m.str();
-    if (v2) {
-      int n_feasible = 0;
-      for (const auto& f : res.v2_finalists) n_feasible += f.rollout_feasible ? 1 : 0;
-      std::ostringstream m2;
-      m2 << "v2: no finalist passed the rollout and the post-hoc checks (" << res.v2_finalists.size()
-         << " finalists, " << n_feasible << " rollout-feasible, " << res.posthoc_checks << " post-hoc checks)";
-      res.note = (params.force ? "FORCED candidate: " : "") + m2.str();
-    }
-  } else {
-    res.status = S3Result::kSelected;
-    res.chosen = accepted[static_cast<std::size_t>(chosen_idx)];
-  }
+  finalizeStatus(res, accepted, params, v2, clearance_no_candidate, clearance_note, chosen_idx);
   return res;
 }
 
