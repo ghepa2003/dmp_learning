@@ -187,7 +187,7 @@ TEST(GraspPoseEvalTest, Se3Distance) {
   EXPECT_THROW(se3Distance(p, q, p, q, 1.0, -1.0), std::invalid_argument);
 }
 
-// Hand-verified orientation convention (cube_satellite_model.cpp:55-75), real parameters, theta = 0:
+// Hand-verified orientation convention (cube_satellite_model.cpp:54-74), real parameters, theta = 0:
 // approach z_tcp = -n = (-1,0,0) for every k, fingers y_tcp = -r_k (radial), x_tcp = y_tcp x z_tcp.
 TEST(GraspPoseEvalTest, GraspPoseConventionByHand) {
   struct Row {

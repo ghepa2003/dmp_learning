@@ -64,7 +64,7 @@ struct SelectionInputs {
  *     assumed at the end), delta_g_demo and contact_to_end_offset from the demo.
  *     @throws std::invalid_argument if |delta_g| < 1e-9 or tau_contact_s exceeds the template tau.
  *  e) w_trans_demo = translational manipulability at end_joints_rad (product of the singular values of the
- *     3x7 translational Jacobian block, as tools/compute_w_trans_demo.py). @throws std::runtime_error if the
+ *     3x7 translational Jacobian block, as tools/legacy/compute_w_trans_demo.py). @throws std::runtime_error if the
  *     demo_params has no end_joints_rad: the fit must be redone with the recorded joint states.
  *     The robot is put back at q0 afterwards.
  *  f) provenance: one line per value used (tau_contact, delta_g, contact_to_end_offset, q0, p0,

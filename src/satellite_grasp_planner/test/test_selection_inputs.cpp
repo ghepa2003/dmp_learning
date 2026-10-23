@@ -331,7 +331,7 @@ TEST_F(SelectionInputsTest, DescribeStartStateReportsSourceQ0P0AndDistance) {
   std::cout << text << std::endl;
 }
 
-// (d) w_trans_demo from the end joints, cross-checked against compute_w_trans_demo.py.
+// (d) w_trans_demo from the end joints, cross-checked against tools/legacy/compute_w_trans_demo.py.
 TEST_F(SelectionInputsTest, WTransDemoFromEndJoints) {
   RobotModel ref = makeRobot();
   dp::DemoParams p = makeFixture(60.0);
@@ -341,7 +341,7 @@ TEST_F(SelectionInputsTest, WTransDemoFromEndJoints) {
   resetRobotToReady(ref);
   EXPECT_NEAR(a.w_trans_demo, wTransFromJacobian(ref.jacobian().topRows<3>()), 1e-12);
 
-  // Value measured with tools/compute_w_trans_demo.py for q = (0.2,-0.6,0.1,-2.0,0.1,1.7,0.7).
+  // Value measured with tools/legacy/compute_w_trans_demo.py for q = (0.2,-0.6,0.1,-2.0,0.1,1.7,0.7).
   RobotModel::JointVector q;
   q << 0.2, -0.6, 0.1, -2.0, 0.1, 1.7, 0.7;
   ref.update(q, RobotModel::JointVector::Zero());

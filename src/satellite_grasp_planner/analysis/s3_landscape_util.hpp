@@ -1,6 +1,6 @@
 #pragma once
 
-// Pure helpers of the s3_landscape tool (header-only, Eigen only; testable without a URDF).
+// Pure helpers of the s3_landscape tool (header-only; followSampleTimes needs only the standard library; testable without a URDF).
 //
 // Follow arc: after AT_END the executor co-rotates the grasp target with the satellite
 // (haptic_dmp_learning/core/pose_rotation.hpp: rotatePoseAboutAxis, position' = c + R(axis, a)(p - c),

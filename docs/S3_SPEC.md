@@ -48,7 +48,7 @@ selectGraspS3(model, robot, q_start, demo, Δg, ctx, params):           # sel:80
       elif !(eval.w_hat >= w_hat_min)         : reason="w_hat"
       elif !(eval.margins.min_margin >= margin_min_rad): reason="margine"
       elif !(c.d_pos <= r_trust_m)            : reason="r_trust"
-      else: passes=true; max_w_hat_passing=max(.., w_hat)
+      else: passes=true
             c.wait = planLaunch(snapshot, t_now, θ, τ, D).delay_s         # sel:115
             c.cost = c.d + ε·c.wait                                       # sel:116
       if !passes and (primo per k, o d_pos < least_bad[k].d_pos): least_bad[k]=c   # sel:118-122
@@ -306,18 +306,17 @@ I test sono stati **letti, non eseguiti**. I test del selettore saltano (`GTEST_
 | Rifiuto per `margine` e per `r_trust` | — | **NESSUN TEST** |
 | Griglia: `n_theta`, `n_refine`, conteggio 880, raffinamento solo per k con accettati | — | **NESSUN TEST** (nessuna asserzione su `evaluations`, solo `> 0` e uguaglianza fra due run) |
 | `least_bad` / `best_per_k` quando nessun candidato passa | `GraspS3Test.BestPerKHasFourDistinctPoints` (solo le etichette k) | **NESSUN TEST** del contenuto (reason, d_pos minimo) |
-| `max_w_hat_passing` | — | **NESSUN TEST** |
 | `max_posthoc_candidates == 0` (sceglie `accepted[0]`) | — | **NESSUN TEST** |
 | `planGraspAndLaunchS1` (riferimento demo `p0+Δg`/orientazione FK(q0), τ_launch, goal = pos + off, `t_now` = snapshot + elapsed, controllo snapshot) | nessun test chiama `planGraspAndLaunchS1` (`grep` su `SP/test`, `HDL/test`) | **NESSUN TEST** |
 | Mappatura su `GraspCommand` | `GraspCommandConversionTest.*` | sì (campi), non la selezione |
 
-**Formule del codice non coperte** (riassunto): `d_pos`; cascata dei vincoli e rifiuti `margine`/`r_trust`; conteggio/raffinamento della griglia; spareggi di `better()` (margine, ‖q−q_start‖) e di `lessCost`; preparazione di `prodmp_at_contact`; path check dentro il selettore; `least_bad`; `max_w_hat_passing`; `max_posthoc_candidates==0`; `s3Distance` con `w_o>0` in valore; tutta `planGraspAndLaunchS1`.
+**Formule del codice non coperte** (riassunto): `d_pos`; cascata dei vincoli e rifiuti `margine`/`r_trust`; conteggio/raffinamento della griglia; spareggi di `better()` (margine, ‖q−q_start‖) e di `lessCost`; preparazione di `prodmp_at_contact`; path check dentro il selettore; `least_bad`; `max_posthoc_candidates==0`; `s3Distance` con `w_o>0` in valore; tutta `planGraspAndLaunchS1`.
 
 ---
 
 ## 5. Contatori di scarto: cosa emette il planner
 
-In `S3Result` (`hpp:89-102`): `evaluations`, `max_w_hat_passing`, `posthoc_checks`, `posthoc_log` (un `S3PosthocEntry` per controllo: k, θ, wait, dv, v_ee, v_target, path_ok, min_margin, accepted, reason), `ranked` (≤ 20 passanti, annotati), `best_per_k[4]`, `note`.
+In `S3Result` (`hpp:244-265`): `evaluations`, `posthoc_checks`, `posthoc_log` (un `S3PosthocEntry` per controllo: k, θ, wait, dv, v_ee, v_target, path_ok, min_margin, accepted, reason), `ranked` (≤ 20 passanti, annotati), `best_per_k[4]`, `note`.
 
 - **Contatori per motivo** (ik / w_hat / margine / r_trust): **non esistono**. Il motivo è una stringa in `S3Candidate::reject_reason` (`sel:105-111`) ma il candidato scartato viene conservato solo se è il "meno cattivo" del suo k (`least_bad`, minimo `d_pos` fra gli scartati, **indipendente dal motivo**, `sel:118-122`) e compare in `best_per_k` solo se quel k non ha passanti (`sel:252`). Gli altri scarti sono persi.
 - **Scarti post-hoc** (velocità, percorso): per candidato in `posthoc_log` (solo i controllati, non i saltati dal clustering) e nelle stringhe `"velocita' relativa X m/s > Y"`, `"percorso: violazione limiti X rad (giunto J)"` (J a base 0, `kinematic_feasibility.hpp:26`).

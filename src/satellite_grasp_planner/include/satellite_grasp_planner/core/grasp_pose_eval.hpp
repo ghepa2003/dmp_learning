@@ -3,7 +3,7 @@
 /**
  * @file grasp_pose_eval.hpp
  * @brief Per-candidate evaluation of a grasp pose (k, theta) for the reduced problem (single demo, no
- *        collision, velocity only as a-posteriori check): static pose IK with gripper-symmetry branch,
+ *        collision check in this module, velocity only as a-posteriori check): static pose IK with gripper-symmetry branch,
  *        joint-limit margins, translational manipulability and SE(3) distance to the demo end pose.
  *        Eigen + Pinocchio (via RobotModel) only, NO ROS.
  *

@@ -67,7 +67,7 @@ orientation law sampled at t_i = (i+1)*dt, `JointPathSimulator` + `NullspaceBias
   of the simulator); a `*` marks a violation. w_hat = w_trans / w_trans_demo (`demo.end_joints_rad`).
 - `--psi-ref`: nominal (psi = 0) TCP orientation of the goal grasp (`orientation_nominal_world`); psi(tau) is the rotation of q(tau) about the
   local z relative to it. Without it psi is reported as not computed.
-- Hand-collar distance: not implemented (no collision/distance function in the core used by the planner).
+- Hand-collar distance: not computed by this tool (the planner's v2 clearance constraint, `approachClearance`, is not called here).
 
 Output: table per variant on stdout, `<out>/summary.csv`, `<out>/profile_<law>_<variant>.csv` (t, w_hat, min margin, angle from hold, q1..q7).
 
@@ -141,6 +141,6 @@ The trajectory is the planner's (`timedApproachTrajectory`: start pose, ProDMP +
 ## s3_followmargin_check
 
 Riproduce con `followMargin()` i margini previsti di G16 / step 0c (13.26, 17.67, 35.00, 35.00, 20.84, 28.63 gradi, tolleranza 0.1) e stampa
-joint e istante per il confronto con `_diag_1019/g16/g16_results.csv`. Scenario e provenienza dei valori nel commento in testa a
+joint e istante per il confronto con `_data/diag_audit/_diag_1019/g16/g16_results.csv`. Scenario e provenienza dei valori nel commento in testa a
 `analysis/s3_followmargin_check.cpp`. Da eseguire dalla radice del workspace (`--weights-dir`, `--urdf` con gli stessi default di `step0c_margins`).
 Nota: `margin_follow_rad` del landscape NON e' questa grandezza (IK statica sull'arco, non simulazione): vedi docs/S3_SPEC.md §10.8.

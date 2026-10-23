@@ -5,7 +5,7 @@
  * @brief Predicted minimum joint margin over [start, AT_END + follow_s]: the ProDMP approach rollout continued by a
  *        simulated co-rotation of the grasp target with the satellite (the executor's post_grasp_follow).
  *
- * This is the procedure that produced the G16 / step 0c margins (_diag_1019/step0c_margins.cpp), operation for
+ * This is the procedure that produced the G16 / step 0c margins (_data/diag_audit/_diag_1019/step0c_margins.cpp), operation for
  * operation. It is NOT the "margin_follow_rad" of analysis/s3_landscape.cpp (min of the rollout margin and the margins of
  * hot-started STATIC IK solutions at 7 samples of the follow arc, nullspace reference q_start): that one does not
  * integrate the controller and gives different numbers. Differences, all deliberate here:

@@ -293,7 +293,7 @@ void fillRankedAndBestPerK(S3Result& res, const std::vector<S3Candidate>& accept
                            const S3Candidate (&least_bad)[4], const bool (&have_least)[4]) {
   const std::size_t n_ranked = std::min(kRankedSize, accepted.size());
   // n_ranked <= accepted.size() by construction (std::min); with an empty `accepted` n_ranked == 0 and assign(begin, begin) is
-  // valid. cppcheck reports containerOutOfBounds here because it does not propagate std::min (false positive).
+  // valid.
   res.ranked.assign(accepted.begin(), accepted.begin() + static_cast<std::ptrdiff_t>(n_ranked));
   if (v2) {  // finalists that passed the rollout, by J
     std::vector<const S3FinalistRecord*> fs;

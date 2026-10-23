@@ -2,8 +2,8 @@
 
 /**
  * @file grasp_planner_node.hpp
- * @brief One-shot grasp-command planner (v1, Task 1 of 2 - see DESIGN_NOTES.md's module map). The
- *        executor that consumes GraspCommand is a separate, later task.
+ * @brief One-shot grasp-command planner (see docs/DESIGN_NOTES.md's module map). The GraspCommand it
+ *        publishes is consumed by prodmp_gazebo_executor_node (continuous mode).
  *
  * On the FIRST valid sample of @c satellite_odom_topic, builds a SatelliteSnapshot, runs the
  * (expensive: ~5.2 s Release / ~500 s unoptimized, per DESIGN_NOTES.md) selection off the ROS

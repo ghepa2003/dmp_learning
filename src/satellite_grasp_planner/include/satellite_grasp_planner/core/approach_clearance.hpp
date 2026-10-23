@@ -6,7 +6,7 @@
  *        COMMANDED Cartesian approach trajectory of the TCP. Used by the v2 selection as a constraint
  *        (S3Params::use_clearance); see docs/S3_SPEC.md, section "vincolo di clearance".
  *
- * Model (reproduces _diag_1019/interference/predict_distance.py, predictor T, which predicted the distance measured in
+ * Model (reproduces _data/diag_audit/_diag_1019/interference/predict_distance.py, predictor T, which predicted the distance measured in
  * Gazebo with mean error 0.35 mm and max 1.46 mm on 17 runs without contact; NOT the planner's joint rollout, which
  * is off by 5 mm on average):
  *   - TCP pose (p, q) from the trajectory; hand frame = TCP frame (fer_hand_tcp_joint has rpy 0) with origin

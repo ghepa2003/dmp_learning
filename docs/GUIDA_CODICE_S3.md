@@ -14,6 +14,7 @@ Destinatario: Lorenzo (tesi di automazione, spiegazione al tutor). Stato del cod
   - `LAUNCH` = `src/core/grasp_s3_launch.cpp`, `NODE` = `src/ros/grasp_planner_node.cpp`
 - **Esempio guida**: run `results/margin2_w-5.0` (ω = −5 °/s, centro (0.7, 0, 0.77), `s1.mode=v2`, `branch_rule=rotation`, `use_clearance=true`, `use_margin=true`, `finalists_n=40`; vedi `results/margin2_w-5.0/run_meta.json`). Fonti dei numeri: `planner.log`, `report.txt`, `report.json` nella stessa cartella. Vincitore: k=1, ramo A (`wrist_flip=false`), θ\*=−166.0°, d=86.881 mm, w_static=0.03807, w_rollout=0.04369, margine previsto 35.00° (giunto 6, t_rel −24.47 s), clearance prevista 12.46 mm (dito 1–collare, t_rel −8.37 s), `selection_elapsed` 2.454 s.
 - Etichette: **[M]** misurato nei log, **[C]** calcolato da me a mano con le formule del codice e i numeri dei log (ricalcolabile), **ASSUNTO** = il codice o lo YAML lo dichiarano assunto, **NON CHIARO** = non si capisce dal codice (raccolti in fondo).
+- **Aggiornamento a HEAD `0e51606`**: i numeri di riga e i nomi di questa guida valgono per `d6f55f3`. Da allora: `launch_delay.{hpp,cpp}` è stato fuso in `launch_plan.{hpp,cpp}` (le righe di §1.1, §1.2 e §7 su `launchDelay`/`planLaunch` sono già aggiornate); sono stati tolti `core/manipulability.cpp` e la classe `Manipulability`, i campi `S3Result::max_w_hat_passing`, `S3FinalistRecord::{j_static, clearance_full_mm, rollout_max_violation_rad}` e `FeasibilityResult::{w_trans_final, worst_step, worst_step_fraction, worst_joint_value_rad, worst_joint_limit_rad}`; `selectGraspS3` è stata spezzata in funzioni del namespace anonimo di `grasp_s3_selection.cpp` (`CandidateEvaluator`, `collectCandidates`, `posthocVelocityCheck`, `runLegacyPosthoc`, `selectStaticFinalists`, `fillRankedAndBestPerK`, `finalizeStatus`), per cui i riferimenti `SEL:riga` non corrispondono più al file attuale.
 - Le righe di `docs/S3_SPEC.md` (documento esistente) citano numeri di riga di una versione precedente del codice (`sel:131-151` ecc.): non le ho riverificate; per i numeri di riga fa fede questa guida.
 
 ---
@@ -33,7 +34,7 @@ Destinatario: Lorenzo (tesi di automazione, spiegazione al tutor). Stato del cod
 | `core/kinematic_feasibility.hpp` | `buildApproachTrajectory`, `timedApproachTrajectory`, `checkKinematicFeasibility`, `FeasibilityResult`. |
 | `core/follow_margin.hpp` | `followMargin` (approccio + inseguimento simulato), `FollowApproachState` per riusare lo stato dell'approccio. |
 | `core/approach_clearance.hpp` | Distanza con segno gripper–satellite lungo la traiettoria comandata (`approachClearance`, `ApproachClearanceModel`, loader mesh STL/URDF). |
-| `core/launch_delay.hpp`, `core/launch_plan.hpp` | Attesa prima del lancio (`launchDelay`) e piano di lancio (`planLaunch`, `phaseAt`, `SatelliteSnapshot`). |
+| `core/launch_plan.hpp` | Attesa prima del lancio (`launchDelay`) e piano di lancio (`planLaunch`, `phaseAt`, `SatelliteSnapshot`). |
 | `core/selection_inputs.hpp` | `SelectionInputs` + `buildSelectionInputs`: template ProDMP, robot, q0/p0, Δg demo, `w_trans_demo`, provenienza. |
 | `core/start_state.hpp` | Override della configurazione di partenza (`start_joints_override_rad`), `distanceFromReadyPose`. |
 | `ros/grasp_planner_node.hpp` | Nodo ROS one-shot. |
@@ -51,7 +52,7 @@ Destinatario: Lorenzo (tesi di automazione, spiegazione al tutor). Stato del cod
 | `core/joint_path_simulator.cpp` | 160 | Strategie di ridondanza e integrazione di Eulero. |
 | `core/follow_margin.cpp` | 115 | Margine di giunto su approccio + inseguimento (300 passi). |
 | `core/approach_clearance.cpp` | 544 | Geometria coal (mano convessa, dita box, collare 24 box, cubo), distanza con segno, lettura STL. |
-| `core/launch_delay.cpp`, `core/launch_plan.cpp` | 25, 33 | Formula dell'attesa e piano di lancio. |
+| `core/launch_plan.cpp` | 44 | Formula dell'attesa e piano di lancio. |
 | `core/selection_inputs.cpp`, `core/start_state.cpp` | 173, 73 | Assemblaggio degli ingressi, validazione di q0. |
 | `core/manipulability.cpp` | 19 | Wrapper `Manipulability::wTrans`. |
 | `ros/grasp_planner_node.cpp` | 452 | Parametri ROS → `S3Params`, primo campione odom → thread di selezione → pubblicazione. |
@@ -437,7 +438,7 @@ Funzioni: `approachClearance` (`CLR:263-383`), `ApproachClearanceModel` (`CLR:17
 
 ## 7. Legge di lancio
 
-**Attesa** (`launchDelay`, `src/core/launch_delay.cpp:11-22`):
+**Attesa** (`launchDelay`, `src/core/launch_plan.cpp:16-27`):
 
 ```cpp
 const double T = 2.0 * kPi / std::abs(omega_rad_s);
@@ -450,7 +451,7 @@ return min_delay_s + r;
 
 Cioè `t = (θ\* − θ_now)/ω − τ`, ridotta modulo il periodo `T = 2π/|ω|` nell'intervallo **[min_delay, min_delay + T)** (ω con segno).
 
-**Piano di lancio** (`planLaunch`, `launch_plan.cpp:18-29`): `θ_now = phaseAt(snapshot, t_now)` = `wrapPi(θ_snap + ω(t_now − t_snap))` (righe 13-16); `delay = launchDelay(θ_now, θ\*, ω, τ, min_delay)`; `launch_time = t_now + delay`; `contact_time = launch_time + τ`.
+**Piano di lancio** (`planLaunch`, `launch_plan.cpp:29-41`): `θ_now = phaseAt(snapshot, t_now)` = `wrapPi(θ_snap + ω(t_now − t_snap))` (righe 11-14); `delay = launchDelay(θ_now, θ\*, ω, τ, min_delay)`; `launch_time = t_now + delay`; `contact_time = launch_time + τ`.
 
 **`θ_trig`** (usato dall'executor): `θ_trig = wrapPi(θ\* − ω·τ)` (`satellite_intercept.hpp:596-600`, `InterceptTrigger`, costruttore riga 254, con `wrap2Pi`). Identità: `θ_now + ω·t_wait ≡ θ_trig (mod 2π)` (`docs/S3_SPEC.md` §2.3).
 

@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
       q0(j) = args.q_meas[static_cast<size_t>(j)];
       q_end(j) = (*dp.end_joints_rad)[static_cast<size_t>(j)];
     }
-    // w_trans_demo exactly as buildSelectionInputs / demoReferenceFromEndJoints (grasp_pose_eval.cpp:125)
+    // w_trans_demo exactly as buildSelectionInputs / demoReferenceFromEndJoints (grasp_pose_eval.cpp:133)
     const double w_demo = satellite_grasp_planner::core::demoReferenceFromEndJoints(*robot, q_end).w_trans_demo;
     if (!(w_demo > 0.0)) throw std::runtime_error("w_trans_demo <= 0");
 
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
     const Eigen::Quaterniond q_demo0 = qdmp_file.q0().normalized();
     const Eigen::Quaterniond Q = qdmpFrameOffset(q_hold, q_demo0);
 
-    // ---- position rollout (the planner's, kinematic_feasibility.cpp:38-47) -----------------------------
+    // ---- position rollout (the planner's, kinematic_feasibility.cpp:25-39) -----------------------------
     const double sdt = args.sim_dt;
     const int n = static_cast<int>(std::ceil(tau / sdt));
     hdl::ProDMP prodmp = prodmp_template;

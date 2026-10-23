@@ -63,7 +63,7 @@ constexpr unsigned kBitVelocity = 16u;  // |v_target - v_ee| > delta_v_max (post
 constexpr unsigned kBitPath = 32u;      // checkKinematicFeasibility infeasible (joint limits along the rollout)
 constexpr unsigned kBitFollow = 64u;    // IK failed on one of the follow-arc samples
 
-// Run of 2026-10-15 (tools/s1_run.py:57-60, analysis_s1_1015/calc_top5_final2.cpp:31-46).
+// Run of 2026-10-15 (tools/s1_run.py:74, _data/analysis/analysis_s1_1015/calc_top5_final2.cpp:31-46).
 const char* kRunQStart = "-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398";
 
 // RUN15 snapshot. The tool evaluates at t_now = snap.t_s (it passes snap.t_s as t_now to planGraspAndLaunchS1), so
@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
                    "(informative; depends on --theta-snap-rad/--t-snap-s/--center)\n";
     }
 
-    // ---- context for the psi-rolled evaluations (same glue as planGraspAndLaunchS1, grasp_s3_launch.cpp:36-52) ----
+    // ---- context for the psi-rolled evaluations (same glue as planGraspAndLaunchS1, grasp_s3_launch.cpp:34-51) ----
     const CubeSatelliteModel model(in.cube_params);
     RobotModel& robot = *in.robot;
     robot.update(in.q0, RobotModel::JointVector::Zero());

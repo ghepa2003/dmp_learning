@@ -24,7 +24,7 @@ find_package(franka_cartesian_control REQUIRED)
 
 include_directories(include)
 
-# ---- Level 1 core library (Eigen3 + Pinocchio only, NO ROS) ----
+# ---- Level 1 core library (Eigen3 + Pinocchio + coal, NO ROS) ----
 # Depends on haptic_dmp_learning_core (core::ProDMP, for candidate rollouts)
 # and franka_cartesian_control_core (core::RobotModel, core::VelocityIkSolver,
 # core::computePoseError - reused verbatim for the offline joint-path
@@ -74,7 +74,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-# ---- ROS2 wrapper: one-shot grasp planner node (Task 1 of 2 - see DESIGN_NOTES.md) ----
+# ---- ROS2 wrapper: one-shot grasp planner node (see docs/DESIGN_NOTES.md) ----
 # grasp_planner_ros_lib is split from grasp_planner_node/main so the pure validation
 # (grasp_planner_checks) and the message conversion (grasp_command_conversion) can be linked into
 # tests directly, without needing rclcpp::init(). ${PROJECT_NAME}_core itself stays rclcpp-free.
@@ -199,7 +199,7 @@ if(BUILD_TESTING)
   add_planner_gtest(test_launch_delay)
   add_planner_gtest(test_launch_plan)
 
-  # ---- grasp_planner_node tests (Task 1 of 2) ----
+  # ---- grasp_planner_node tests ----
   ament_add_gtest(test_grasp_planner_checks test/test_grasp_planner_checks.cpp)
   target_link_libraries(test_grasp_planner_checks
     grasp_planner_ros_lib

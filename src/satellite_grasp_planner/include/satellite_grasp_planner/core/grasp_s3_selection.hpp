@@ -5,7 +5,8 @@
  * @brief Reduced-problem grasp selection "S3": pick the (k, theta) whose grasp position is closest to the
  *        deformation of the single demo, subject to manipulability / joint-margin / trust-radius / IK
  *        constraints, with a small penalty on the waiting time. Velocity and path feasibility are only
- *        checked a posteriori. No collision, no e_v term in the cost, no continuous roll search.
+ *        checked a posteriori. Collision: only the optional v2 hand-satellite clearance constraint
+ *        (S3Params::use_clearance, off by default); no e_v term in the cost, no continuous roll search.
  *        Eigen + Pinocchio only, NO ROS.
  *
  *   d_pos = || (goal_cand - p0) - delta_g_demo ||,   goal_cand = grasp position + contact_to_end_offset
@@ -104,7 +105,7 @@ struct S3Params {
   double min_clearance_mm = 2.0;  ///< ASSUMED threshold [mm], finite and >= 0
   double clearance_dt_s = 0.05;   ///< sampling of the window [s], finite and > 0
   /// Finger joint position of the open gripper [m], both fingers, in [0, 0.08]. MUST equal the executor's
-  /// gripper_open_position (haptic_dmp_learning/config/params.yaml:49, value 0.06): the planner cannot read it.
+  /// gripper_open_position (haptic_dmp_learning/config/params.yaml:93, prodmp_gazebo_executor_node, value 0.06): the planner cannot read it.
   double gripper_open_m = 0.060;
 
   // ---- v2 joint-margin constraint (docs/S3_SPEC.md §10, criterion 11); with use_margin == false (default) nothing

@@ -2,10 +2,10 @@
 //
 // Acceptance criterion of followMargin(): every row with an expected value below must match it within 0.1 deg (the
 // joint and the time are printed for the comparison with g16_results.csv; they are not enforced). Not run by the author:
-// to be run offline from the workspace root (relative default paths, as _diag_1019/step0c_margins.cpp):
+// to be run offline from the workspace root (relative default paths, as _data/diag_audit/_diag_1019/step0c_margins.cpp):
 //   ros2 run satellite_grasp_planner s3_followmargin_check [--weights-dir DIR] [--urdf FILE]
 //
-// Scenario (identical to _diag_1019/step0c_margins.cpp and run_rollout_follow_all.cpp):
+// Scenario (identical to _data/diag_audit/_diag_1019/step0c_margins.cpp and run_rollout_follow_all.cpp):
 //   weights_demo_params.yaml = runs/20261015_095418_fit_demo_20261014T150851/weights_demo_params.yaml, URDF fer_flat_effort.urdf
 //   satellite: centre (0.70, 0, 0.77), axis +z, theta_acq = -1.6727670737402633 rad, t_acq = 18.318 s
 //   cube: side 0.150, standoff 0.08, collar_radius 0.0725, wall 0.009, grasp_radius 0.068, grasp_depth 0.0125, face normal body +x
@@ -14,15 +14,15 @@
 //            applyRoll(nominal, pi) (branch B), psi = 0; follow 3.0 s; omega constant per row.
 //
 // Expected values (deg; joint 1-based fer_jointN; t_rel to AT_END):
-//   G16 columns pred_min_margin_*_0c (_diag_1019/g16/g16_results.csv), step0c_margins.cpp (dt_follow = 0.01):
+//   G16 columns pred_min_margin_*_0c (_data/diag_audit/_diag_1019/g16/g16_results.csv), step0c_margins.cpp (dt_follow = 0.01):
 //     omega -5  k1 A theta -178 : 13.26  fer_joint7  t_rel +3.00
 //     omega -5  k3 A theta  178 : 17.67  fer_joint6  t_rel -7.78
 //     omega -5  k1 A theta -166 : 35.00  fer_joint6  t_rel -24.47
 //     omega -5  k1 A theta -156 : 35.00  fer_joint6  t_rel -24.47
 //   A8 (k3 A theta 171, omega -2): 20.84 fer_joint6 t_rel -8.39 is from run_rollout_follow_all.cpp with dt_follow = 0.1
-//     (_diag_1019/pred_rollout.json, scaleA_A8: 20.8419). The same row with dt_follow = 0.01 has NO recorded value: it is
+//     (_data/diag_audit/_diag_1019/pred_rollout.json, scaleA_A8: 20.8419). The same row with dt_follow = 0.01 has NO recorded value: it is
 //     printed as informational (the difference between the two steps is exactly what this row shows).
-//   omega -4  k0 A theta -163.2: 28.63. Reported by the author; NO file in _diag_1019/ records it. Assumed to come from the
+//   omega -4  k0 A theta -163.2: 28.63. Reported by the author; NO file in _data/diag_audit/_diag_1019/ records it. Assumed to come from the
 //     step0c_margins.cpp row "k0 A -163.2" (omega -4, dt_follow = 0.01); joint and time unknown.
 //
 // Not reproduced here (not in the scenario above): anything about clearance or the selector.
