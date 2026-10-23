@@ -353,44 +353,24 @@ void finalizeStatus(S3Result& res, const std::vector<S3Candidate>& accepted, con
   }
 }
 
-}  // namespace
+/// Evaluation of one (k, theta, psi, flip) candidate. Former evalOne lambda of selectGraspS3: the members are the variables it
+/// captured by reference (all read only except res.evaluations, least_bad and have_least, written through).
+struct CandidateEvaluator {
+  const haptic_dmp_learning::core::CubeSatelliteModel& model;
+  RobotModel& robot;
+  const RobotModel::JointVector& q_start;
+  const DemoReference& demo;
+  const Eigen::Vector3d& delta_g_demo;
+  const S3Context& ctx;
+  const S3Params& params;
+  BranchRule branch_rule;
+  bool v2;
+  const Eigen::Vector3d& p0;
+  S3Result& res;
+  S3Candidate (&least_bad)[4];
+  bool (&have_least)[4];
 
-S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& model, RobotModel& robot,
-                       const RobotModel::JointVector& q_start, const DemoReference& demo,
-                       const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
-  validateS3Params(params);
-  validateCtx(ctx);
-  const BranchRule branch_rule = parseBranchRule(params.branch_rule);
-  const bool v2 = parseS3Mode(params.mode) == S3Mode::kV2;
-  RobotModel::JointVector q_rollout_ref = RobotModel::JointVector::Zero();
-  if (v2) {
-    for (int i = 0; i < RobotModel::kNumJoints; ++i) q_rollout_ref(i) = params.rollout_q_ref[static_cast<std::size_t>(i)];
-    const RobotModel::JointVector lo = robot.jointLowerLimits();
-    const RobotModel::JointVector hi = robot.jointUpperLimits();
-    if (!((q_rollout_ref.array() >= lo.array()).all() && (q_rollout_ref.array() <= hi.array()).all())) {
-      throw std::invalid_argument("selectGraspS3: rollout_q_ref is outside the URDF joint limits.");
-    }
-  }
-  const double kPi = haptic_dmp_learning::core::kPi;
-
-  robot.update(q_start, RobotModel::JointVector::Zero());
-  const Eigen::Vector3d p0 = robot.eePosition();
-  const bool use_clearance = v2 && params.use_clearance;  // validateS3Params: use_clearance implies v2
-  const bool use_margin = v2 && params.use_margin;        // validateS3Params: use_margin implies v2
-  // use_margin without force: lazy evaluation in J_static order (see S3Params::use_margin). With force the constraint only warns.
-  const bool lazy = use_margin && !params.force;
-  if (use_clearance && !ctx.clearance_eval) {
-    throw std::invalid_argument("selectGraspS3: s1.use_clearance=true needs S3Context::clearance_eval.");
-  }
-  // Start orientation of the approach trajectory = FK(q_start), as in checkKinematicFeasibility (read only if used).
-  const Eigen::Quaterniond quat0 = use_clearance ? robot.eeOrientation() : Eigen::Quaterniond::Identity();
-
-  S3Result res;
-  std::vector<S3Candidate> accepted;
-  S3Candidate least_bad[4];
-  bool have_least[4] = {false, false, false, false};
-
-  auto evalOne = [&](GraspPointId k, double theta, bool refine_stage, double psi, int flip) {
+  S3Candidate operator()(GraspPointId k, double theta, bool refine_stage, double psi, int flip) const {
     S3Candidate c;
     const bool logging = ctx.eval_log != nullptr;
     const bool need_extra = logging || v2;  // v2 needs w_full of the static solution (compute_extra)
@@ -450,7 +430,14 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       have_least[ki] = true;
     }
     return c;
-  };
+  }
+};
+
+/// Candidate scans: the forced candidate, or the coarse theta scan of each k plus the refinement around its best. Fills
+/// @p accepted (unsorted) and res.forced / res.forced_violations / res.note.
+void collectCandidates(const CandidateEvaluator& evalOne, const S3Context& ctx, const S3Params& params, S3Result& res,
+                       std::vector<S3Candidate>& accepted) {
+  const double kPi = haptic_dmp_learning::core::kPi;
 
   const double step = haptic_dmp_learning::core::degToRad(params.theta_step_deg);
   const double refine = haptic_dmp_learning::core::degToRad(params.theta_refine_step_deg);
@@ -501,25 +488,42 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
       if (c.passes_constraints) accepted.push_back(c);
     }
   }
+}
 
-  std::stable_sort(accepted.begin(), accepted.end(), lessCost);
-
-  // ---- post-hoc checks, best first ----
-  std::unique_ptr<haptic_dmp_learning::core::ProDMP> prodmp_at_contact;
-  if (params.posthoc_velocity_check) {
-    // Support goal p0 + delta_g_demo, stepped to the contact instant.
-    prodmp_at_contact = std::make_unique<haptic_dmp_learning::core::ProDMP>(*ctx.prodmp_template);
-    prodmp_at_contact->setRelativeGoal(false);
-    prodmp_at_contact->setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
-    prodmp_at_contact->setGoal(p0 + delta_g_demo);
-    const double tau_contact = ctx.tau_contact_s > 0.0 ? ctx.tau_contact_s : ctx.prodmp_template->tau();
-    const int n_steps = std::max(1, static_cast<int>(std::ceil(tau_contact / kDefaultSimDtS - 1e-9)));
-    for (int i = 0; i < n_steps; ++i) prodmp_at_contact->step(kDefaultSimDtS);
+/// Post-hoc velocity check shared by the legacy loop and both v2 flows (lazy, eager). Without the check: true, dv and
+/// @p entry untouched. With it: fills entry.v_ee / v_target / dv_m_s and @p dv; false = discarded (reject_reason set
+/// on @p c and on the entry, entry appended to the log). What the discard also does (continue, discard_reason,
+/// alive) stays at the call site.
+bool posthocVelocityCheck(const haptic_dmp_learning::core::CubeSatelliteModel& model, const S3Context& ctx,
+                          const S3Params& params, const std::unique_ptr<haptic_dmp_learning::core::ProDMP>& prodmp_at_contact,
+                          S3Result& res, S3Candidate& c, S3PosthocEntry& entry, double& dv) {
+  if (!params.posthoc_velocity_check) return true;
+  const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
+  const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
+  const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
+      model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
+  dv = (v_t - v_ee).norm();
+  entry.v_ee = v_ee;
+  entry.v_target = v_t;
+  entry.dv_m_s = dv;
+  if (!(dv <= params.delta_v_max_m_s)) {
+    std::ostringstream m;
+    m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
+    c.reject_reason = m.str();
+    entry.reject_reason = c.reject_reason;
+    res.posthoc_log.push_back(entry);
+    return false;
   }
-  const std::shared_ptr<RobotModel> robot_ptr(&robot, [](RobotModel*) {});  // non-owning
+  return true;
+}
 
+/// Legacy post-hoc checks, best first (v2 does not call this). Returns the index in @p accepted of the chosen candidate, -1 if none.
+/// Writes c.reject_reason of @p accepted, res.posthoc_checks / posthoc_log / posthoc_dv_m_s / posthoc_min_margin_rad.
+int runLegacyPosthoc(const haptic_dmp_learning::core::CubeSatelliteModel& model, const S3Context& ctx, const S3Params& params,
+                     const std::shared_ptr<RobotModel>& robot_ptr, const RobotModel::JointVector& q_start,
+                     const std::unique_ptr<haptic_dmp_learning::core::ProDMP>& prodmp_at_contact, double cluster_rad,
+                     std::vector<S3Candidate>& accepted, S3Result& res) {
   int chosen_idx = -1;
-  const double cluster_rad = haptic_dmp_learning::core::degToRad(params.posthoc_cluster_deg);
   std::vector<std::pair<int, double>> checked;  // (k, theta) of the candidates already examined
   auto inCluster = [&](const S3Candidate& c) {
     for (const auto& kt : checked) {
@@ -528,32 +532,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     }
     return false;
   };
-  // Post-hoc velocity check shared by the legacy loop and both v2 flows (lazy, eager). Without the check: true, dv and
-  // @p entry untouched. With it: fills entry.v_ee / v_target / dv_m_s and @p dv; false = discarded (reject_reason set
-  // on @p c and on the entry, entry appended to the log). What the discard also does (continue, discard_reason,
-  // alive) stays at the call site.
-  auto posthocVelocityPasses = [&](S3Candidate& c, S3PosthocEntry& entry, double& dv) -> bool {
-    if (!params.posthoc_velocity_check) return true;
-    const Eigen::Vector3d goal = c.eval.pose.position_world + ctx.contact_to_end_offset;
-    const Eigen::Vector3d v_ee = prodmp_at_contact->velocityForCandidateGoal(goal);
-    const Eigen::Vector3d v_t = haptic_dmp_learning::core::surfaceVelocity(
-        model, c.eval.k, c.eval.theta_rad, ctx.snapshot.omega_rad_s);
-    dv = (v_t - v_ee).norm();
-    entry.v_ee = v_ee;
-    entry.v_target = v_t;
-    entry.dv_m_s = dv;
-    if (!(dv <= params.delta_v_max_m_s)) {
-      std::ostringstream m;
-      m << "velocita' relativa " << dv << " m/s > " << params.delta_v_max_m_s;
-      c.reject_reason = m.str();
-      entry.reject_reason = c.reject_reason;
-      res.posthoc_log.push_back(entry);
-      return false;
-    }
-    return true;
-  };
-  for (std::size_t i = 0; !v2 && i < accepted.size() && chosen_idx < 0 && res.posthoc_checks < params.max_posthoc_candidates;
-       ++i) {
+  for (std::size_t i = 0; i < accepted.size() && chosen_idx < 0 && res.posthoc_checks < params.max_posthoc_candidates; ++i) {
     S3Candidate& c = accepted[i];
     if (inCluster(c)) continue;
     checked.emplace_back(static_cast<int>(c.eval.k), c.eval.theta_rad);
@@ -563,7 +542,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     entry.theta_rad = c.eval.theta_rad;
     entry.wait_s = c.wait_s;
     double dv = 0.0;
-    if (!posthocVelocityPasses(c, entry, dv)) continue;
+    if (!posthocVelocityCheck(model, ctx, params, prodmp_at_contact, res, c, entry, dv)) continue;
     double margin = 0.0;
     if (params.posthoc_path_check) {
       // applyRoll(qn, psi + (flip ? pi : 0)): rolls about the same axis (z_tcp) commute.
@@ -590,6 +569,109 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     res.posthoc_dv_m_s = dv;
     res.posthoc_min_margin_rad = margin;
   }
+  return chosen_idx;
+}
+
+struct StaticItem {
+  int idx;
+  double d_mm;
+  double j_static;
+};
+
+/// v2 phase 2: finalists = best (J_static) of each (k, wrist branch, theta cluster), at most finalists_n, in J_static order.
+std::vector<StaticItem> selectStaticFinalists(const std::vector<S3Candidate>& accepted, const S3Params& params, double cluster_rad) {
+  std::vector<StaticItem> order;
+  order.reserve(accepted.size());
+  for (std::size_t i = 0; i < accepted.size(); ++i) {
+    const double d_mm = accepted[i].d * params.length_scale_m * 1000.0;  // = d_pos in mm when orientation_weight = 0
+    order.push_back({static_cast<int>(i), d_mm, s3CostV2(d_mm, accepted[i].w_full_static, 0.0, params)});
+  }
+  std::stable_sort(order.begin(), order.end(), [&](const StaticItem& a, const StaticItem& b) {
+    if (a.j_static != b.j_static) return a.j_static < b.j_static;
+    return lessCost(accepted[static_cast<std::size_t>(a.idx)], accepted[static_cast<std::size_t>(b.idx)]);
+  });
+  std::vector<StaticItem> groups;  // representatives, in J_static order
+  for (const StaticItem& it : order) {
+    if (groups.size() >= static_cast<std::size_t>(params.finalists_n)) break;
+    const S3Candidate& c = accepted[static_cast<std::size_t>(it.idx)];
+    bool dup = false;
+    for (const StaticItem& g : groups) {
+      const S3Candidate& r = accepted[static_cast<std::size_t>(g.idx)];
+      if (r.eval.k != c.eval.k || r.eval.wrist_flip != c.eval.wrist_flip) continue;
+      if (thetaDistRad(c.eval.theta_rad, r.eval.theta_rad) < cluster_rad) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) groups.push_back(it);
+  }
+  return groups;
+}
+
+}  // namespace
+
+S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& model, RobotModel& robot,
+                       const RobotModel::JointVector& q_start, const DemoReference& demo,
+                       const Eigen::Vector3d& delta_g_demo, const S3Context& ctx, const S3Params& params) {
+  validateS3Params(params);
+  validateCtx(ctx);
+  const BranchRule branch_rule = parseBranchRule(params.branch_rule);
+  const bool v2 = parseS3Mode(params.mode) == S3Mode::kV2;
+  RobotModel::JointVector q_rollout_ref = RobotModel::JointVector::Zero();
+  if (v2) {
+    for (int i = 0; i < RobotModel::kNumJoints; ++i) q_rollout_ref(i) = params.rollout_q_ref[static_cast<std::size_t>(i)];
+    const RobotModel::JointVector lo = robot.jointLowerLimits();
+    const RobotModel::JointVector hi = robot.jointUpperLimits();
+    if (!((q_rollout_ref.array() >= lo.array()).all() && (q_rollout_ref.array() <= hi.array()).all())) {
+      throw std::invalid_argument("selectGraspS3: rollout_q_ref is outside the URDF joint limits.");
+    }
+  }
+  const double kPi = haptic_dmp_learning::core::kPi;
+
+  robot.update(q_start, RobotModel::JointVector::Zero());
+  const Eigen::Vector3d p0 = robot.eePosition();
+  const bool use_clearance = v2 && params.use_clearance;  // validateS3Params: use_clearance implies v2
+  const bool use_margin = v2 && params.use_margin;        // validateS3Params: use_margin implies v2
+  // use_margin without force: lazy evaluation in J_static order (see S3Params::use_margin). With force the constraint only warns.
+  const bool lazy = use_margin && !params.force;
+  if (use_clearance && !ctx.clearance_eval) {
+    throw std::invalid_argument("selectGraspS3: s1.use_clearance=true needs S3Context::clearance_eval.");
+  }
+  // Start orientation of the approach trajectory = FK(q_start), as in checkKinematicFeasibility (read only if used).
+  const Eigen::Quaterniond quat0 = use_clearance ? robot.eeOrientation() : Eigen::Quaterniond::Identity();
+
+  S3Result res;
+  std::vector<S3Candidate> accepted;
+  S3Candidate least_bad[4];
+  bool have_least[4] = {false, false, false, false};
+
+  const CandidateEvaluator evalOne{model, robot, q_start, demo, delta_g_demo, ctx, params, branch_rule, v2, p0, res, least_bad, have_least};
+
+  collectCandidates(evalOne, ctx, params, res, accepted);
+
+  std::stable_sort(accepted.begin(), accepted.end(), lessCost);
+
+  // ---- post-hoc checks, best first ----
+  std::unique_ptr<haptic_dmp_learning::core::ProDMP> prodmp_at_contact;
+  if (params.posthoc_velocity_check) {
+    // Support goal p0 + delta_g_demo, stepped to the contact instant.
+    prodmp_at_contact = std::make_unique<haptic_dmp_learning::core::ProDMP>(*ctx.prodmp_template);
+    prodmp_at_contact->setRelativeGoal(false);
+    prodmp_at_contact->setInitialConditions(0.0, p0, Eigen::Vector3d::Zero());
+    prodmp_at_contact->setGoal(p0 + delta_g_demo);
+    const double tau_contact = ctx.tau_contact_s > 0.0 ? ctx.tau_contact_s : ctx.prodmp_template->tau();
+    const int n_steps = std::max(1, static_cast<int>(std::ceil(tau_contact / kDefaultSimDtS - 1e-9)));
+    for (int i = 0; i < n_steps; ++i) prodmp_at_contact->step(kDefaultSimDtS);
+  }
+  const std::shared_ptr<RobotModel> robot_ptr(&robot, [](RobotModel*) {});  // non-owning
+
+  int chosen_idx = -1;
+  const double cluster_rad = haptic_dmp_learning::core::degToRad(params.posthoc_cluster_deg);
+  // Post-hoc velocity check shared by the legacy loop and both v2 flows (lazy, eager); see posthocVelocityCheck.
+  auto posthocVelocityPasses = [&](S3Candidate& c, S3PosthocEntry& entry, double& dv) -> bool {
+    return posthocVelocityCheck(model, ctx, params, prodmp_at_contact, res, c, entry, dv);
+  };
+  if (!v2) chosen_idx = runLegacyPosthoc(model, ctx, params, robot_ptr, q_start, prodmp_at_contact, cluster_rad, accepted, res);
 
   bool clearance_no_candidate = false;
   std::string clearance_note;
@@ -597,36 +679,7 @@ S3Result selectGraspS3(const haptic_dmp_learning::core::CubeSatelliteModel& mode
     const double kRad2Deg = 180.0 / kPi;
 
     // ---- v2 phase 2: finalists = best (J_static) of each (k, wrist branch, theta cluster), at most finalists_n ----
-    struct StaticItem {
-      int idx;
-      double d_mm;
-      double j_static;
-    };
-    std::vector<StaticItem> order;
-    order.reserve(accepted.size());
-    for (std::size_t i = 0; i < accepted.size(); ++i) {
-      const double d_mm = accepted[i].d * params.length_scale_m * 1000.0;  // = d_pos in mm when orientation_weight = 0
-      order.push_back({static_cast<int>(i), d_mm, s3CostV2(d_mm, accepted[i].w_full_static, 0.0, params)});
-    }
-    std::stable_sort(order.begin(), order.end(), [&](const StaticItem& a, const StaticItem& b) {
-      if (a.j_static != b.j_static) return a.j_static < b.j_static;
-      return lessCost(accepted[static_cast<std::size_t>(a.idx)], accepted[static_cast<std::size_t>(b.idx)]);
-    });
-    std::vector<StaticItem> groups;  // representatives, in J_static order
-    for (const StaticItem& it : order) {
-      if (groups.size() >= static_cast<std::size_t>(params.finalists_n)) break;
-      const S3Candidate& c = accepted[static_cast<std::size_t>(it.idx)];
-      bool dup = false;
-      for (const StaticItem& g : groups) {
-        const S3Candidate& r = accepted[static_cast<std::size_t>(g.idx)];
-        if (r.eval.k != c.eval.k || r.eval.wrist_flip != c.eval.wrist_flip) continue;
-        if (thetaDistRad(c.eval.theta_rad, r.eval.theta_rad) < cluster_rad) {
-          dup = true;
-          break;
-        }
-      }
-      if (!dup) groups.push_back(it);
-    }
+    const std::vector<StaticItem> groups = selectStaticFinalists(accepted, params, cluster_rad);
 
     // ---- v2 phase 3: rollout of every finalist with nullspace target rollout_q_ref (use_margin without force: lazy, below) ----
     std::vector<S3FinalistRecord> fin;
