@@ -166,6 +166,12 @@ def run_one(a, c, tag, outroot: Path):
         cmd += ["--squeeze", str(c["squeeze"])]
     for p in a.extra_exec_param:
         cmd += ["--extra-exec-param", p]
+    for p in a.planner_param:
+        cmd += ["--planner-param", p]
+    if a.axis_tilt_deg is not None:
+        cmd += ["--axis-tilt-deg", str(a.axis_tilt_deg)]
+    if a.axis_lean_deg is not None:
+        cmd += ["--axis-lean-deg", str(a.axis_lean_deg)]
     if a.overwrite:
         cmd.append("--overwrite")
     with open(outdir / "s1_run.log", "w") as fo, open(outdir / "s1_run.err", "w") as fe:
@@ -188,6 +194,12 @@ def main(argv=None) -> int:
     ap.add_argument("--sim-timeout", type=float, default=500.0, help="tempo SIMULATO per run [s]")
     ap.add_argument("--gui", action="store_true")
     ap.add_argument("--extra-exec-param", action="append", default=[])
+    ap.add_argument("--planner-param", action="append", default=[], metavar="CHIAVE=VALORE",
+                    help="parametro del planner inoltrato a s1_run a ogni run (ripetibile)")
+    ap.add_argument("--axis-tilt-deg", type=float, default=None, metavar="ALPHA",
+                    help="inclinazione dell'asse [deg], uguale per tutta la griglia (non passata se omessa)")
+    ap.add_argument("--axis-lean-deg", type=float, default=None, metavar="PHI",
+                    help="azimut dell'asse [deg], uguale per tutta la griglia (non passato se omesso)")
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--skip-done", action="store_true", help="salta i tag gia' presenti in results.csv")
     ap.add_argument("--dry-run", action="store_true", help="stampa la griglia e basta")
