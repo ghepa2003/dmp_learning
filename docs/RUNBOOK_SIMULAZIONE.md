@@ -19,6 +19,29 @@ cd /root/thesis_ws
   `s1_run.py` applica da sé questo riordino (`ros_cmd`, tools/s1_run.py:474-479); le shell manuali (F1, F2) no, ma con l'`env_thesis.sh` attuale non serve (Appendice A, punto 3).
 - Shell del container: `docker exec -it franka bash` (da host). `-it` serve a F2 (tasto SPACE: `isatty`, demo_replay_sync_orchestrator_node.cpp:227).
 
+## Percorso rapido (demo -> cubo -> replay)
+
+Sintesi del flusso completo; i comandi lunghi sono nelle sezioni indicate. Tutto nel container `franka` con il preambolo P, salvo dove scritto.
+
+**(a) Registrare la demo (F2, richiede lo stilo).** Con Gazebo e controller attivi (F1, shell A), in una shell TTY lanciare l'orchestratore in modalità demo (comando completo in F2): 1ª pressione = spawn del cubo, 2ª = trigger e chiusura gripper, 3ª = stop. Escono `/root/thesis_ws/demo_raw_<run_id>.csv` e i file collegati.
+
+**(b) Fit (F3).** Troncare la demo al trigger e farne il fit:
+
+```bash
+python3 tools/trim_demo_at_trigger.py /root/thesis_ws/demo_raw_20261014T150851.csv    # esempio: sostituire con il CSV della demo nuova
+```
+
+poi il comando `mp_tool.py fit` di F3 sul CSV `_trim` (cambiando `--label`). Annotare la cartella `runs/<data>_fit_<label>/` stampata (`Run directory: ...`): è il `--weights-dir` del passo (c).
+
+**(c) Replay con cubo in nuove condizioni (F4).**
+1. Scegliere la cella: ω [°/s], centro, α (`--axis-tilt-deg`), φ (`--axis-lean-deg`). Esempio (è la C12 della campagna): ω = −2, centro 0.75,0.05,0.72, α = 5, φ = 225.
+2. θ\* col driver offline (senza Gazebo): comando di F4 «Procedura in due passi» (a), dopo aver aggiunto la riga della cella al CSV («Aggiungere una cella»). Per C12 dà k0 A, θ\* = −104.0.
+3. Yaw dalla formula `yaw0 = wrap(θ* − ω·45.2)`: −104.0 + 90.4 = **−13.6°**.
+4. Lanciare `s1_run.py` con il comando completo di F4, cambiando solo `--weights-dir`, `--tag` e i parametri della cella, e aggiungendo `--gui` per vedere il replay in Gazebo. Per l'esempio: `--spawn-yaw-deg -13.6 --omega-deg-s -2.0 --center-xyz 0.75,0.05,0.72 --axis-tilt-deg 5.0 --axis-lean-deg 225.0 --gui`. Per la GUI serve un display X raggiungibile dal container: aprire la shell con `docker exec -it -e DISPLAY=:0 franka bash` (il runner lancia poi `DISPLAY=:0 ign gazebo -g`, s1_run.py:907-908).
+5. Esito: `s1_runs/<tag>/report.txt` e `report.json` (F5).
+
+**Come spostare o ruotare il cubo** (valori a esempio, vincoli in F4 «Regole di coerenza»): `--center-xyz X,Y,Z` posizione del centro di rotazione [m] (nominale 0.70,0.0,0.77); `--omega-deg-s` velocità angolare con segno (−2.0); `--axis-tilt-deg` inclinazione dell'asse da z, 0–20°; `--axis-lean-deg` azimut dell'inclinazione, 0–360°. Ogni cambio richiede di ricalcolare θ\* e lo yaw (passi 2–3).
+
 ---
 
 ## F0 — Ambiente
@@ -27,13 +50,13 @@ cd /root/thesis_ws
 
 **Precondizioni**: container `franka` già creato (lo crea `scripts/run_with_thesis_mount.sh`, che richiede il nome dell'immagine e `docker_run.cfg`, entrambi fuori dal repo: Appendice A). Eventuale provisioning una tantum del bringup vendored: `bash /root/thesis_ws/scripts/full_reset_franka_container.sh` (copia gli override in `franka_ws/.../franka_gazebo_bringup/{config,launch}`, symlink, build con `--symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release` in `franka_ws`: scripts/full_reset_franka_container.sh:104-107) e, per il gripper prismatico, `bash /root/thesis_ws/scripts/setup_franka_description_overrides.sh`.
 
-**Build (container `franka`, shell con P)** — i 6 pacchetti come in `tests/gate.sh:68`:
+**Build (container `franka`, shell con P)** — i 6 pacchetti come in `tests/gate.sh:79,89`:
 
 ```bash
-colcon build --packages-select franka_cartesian_control free_target_object grasp_monitoring haptic_dmp_learning satellite_grasp_msgs satellite_grasp_planner --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --packages-select franka_cartesian_control free_target_object grasp_monitoring haptic_dmp_learning satellite_grasp_msgs satellite_grasp_planner
 ```
 
-- Il flag `--cmake-args -DCMAKE_BUILD_TYPE=Release` NON è in `gate.sh` (che lancia `colcon build --packages-select ...` senza argomenti); `franka_cartesian_control`, `haptic_dmp_learning`, `satellite_grasp_planner` forzano Release se il tipo non è impostato (`src/*/CMakeLists.txt:4-6`). Gli altri tre pacchetti non lo fanno (non C++ pesante) → il flag esplicito è una scelta del runbook, non verificato che non cambi la cache esistente (Appendice A).
+- Il comando è identico a quello di `tests/gate.sh` (passo a, righe 79 e 89). Nota: `franka_cartesian_control`, `haptic_dmp_learning`, `satellite_grasp_planner` forzano Release se il tipo non è impostato (`src/*/CMakeLists.txt:4-6`); gli altri tre pacchetti non lo fanno (non C++ pesante).
 - Clean build: `tests/gate.sh --clean` usa `--cmake-clean-first --cmake-force-configure --event-handlers console_cohesion+` (gate.sh:62-66).
 - Variabile: `THESIS_WS` (default `/root/thesis_ws` nello script g25; `s1_run.py:42` la legge dall'ambiente, default = radice del repo).
 
@@ -49,7 +72,7 @@ grep -n "translational_stiffness" /root/ros_workspaces/ros2/franka_ws/src/franka
 
 ```
 
-- **`thesis_ws/install` è richiesto, non da evitare**: `s1_run.py:48` (`INSTALL_DIR = WS_DIR / "install"`) e `:501-502` (RunError se un pacchetto non è sotto `THESIS_WS/install`), `s1_env.py:2-6`, `gate.sh:68`. Verificato nel dry run: `AMENT_PREFIX_PATH` ha i 6 pacchetti di `/root/thesis_ws/install` prima di quelli di `franka_ws/install`, che contiene copie OBSOLETE (13–15 ott) di `haptic_dmp_learning`, `grasp_monitoring`, `free_target_object` (oscurate dall'ordine corretto; `franka_cartesian_control` e `satellite_grasp_*` non ci sono). Il rischio è l'ordine sbagliato (preambolo P), non l'esistenza di `thesis_ws/install` (con `COLCON_IGNORE`).
+- **`thesis_ws/install` è richiesto, non da evitare**: `s1_run.py:48` (`INSTALL_DIR = WS_DIR / "install"`) e `:501-502` (RunError se un pacchetto non è sotto `THESIS_WS/install`), `s1_env.py:2-6`, `gate.sh:79`. Verificato nel dry run: `AMENT_PREFIX_PATH` ha i 6 pacchetti di `/root/thesis_ws/install` prima di quelli di `franka_ws/install`, che contiene copie OBSOLETE (13–15 ott) di `haptic_dmp_learning`, `grasp_monitoring`, `free_target_object` (oscurate dall'ordine corretto; `franka_cartesian_control` e `satellite_grasp_*` non ci sono). Il rischio è l'ordine sbagliato (preambolo P), non l'esistenza di `thesis_ws/install` (con `COLCON_IGNORE`).
 - Residui (b): con `--pid=host` (run_with_thesis_mount.sh) `pgrep -f` nel container vede anche processi dell'host; `s1_run.ensure_clean` esclude solo i propri antenati e uccide con SIGKILL (s1_run.py:419-434) (Appendice A, punto 12).
 
 **Riavvio pulito (derivato da s1_run.py:884-887; non c'è uno script dedicato)**
@@ -246,7 +269,7 @@ Se `_gate_out/step3_cells_gate` manca lo ricompila `docker exec franka bash -c "
 
 **(b) Yaw di spawn**: `yaw0 = wrap(θ* − ω·45.2)`, ω in °/s con segno, 45.2 s = `T_total`, `wrap` in (−180, 180]. Esempio C0: θ* = 145.3, ω = −2 → 145.3 − (−2)(45.2) = 145.3 + 90.4 = 235.7 → 235.7 − 360 = **−124.3°** → `--spawn-yaw-deg -124.3`. Analogamente C5: −180.0 + 90.4 = −89.6; C12: −104.0 + 90.4 = −13.6.
 
-Limite: il driver usa lo snapshot di default (`--snap-theta-rad -1.6727…`, `--snap-t-s 18.318`) e NON legge `run_meta.json`; per ω = −2 con lo yaw di campagna coincide con i run reali, per altri casi non è verificato. Dal driver si confrontano `k, branch, theta_deg, d_mm, w, pred_margin_deg, pred_clearance_mm` con `theta_star`, `d_pos`, … della riga di `results.csv` / `report.json`.
+Limite: verificato su 16/16 celle della campagna (selezione identica alla previsione G25, ω da −1 a −3, centri non nominali); il driver non usa la fase reale dello snapshot (usa `--snap-theta-rad -1.6727…`, `--snap-t-s 18.318` e non legge `run_meta.json`); i due tentativi di C14 hanno scelto lo stesso candidato con fasi diverse. Dal driver si confrontano `k, branch, theta_deg, d_mm, w, pred_margin_deg, pred_clearance_mm` con `theta_star`, `d_pos`, … della riga di `results.csv` / `report.json`.
 
 **Aggiungere una cella al CSV di input.** Formato (header di `tests/golden/g25/g25_cells_input.csv`; 17 campi separati da virgola letti per POSIZIONE, `step3_cells.cpp:50-71`; meno di 17 campi → errore; righe vuote e righe che iniziano con `#` ignorate):
 
@@ -325,7 +348,7 @@ Le celle del backup includono anche `val_C14_attempt1_FAIL_executor_stamp_future
 3. Con `--axis-tilt-deg > 0` non passare `satellite_rotation_axis`, `satellite_q_ref`, `cube_geometry.axis_world`, `cube_geometry.face_normal_body` come `--planner-param`/`--extra-exec-param` (RunError, :761-769).
 4. Attesa `wait_s_actual` (TRIGGER − pubblicazione del `GraspCommand`): finestra ammessa **[5, 5 + 360/|ω|] s** (`WAIT_MIN_S=5.0`, s1_report.py:94-95,232-236); fuori finestra il report avvisa ma non cambia il successo. `min_delay_s=5.0` è passato al planner (s1_run.py:744). L'intervallo «5–30 s» vale solo per |ω| = 14.4 °/s; per −2 °/s è [5, 185] s.
 5. `--stop-cube` richiede `--follow-s > 0` e `--post-s ≥ follow_s + delay + 1` (:1164-1171). `--post-s` di default = max(45, follow_s + delay + 4).
-6. Il gate sul goal richiede `x_c = 155.1 − depth[mm]` ± 0.5 mm (:75-76,971-1002); `--depth` va quindi coerente con ciò che il planner applica.
+6. Gate sul goal: `x_c` atteso = `RIM_X_C_MM − depth·1000` con `RIM_X_C_MM = 155.1` (s1_run.py:75), tolleranza `GATE_TOL_MM = 0.5` (:76); nel codice `expected_xc = RIM_X_C_MM - a.depth * 1000.0` (:971) e il run fallisce se `abs(xc - expected_xc) > GATE_TOL_MM`. Esempio: `--depth 0.0125` → 155.1 − 12.5 = **142.6 mm** ± 0.5 (accettato 142.1–143.1); `--depth 0.0` → 155.1 mm. `--depth` va coerente con ciò che il planner applica (`cube_geometry.grasp_depth_m`).
 7. `|ω|` ≠ 0 e finito; `--sim-timeout` è in tempo SIMULATO.
 8. `--weights-dir` e `--outdir/--tag`: se `bag/` esiste già serve `--overwrite` o altro `--tag`.
 
@@ -419,6 +442,16 @@ Stato dopo il dry run del 23–24/10/2026 (F0, F1, F3, F4, F5 eseguite; **F2 non
 15. **Collisione nomi `runs/`**: `make_run_dir` usa il timestamp al secondo; due `fit` con stessa etichetta nello stesso secondo → errore «run dir already exists».
 16. **`learn_and_test_prodmp`** va ricompilato a mano in `tools/dmp_offline_test/build/` (non fa parte di `colcon build`). Il comando di build non è documentato in un file dedicato, ma è nello script `tools/dmp_offline_test/04_basis_sweep/scripts/run_ridge_lambda_sweep_prodmp.sh:32-48` (`g++ -std=c++17 -O2 ...`, ricompila se i sorgenti sono più nuovi). Il binario (13 ott) è più vecchio dei sorgenti in `src/haptic_dmp_learning/src/core`, ma il fit F3 ha dato un risultato bit-identico al run del 15 ott.
 
+17. **Riproducibilità dei pesi di riferimento (stato git verificato il 24/10)**: `runs/20261015_095418_fit_demo_20261014T150851/` (`weights.yaml`, `weights_demo_params.yaml`) è **presente ma IGNORATO** da git (`.gitignore:50`, regola `/runs/*`; `git ls-files` vuoto). Anche `_data/demos/demo_raw_20261014T150851_trim.csv` e `_data/demos/demo_raw_20261014T150851_trim_joint_states.csv` sono **presenti ma IGNORATI** (`.gitignore:64`, `_data/`), come il CSV grezzo e gli altri file della demo. Un checkout pulito NON ha né pesi né demo: vanno copiati dal disco del proprietario. Se i pesi mancano ma `_data/demos/` c'è, si ricostruiscono (stessi sha256, verificato il 23/10) con:
+
+```bash
+python3 tools/trim_demo_at_trigger.py /root/thesis_ws/_data/demos/demo_raw_20261014T150851.csv   # solo se i _trim non esistono (non sovrascrive)
+python3 tools/mp_tool/mp_tool.py fit /root/thesis_ws/_data/demos/demo_raw_20261014T150851_trim.csv --algo prodmp \
+  --n-basis 80 --ridge-lambda 1e-10 --window 0.05 --fix-goal --with-orientation --label fit_demo_20261014T150851
+```
+
+La cartella creata ha un nome con timestamp nuovo (`runs/<data>_fit_fit_demo_20261014T150851`): usarla in `--weights-dir`. Il binario `tools/dmp_offline_test/build/learn_and_test_prodmp` è richiesto (voce 16).
+
 ### A.2 Affermazioni: stato dopo il dry run
 
 - **`thesis_ws/install` non deve esistere**: SMENTITA; è richiesto e usato (F0). Il rischio sono le copie obsolete in `franka_ws/install`.
@@ -436,7 +469,6 @@ Stato dopo il dry run del 23–24/10/2026 (F0, F1, F3, F4, F5 eseguite; **F2 non
 - **Schema dei pulsanti in F2; pulsante 2 del driver per `gripper_trigger`; `prepos_capture` che si ferma sul fronte di start**: NON VERIFICATI (F2 non eseguita).
 - **«Il driver pubblica già `/touch0/buttons` e una PoseStamped»** (DESIGN_NOTES.md:12-19): NON VERIFICABILE (driver non nel repo).
 - **Un `*_demo_params.yaml` con `end_joints_rad: null` è rifiutato dal planner** (docs/COMMAND_REFERENCE.md §3.8): NON VERIFICATA (non provato, non letto `selection_inputs.cpp` fino a quel controllo).
-- **`Release` per i pacchetti non C++ pesanti e che `--cmake-args` non invalidi la build esistente**: NON VERIFICATA (nessuna ricompilazione nel dry run).
 - **Un SIGKILL del runner lascia Kt = `--kt`**: NON PROVATA.
 - **Criteri di successo e soglie (F5)**: letti da `tools/s1_success.yaml`; i valori numerici dei commenti (plateau 9.64 mm, ecc.) sono storici e non ricontrollati.
 - **Stato dei container**: `geomagic_touch` è fermo (Exited 137): F2 richiede `docker start`/`exec` (non nel repo).
