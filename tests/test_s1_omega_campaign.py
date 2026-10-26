@@ -95,10 +95,21 @@ def test_center_and_arm_parsing():
         with pytest.raises(argparse.ArgumentTypeError):
             s1_run.parse_center_xyz(bad)
     assert s1_run.arm_planner_params(None) == []
-    assert s1_run.arm_planner_params("legacy") == [("s1.mode", "legacy")]
-    assert s1_run.arm_planner_params("d_only") == [("s1.mode", "v2"), ("s1.use_w", "false"),
-                                                   ("s1.branch_rule", "rotation")]
-    assert s1_run.arm_planner_params("v2") == [("s1.mode", "v2"), ("s1.branch_rule", "rotation")]
+    assert s1_run.arm_planner_params("d_only") == [("s1.use_w", "false"), ("s1.branch_rule", "rotation")]
+    assert s1_run.arm_planner_params("v2") == [("s1.branch_rule", "rotation")]
+
+
+def test_legacy_arm_is_removed_and_s1_mode_is_never_passed():
+    # the planner has no s1.mode any more (an undeclared -p is ignored silently): no arm may pass it
+    assert set(s1_run.ARMS) == {"d_only", "v2"}
+    for arm in s1_run.ARMS:
+        assert all(k != "s1.mode" for k, _ in s1_run.arm_planner_params(arm))
+    with pytest.raises(s1_run.RunError, match="legacy"):
+        s1_run.arm_planner_params("legacy")
+    with pytest.raises(s1_run.RunError):
+        s1_run.arm_planner_params("boh")
+    with pytest.raises(SystemExit):  # argparse of s1_run.py: choices=sorted(ARMS)
+        s1_run.make_parser().parse_args(["--weights-dir", "w", "--arm", "legacy"])
 
 
 def test_arm_never_passes_rollout_q_ref():
@@ -133,9 +144,9 @@ def test_spawn_yaw_auto_default_when_omega_varies():
 
 def test_grid_is_cases_times_arms():
     g = _grid(omega_deg_s=["-2", "-3"], center_xyz=["0.70,0.0,0.77", "0.65,0.0,0.77"],
-              arm=["legacy", "d_only", "v2"])
-    assert len(g) == 2 * 2 * 3
-    assert {c["arm"] for c in g} == {"legacy", "d_only", "v2"}
+              arm=["d_only", "v2"])
+    assert len(g) == 2 * 2 * 2
+    assert {c["arm"] for c in g} == {"d_only", "v2"}
     assert len({s1_campaign.make_tag(c) for c in g}) == len(g)   # tag univoci
 
 
@@ -151,13 +162,15 @@ def test_bad_values_exit():
     with pytest.raises(SystemExit):
         _grid(arm=["boh"])
     with pytest.raises(SystemExit):
+        _grid(arm=["legacy"])
+    with pytest.raises(SystemExit):
         _grid(center_xyz=["1,2"])
 
 
 def test_dry_run_prints_full_grid(capsys):
     rc = s1_campaign.main(["--weights-dir", "w", "--outroot", "/nonexistent/x", "--dry-run",
-                           "--omega-deg-s", "-2", "-3", "--arm", "legacy", "v2"])
+                           "--omega-deg-s", "-2", "-3", "--arm", "d_only", "v2"])
     out = capsys.readouterr().out
     assert rc == 0 and out.startswith("4 run in griglia")
     assert out.count("yaw0=") == 4 and "yaw0=-73.10deg" in out and "yaw0=-27.90deg" in out
-    assert "_alegacy" in out and "_av2" in out
+    assert "_ad_only" in out and "_av2" in out

@@ -71,12 +71,10 @@ LandscapeFixture makeLandscapeFixture() {
 
 S3Params looseParams() {
   S3Params p;
-  p.w_hat_min = 0.0;
-  p.margin_min_rad = 0.0;
+  const RobotModel::JointVector q = RobotModel::readyPose();  // mandatory nullspace target of the rollout
+  p.rollout_q_ref.assign(q.data(), q.data() + 7);
   p.r_trust_m = 100.0;
   p.theta_step_deg = 5.0;
-  p.theta_refine_step_deg = 1.0;
-  p.posthoc_path_check = false;
   p.posthoc_velocity_check = false;
   return p;
 }
@@ -129,15 +127,14 @@ TEST(S3LandscapeLog, OneRowPerEvaluationAndConsistentWithTheCandidates) {
   const S3Params p = looseParams();
   const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
   EXPECT_EQ(static_cast<int>(log.size()), r.evaluations);
-  int coarse = 0, passing = 0;
+  int passing = 0;
   for (const auto& l : log) {
-    if (!l.refine_stage) ++coarse;
     EXPECT_EQ(l.passes_constraints, l.reject_mask == 0u);
     if (l.passes_constraints) ++passing;
-    EXPECT_NEAR(l.cost_current, l.d + p.epsilon_wait_per_s * l.wait_s, 1e-12);
+    EXPECT_EQ(l.j_static, s3CostV2(l.d * p.length_scale_m * 1000.0, l.branch[l.wrist_flip ? 1 : 0].w_full, 0.0, p));
     EXPECT_GE(l.wait_s, s.ctx.min_delay_s);  // wait is logged for every row
   }
-  EXPECT_EQ(coarse, 4 * 72);  // 360 / 5 deg per k
+  EXPECT_EQ(static_cast<int>(log.size()), 4 * 72);  // 360 / 5 deg per k, a single grid
   if (r.status != S3Result::kNoCandidate) {
     EXPECT_GE(passing, static_cast<int>(r.ranked.size()));
   }

@@ -3,16 +3,16 @@
 /**
  * @file grasp_s3_selection.hpp
  * @brief Reduced-problem grasp selection "S3": pick the (k, theta) whose grasp position is closest to the
- *        deformation of the single demo, subject to manipulability / joint-margin / trust-radius / IK
- *        constraints, with a small penalty on the waiting time. Velocity and path feasibility are only
- *        checked a posteriori. Collision: only the optional v2 hand-satellite clearance constraint
- *        (S3Params::use_clearance, off by default); no e_v term in the cost, no continuous roll search.
+ *        deformation of the single demo, on a single theta grid, with a manipulability term. A-priori mask: ik,
+ *        trust radius, start-goal angle. The finalists (best of each k / wrist branch / theta cluster, in J_static order)
+ *        get a kinematic rollout, the optional joint-margin and hand-satellite clearance constraints and the post-hoc
+ *        velocity check; the first admissible one wins. No continuous roll search.
  *        Eigen + Pinocchio only, NO ROS.
  *
- *   d_pos = || (goal_cand - p0) - delta_g_demo ||,   goal_cand = grasp position + contact_to_end_offset
- *           (contact_to_end_offset comes from the demo, see SelectionInputs)
- *   d     = sqrt(d_pos^2 / l^2 + orientation_weight * ori^2 / angle_scale^2)
- *   cost  = d + epsilon_wait_per_s * wait_s
+ *   d_pos    = || (goal_cand - p0) - delta_g_demo ||,   goal_cand = grasp position + contact_to_end_offset
+ *              (contact_to_end_offset comes from the demo, see SelectionInputs)
+ *   d        = sqrt(d_pos^2 / l^2 + orientation_weight * ori^2 / angle_scale^2)
+ *   J_static = d * l * 1000 [mm] + kappa_w_mm * (-ln w_full_static)        (t_wait = 0; see s3CostV2)
  * wait_s is the delay of planLaunch() (launchDelay logic, with min_delay_s).
  */
 
@@ -38,19 +38,14 @@ struct S3Params {
   double length_scale_m = 0.10;
   double orientation_weight = 0.0;
   double angle_scale_rad = 1.0;
-  double epsilon_wait_per_s = 1e-4;
-  double w_hat_min = 0.5;
-  double margin_min_rad = 0.3;
   double r_trust_m = 0.30;
   double delta_v_max_m_s = 3e-3;
   double theta_step_deg = 2.0;
-  double theta_refine_step_deg = 0.1;
   IkParams ik;
-  bool posthoc_path_check = true;
   bool posthoc_velocity_check = true;
   int max_posthoc_candidates = 10;
-  /// The post-hoc stage skips a candidate of the same k within this many degrees of theta of one already
-  /// checked (near-duplicates). 0 disables the clustering.
+  /// A candidate of the same k and wrist branch within this many degrees of theta of a finalist already kept is not a
+  /// finalist (near-duplicates). 0 disables the clustering.
   double posthoc_cluster_deg = 10.0;
   /// Test mode: skip the scans and evaluate ONLY (force_k, force_theta_deg, force_psi_deg); ranking, post-hoc
   /// checks, best_per_k and the chosen candidate follow unchanged. force_k in 0..3 (GraspPointId), force_theta_deg
@@ -72,31 +67,28 @@ struct S3Params {
   /// throws. force_flip >= 0 takes precedence over it.
   std::string branch_rule = "margin";
 
-  // ---- mode "v2" (s1.mode); with "legacy" (default) none of the fields below is read and nothing changes ----
-  /// "legacy" (default, bit-identical to the code before v2) or "v2" (see selectGraspS3). Other value: validateS3Params throws.
-  /// v2: psi = 0 in the scans; a-priori constraints are ik (+ joint limits), r_trust and max_start_goal_deg (w_hat_min and
-  /// margin_min_rad are NOT applied); finalists are the best of each (k, wrist branch, theta cluster of
-  /// posthoc_cluster_deg) by J_static, at most finalists_n; each gets a kinematic rollout with nullspace target
-  /// rollout_q_ref; J = d_mm [+ kappa_w_mm * (-ln w_full(q_final))] + kappa_t_mm_s * t_wait; among the finalists with
+  // ---- selection (J_static / J) ----
+  /// psi = 0 in the scans; a-priori constraints are ik (+ joint limits), r_trust and max_start_goal_deg; finalists are the
+  /// best of each (k, wrist branch, theta cluster of posthoc_cluster_deg) by J_static, at most finalists_n; each gets a
+  /// kinematic rollout with nullspace target rollout_q_ref (the rollout is the path check);
+  /// J = d_mm [+ kappa_w_mm * (-ln w_full(q_final))] + kappa_t_mm_s * t_wait; among the finalists with
   /// J <= J_min + tau_j_mm the smallest t_wait wins; the post-hoc velocity check then runs on the winner (next best
-  /// if it fails). posthoc_path_check is ignored (the rollout is the path check). force works as in legacy (the single
-  /// forced candidate is the only finalist; force_psi_deg is honoured).
-  std::string mode = "legacy";
-  /// v2 a-priori: reject a candidate whose chosen-branch angle to FK(q_start) (dist_to_demo.ori_rad) exceeds this
+  /// if it fails). With force the single forced candidate is the only finalist; force_psi_deg is honoured.
+  /// A-priori: reject a candidate whose chosen-branch angle to FK(q_start) (dist_to_demo.ori_rad) exceeds this
   /// [deg]. 180 = disabled (the data cover only 16.5 and 34.5 deg: success, 179.6 deg: failure). In [0, 180].
   double max_start_goal_deg = 180.0;
-  int finalists_n = 12;  ///< v2: >= 1
-  /// v2: nullspace target of the rollout [rad], 7 values; MUST be given (non-empty) in v2, no fallback. It must equal
-  /// the nullspace target of the real controller (its joint configuration at activation).
+  int finalists_n = 12;  ///< >= 1
+  /// Nullspace target of the rollout [rad], 7 values; MUST be given (non-empty): validateS3Params throws otherwise, no
+  /// fallback. It must equal the nullspace target of the real controller (its joint configuration at activation).
   std::vector<double> rollout_q_ref;
-  bool use_w = true;          ///< v2: false -> J = d_mm [+ kappa_t * t_wait] (no w term)
-  double kappa_w_mm = 7.5;    ///< v2: weight of -ln(w_full) [mm], ASSUMED, >= 0
-  double kappa_t_mm_s = 0.0;  ///< v2: weight of the wait [mm/s], >= 0
-  double tau_j_mm = 2.0;      ///< v2: tie band on J [mm], ASSUMED, >= 0
+  bool use_w = true;          ///< false -> J = d_mm [+ kappa_t * t_wait] (no w term)
+  double kappa_w_mm = 7.5;    ///< weight of -ln(w_full) [mm], ASSUMED, >= 0
+  double kappa_t_mm_s = 0.0;  ///< weight of the wait [mm/s], >= 0
+  double tau_j_mm = 2.0;      ///< tie band on J [mm], ASSUMED, >= 0
 
   // ---- v2 clearance constraint (docs/S3_SPEC.md, "vincolo di clearance"); with use_clearance == false (default)
   //      nothing below is read and the selection is bit-identical ----
-  /// v2 only (true with mode "legacy" is an error): a finalist whose clearance (approachClearance(), commanded TCP
+  /// A finalist whose clearance (approachClearance(), commanded TCP
   /// trajectory vs rotating satellite, window [0, tau - 2 s]) is below min_clearance_mm is discarded. Lazy: the finalists are
   /// scanned in J order; the first admissible one fixes J*; the others with J <= J* + tau_j_mm are evaluated too;
   /// among the admissible ones the smaller wait wins. No admissible finalist: kNoCandidate (no fallback). With
@@ -110,11 +102,11 @@ struct S3Params {
 
   // ---- v2 joint-margin constraint (docs/S3_SPEC.md §10, criterion 11); with use_margin == false (default) nothing
   //      below is read and the selection is bit-identical ----
-  /// v2 only (true with mode "legacy" is an error): a finalist whose predicted joint margin over [start, AT_END + margin_follow_s]
+  /// A finalist whose predicted joint margin over [start, AT_END + margin_follow_s]
   /// (followMargin(): the G16 / step 0c procedure, nullspace reference rollout_q_ref, seed q_start) is below min_margin_deg is
   /// discarded. LAZY, in J_static order: for each finalist rollout (w, margin), then margin, then clearance (if use_clearance),
   /// then the post-hoc velocity check; the first finalist satisfying all of them is selected and no further rollout is done
-  /// (so the wait tie-break within tau_j_mm of the eager v2 selection does NOT apply in this mode). None admissible:
+  /// (so the wait tie-break within tau_j_mm of the eager selection does NOT apply in this mode). None admissible:
   /// kNoCandidate (no fallback). With force the constraint only warns (S3Result::warnings).
   bool use_margin = false;
   /// ASSUMED threshold [deg], finite and >= 0 (observed G16 interval: failed 13.26-20.84, succeeded 28.63-35.00; 24 lies in the gap).
@@ -125,36 +117,29 @@ struct S3Params {
   double margin_follow_dt_s = 0.01;
 };
 
-enum class S3Mode { kLegacy,
-                    kV2 };
-
-/// "legacy" -> kLegacy, "v2" -> kV2 (exact). @throws std::invalid_argument otherwise (no fallback).
-S3Mode parseS3Mode(const std::string& name);
-
-/// A-priori rejection bits (selectGraspS3 cascade order: ik, w_hat, margin, r_trust). A candidate passes iff the
+/// A-priori rejection bits (selectGraspS3 cascade order: ik, r_trust, start_goal). A candidate passes iff the
 /// mask is 0. The mask holds ALL failing constraints; S3Candidate::reject_reason keeps only the first one.
+/// Bits 2 and 4 (w_hat, static margin of the removed legacy selector) are retired and never set; 16..64 are the landscape
+/// tool diagnostics.
 enum S3RejectBit : unsigned { kRejectIk = 1u,
-                              kRejectWHat = 2u,
-                              kRejectMargin = 4u,
                               kRejectRTrust = 8u,
-                              kRejectStartGoal = 128u  ///< v2 only (max_start_goal_deg); never set by s3AprioriRejectMask. 16..64 are the landscape tool diagnostics
+                              kRejectStartGoal = 128u  ///< max_start_goal_deg
 };
 
 /// One row of the optional per-candidate log (S3Context::eval_log): one per evaluateGraspPose call of the scan, in
-/// call order. Filled with the same values the selection uses; wait_s / cost_current are computed for EVERY row
+/// call order. Filled with the same values the selection uses; wait_s / j_static are computed for EVERY row
 /// (S3Candidate::wait_s is 0 for rejected candidates, the log is not).
 struct S3EvalRecord {
   haptic_dmp_learning::core::GraspPointId k = haptic_dmp_learning::core::GraspPointId::kP0;
   double theta_rad = 0.0;
   double psi_rad = 0.0;
-  bool refine_stage = false;  ///< false: coarse grid, true: refinement around the best of k
   unsigned reject_mask = 0;   ///< S3RejectBit
   bool passes_constraints = false;
   bool wrist_flip = false;
   double d_pos_m = 0.0;
   double d = 0.0;
   double wait_s = 0.0;
-  double cost_current = 0.0;  ///< d + epsilon_wait_per_s * wait_s
+  double j_static = 0.0;      ///< J_static of the row (d_mm + kappa_w * (-ln w_full_static), t_wait = 0; +inf if w_full <= 0 with use_w)
   double w_hat = 0.0;
   double w_trans = 0.0;
   double margin_rad = 0.0;  ///< min joint margin of the IK solution of the chosen branch
@@ -182,15 +167,18 @@ struct S3Candidate {
   double d_pos_m = 0.0;
   double d = 0.0;
   double wait_s = 0.0;              ///< 0 if the candidate did not pass the constraints
-  double cost = 0.0;                ///< d + epsilon * wait_s (meaningful only if passes_constraints)
+  /// J of the candidate (meaningful only if passes_constraints): J_static (t_wait = 0) when it comes out of the scan, which
+  /// is the order of the finalists; once a finalist has been rolled out and found feasible, the J of the rollout
+  /// (d_mm + kappa_w * (-ln w_rollout) + kappa_t * t_wait, S3FinalistRecord::j). The chosen candidate carries the latter.
+  double cost = 0.0;
   double psi_rad = 0.0;             ///< roll about z_tcp of this candidate (== eval.psi_rad; 0 in the scans)
   unsigned reject_mask = 0;         ///< S3RejectBit mask of the a-priori constraints (all failing ones)
   bool passes_constraints = false;  ///< a-priori constraints; a post-hoc failure sets reject_reason only
-  std::string reject_reason;        ///< "ik", "w_hat", "margine", "r_trust" or a post-hoc reason
-  double w_full_static = 0.0;       ///< v2: w_full at the static IK solution of the chosen branch (0 in legacy)
+  std::string reject_reason;        ///< "ik", "r_trust", "start_goal" or a post-hoc reason
+  double w_full_static = 0.0;       ///< w_full at the static IK solution of the chosen branch
 };
 
-/// v2: one finalist of phase 2/3 (the rollout columns are meaningful only if rollout_done).
+/// One finalist of phase 2/3 (the rollout columns are meaningful only if rollout_done).
 struct S3FinalistRecord {
   S3Candidate cand;         ///< cand.cost = J (final) for a feasible finalist
   int accepted_index = -1;  ///< index in the accepted list at the time of the finalist stage (internal)
@@ -248,8 +236,8 @@ struct S3Result {
                 kPosthocFailed };
   Status status = kNoCandidate;
   S3Candidate chosen;                       ///< valid only when status == kSelected
-  std::vector<S3Candidate> ranked;          ///< first 20 constraint-passing candidates by cost (post-hoc annotated)
-  std::array<S3Candidate, 4> best_per_k;    ///< best of each k (a rejected one, with its reason, if none passes)
+  std::vector<S3Candidate> ranked;          ///< the rollout-feasible finalists by J (first 20, post-hoc annotated)
+  std::array<S3Candidate, 4> best_per_k;    ///< best J_static of each k (a rejected one, with its reason, if none passes)
   int evaluations = 0;                      ///< evaluateGraspPose calls
   int posthoc_checks = 0;                   ///< candidates examined by the post-hoc stage
   double posthoc_dv_m_s = 0.0;              ///< |v_target - v_ee| of the chosen candidate (0 if not checked)
@@ -258,11 +246,11 @@ struct S3Result {
   std::string note;
   bool forced = false;                         ///< S3Params::force was on
   std::string forced_violations;               ///< force_ignore_constraints: constraints violated and ignored (empty if none)
-  std::vector<S3FinalistRecord> v2_finalists;  ///< mode "v2" only: finalists in J_static order (empty in legacy)
+  std::vector<S3FinalistRecord> v2_finalists;  ///< finalists in J_static order
   double clearance_stage_ms = 0.0;             ///< wall-clock time spent in the clearance evaluations (0 if use_clearance is off)
   std::vector<std::string> warnings;           ///< use_clearance / use_margin with force: below threshold (not discarded)
-  int rollouts_done = 0;                       ///< v2: kinematic rollouts of finalists performed (eager: all finalists; use_margin: up to the first admissible; 0 in legacy)
-  int margin_evals_done = 0;                   ///< v2 use_margin: followMargin() evaluations performed
+  int rollouts_done = 0;                       ///< kinematic rollouts of finalists performed (eager: all finalists; use_margin: up to the first admissible)
+  int margin_evals_done = 0;                   ///< use_margin: followMargin() evaluations performed
 };
 
 /// Parameter checks done by selectGraspS3 (finite, positive scales/steps, non-negative weights; force_*, branch_rule: see S3Params).
@@ -278,27 +266,22 @@ double thetaDistRad(double a, double b);
 double s3Distance(double d_pos_m, double ori_rad, double length_scale_m, double orientation_weight,
                   double angle_scale_rad);
 
-/// A-priori constraint mask of one evaluated candidate (see S3RejectBit): ik = !feasible_basic, w_hat = !(w_hat >=
-/// w_hat_min), margin = !(min_margin >= margin_min_rad), r_trust = !(d_pos <= r_trust_m). Same predicates, same NaN
-/// behaviour as the cascade of selectGraspS3 (which calls this function).
-unsigned s3AprioriRejectMask(const PoseEvaluation& eval, double d_pos_m, const S3Params& params);
-
-/// v2 a-priori mask: ik (= !feasible_basic), r_trust, and kRejectStartGoal when max_start_goal_deg < 180 and the chosen
-/// branch's dist_to_demo.ori_rad exceeds it. w_hat_min / margin_min_rad are NOT applied. Same NaN behaviour as
-/// s3AprioriRejectMask for ik / r_trust.
+/// A-priori constraint mask of one evaluated candidate (see S3RejectBit): ik (= !feasible_basic), r_trust
+/// (= !(d_pos <= r_trust_m); NaN rejects), and kRejectStartGoal when max_start_goal_deg < 180 and the chosen branch's
+/// dist_to_demo.ori_rad exceeds it. The cascade of selectGraspS3 calls this function.
 unsigned s3AprioriRejectMaskV2(const PoseEvaluation& eval, double d_pos_m, const S3Params& params);
 
-/// v2 cost: d_mm + (use_w ? kappa_w_mm * (-ln w_full) : 0) + kappa_t_mm_s * t_wait_s. w_full <= 0 or NaN with use_w:
+/// Cost: d_mm + (use_w ? kappa_w_mm * (-ln w_full) : 0) + kappa_t_mm_s * t_wait_s. w_full <= 0 or NaN with use_w:
 /// +infinity (a singular candidate never beats a regular one).
 double s3CostV2(double d_mm, double w_full, double t_wait_s, const S3Params& params);
 
-/// v2 tie-break: index of the entry with the smallest t_wait among those with J <= J_min + tau_j_mm (J_min over the
+/// Tie-break: index of the entry with the smallest t_wait among those with J <= J_min + tau_j_mm (J_min over the
 /// finite entries; ties on t_wait: smaller J, then smaller index). -1 if @p j is empty or has no finite entry.
 /// @throws std::invalid_argument if the vectors differ in size or tau_j_mm < 0.
 int s3PickWinnerV2(const std::vector<double>& j, const std::vector<double>& t_wait_s, double tau_j_mm);
 
 /**
- * One round of the lazy v2 clearance filter (pure; selectGraspS3 calls it before every tie-break pick).
+ * One round of the lazy clearance filter (pure; selectGraspS3 calls it before every tie-break pick).
  * @param j  J of each finalist (non-finite = never considered, as in s3PickWinnerV2)
  * @param alive  in/out: entries still in play; a finalist evaluated below @p min_clearance_mm is set to 0
  * @param done / clearance_mm  in/out cache: eval(i) runs at most once per i
@@ -318,11 +301,11 @@ double s3DPos(const Eigen::Vector3d& position_world, const Eigen::Vector3d& cont
               const Eigen::Vector3d& p0, const Eigen::Vector3d& delta_g_demo);
 
 /**
- * Scans k in {0,90,180,270} x theta in [-180, 180) deg (theta_step_deg), refines the best accepted of each k
- * with theta_refine_step_deg in +-theta_step_deg, ranks by cost and runs the post-hoc checks (relative
- * velocity |omega x r - v_ProDMP| <= delta_v_max_m_s; kinematic path via checkKinematicFeasibility with the
- * orientation of the chosen branch) on the best candidates, in order, up to max_posthoc_candidates checks. A candidate of the same k within
- * posthoc_cluster_deg of theta of an already checked one is skipped (not counted as a check).
+ * Scans k in {0,90,180,270} x theta in [-180, 180) deg on a single grid (theta_step_deg, no refinement), orders the
+ * constraint-passing candidates by J_static (ties: k, theta, wrist_flip ascending), takes the finalists (see
+ * S3Params::finalists_n, posthoc_cluster_deg) and runs on them, in order, the kinematic rollout, the optional joint-margin and
+ * clearance constraints and the post-hoc velocity check (relative velocity |omega x r - v_ProDMP| <= delta_v_max_m_s), up to
+ * max_posthoc_candidates checks. See S3Params for the exact flow.
  * @p robot is used as-is (not thread-safe) and left in an unspecified configuration.
  * @throws std::invalid_argument for invalid parameters or a null template.
  */

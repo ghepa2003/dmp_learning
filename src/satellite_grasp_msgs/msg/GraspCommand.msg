@@ -38,7 +38,7 @@ float64 selection_elapsed_s
 
 # Of the selected candidate. Meaningful ONLY when status == STATUS_SELECTED; 0.0 otherwise (0.0 is a
 # legitimate value too, so read status first).
-float64 cost                            # d + epsilon_wait_per_s * wait_s, to be MINIMIZED
+float64 cost                            # J of the rollout of the chosen candidate (d_mm + kappa_w*(-ln w_rollout) + kappa_t*wait), to be MINIMIZED
 float64 d_pos_m                         # |(goal - p0) - delta_g_demo|
 float64 w_hat                           # w_trans / w_trans_demo at the IK solution
 float64 min_joint_margin_rad            # min joint-limit margin of the IK solution

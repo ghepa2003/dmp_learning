@@ -160,9 +160,10 @@ int main(int argc, char** argv) {
     const int stride = static_cast<int>(std::lround(args.dt / args.sim_dt));
 
     // ---- thresholds: read from the planner's constants ------------------------------------------------
-    const satellite_grasp_planner::core::S3Params s3;  // defaults; the planner node declares the same ones (s1.*)
-    const double margin_min = s3.margin_min_rad;
-    const double w_hat_min = s3.w_hat_min;
+    // The removed legacy selector's thresholds (former S3Params::margin_min_rad / w_hat_min defaults), kept as local constants
+    // of this tool: it checks the orientation law against them, the planner no longer uses them.
+    const double margin_min = 0.3;
+    const double w_hat_min = 0.5;
     const NullspaceBiasedResolution::Params ns_params;  // what checkKinematicFeasibility / JointPathSimulator use
     const double qdot_limit = ns_params.ik_params.max_joint_speed;
 
@@ -236,8 +237,8 @@ int main(int argc, char** argv) {
               << "  no clamping; 'IK fail' = first instant with a joint outside its limits by > " << kViolTolRad
               << " rad (planner tolerance) or non-finite q.\n"
               << "THRESHOLDS (planner constants; * marks a violation):\n"
-              << "  min joint margin >= " << margin_min << " rad (S3Params::margin_min_rad), w_hat >= " << w_hat_min
-              << " (S3Params::w_hat_min, w_hat = w_trans / w_trans_demo = " << w_demo << ", wTransFromJacobian, manipulability.hpp),\n"
+              << "  min joint margin >= " << margin_min << " rad (former S3Params::margin_min_rad), w_hat >= " << w_hat_min
+              << " (former S3Params::w_hat_min, w_hat = w_trans / w_trans_demo = " << w_demo << ", wTransFromJacobian, manipulability.hpp),\n"
               << "  |qdot_j| <= " << qdot_limit << " rad/s (VelocityIkSolver::Params::max_joint_speed used by JointPathSimulator; one value for all joints,\n"
               << "  the simulator has no per-joint table), IK fail must be 'never'.\n"
               << "hand-collar distance: NON eseguito: nel core non esiste una funzione di collisione/distanza usata dal planner sulla posa finale"

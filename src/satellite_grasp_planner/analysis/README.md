@@ -63,7 +63,7 @@ orientation law sampled at t_i = (i+1)*dt, `JointPathSimulator` + `NullspaceBias
 
 - `--dt` (default 20 ms) = step of the profile CSVs; the simulation integrates at `--sim-dt` (default 5 ms, the planner's step) and
   all extrema are taken on the 5 ms grid. `--dt` must be a multiple of `--sim-dt`.
-- Thresholds are printed at the top, read from planner constants (`S3Params` margin 0.3 rad / w_hat 0.5; `VelocityIkSolver::Params::max_joint_speed`
+- Thresholds are printed at the top, local constants of the tool (the former `S3Params` thresholds margin 0.3 rad / w_hat 0.5, no longer planner parameters; `VelocityIkSolver::Params::max_joint_speed`
   of the simulator); a `*` marks a violation. w_hat = w_trans / w_trans_demo (`demo.end_joints_rad`).
 - `--psi-ref`: nominal (psi = 0) TCP orientation of the goal grasp (`orientation_nominal_world`); psi(tau) is the rotation of q(tau) about the
   local z relative to it. Without it psi is reported as not computed.
@@ -75,7 +75,8 @@ Output: table per variant on stdout, `<out>/summary.csv`, `<out>/profile_<law>_<
 
 Exports the landscape of the S3 selector (`selectGraspS3`) per candidate, for OFFLINE evaluation of other cost formulations
 (`tools/s3_landscape_report.py`). The selector is called as is (`planGraspAndLaunchS1` with `eval_log`, `S3Context::eval_log`);
-nothing is changed in the selection. `--selftest` compares the tool's psi = 0 rows with the real log and the winner (exit != 0 on mismatch).
+nothing is changed in the selection. NOTE: the selector is now single-mode (J_static / J, no legacy cost) and requires `rollout_q_ref`, which this
+tool does not pass yet; the `--selftest` checks on the winner and the RUN15 reference below describe the removed legacy selection and are not valid until the tool is reworked. `--selftest` compares the tool's psi = 0 rows with the real log and the winner (exit != 0 on mismatch).
 
     colcon build --packages-select satellite_grasp_planner --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_ANALYSIS_TOOLS=ON
     ros2 run satellite_grasp_planner s3_landscape --selftest
@@ -98,7 +99,7 @@ psi: roll about the local z of the TCP = approach axis z_tcp = -R(theta) n_body;
 CSV (one row per k, theta, psi; k = 0..3 means 0/90/180/270 deg):
 `k, theta_deg, psi_deg, accepted` (a-priori constraints pass: mask & 15 == 0), `reject_first` (first set bit in the order below, `none`),
 `reject_mask`, `ik_ok_A` / `ik_ok_B` (nominal / nominal*Rz(pi) converged), `branch_selected` (0 nominal, 1 flipped), `d_pos_mm`, `t_wait_s`
-(planLaunch, for ALL rows), `J_current` = d + eps*t_wait, `w_hat`, `w_trans`, `w_rot` (3x7 angular block), `w_full` (6x7), `smin_trans`,
+(planLaunch, for ALL rows), `J_current` = J_static of the selector (d_mm + kappa_w*(-ln w_full), t_wait = 0; the column keeps its old name), `w_hat`, `w_trans`, `w_rot` (3x7 angular block), `w_full` (6x7), `smin_trans`,
 `smin_rot` (smallest singular values of the two 3x7 blocks), `margin_rollout_rad` (`checkKinematicFeasibility.min_joint_margin_rad`, the
 planner's path-check margin; NaN if not computed / IK infeasible), `margin_follow_rad` (min of margin_rollout and the margins of 7 follow-arc samples,
 t_j = j*follow_s/6, pose rotated by omega*t_j about the satellite axis through the centre, hot-started IK on the same branch, nullspace
@@ -107,9 +108,9 @@ reference q_start; if the rollout was not computed: follow samples only; NaN if 
 constraint), `dv_m_s`, `w_full_seedmin/max`, `margin_seedmin/max`, `n_seed_conv` (psi = 0 accepted rows, `--seed-spread N`, seeds q_start +- 0.3 rad uniform,
 mt19937 seed 12345).
 
-`reject_mask` bits: 1 = ik, 2 = w_hat, 4 = margine, 8 = r_trust (a-priori, `S3RejectBit`, decide `accepted`); 16 = velocity
+`reject_mask` bits: 1 = ik, 8 = r_trust, 128 = start_goal (a-priori, `S3RejectBit`, decide `accepted`; bits 2 and 4, w_hat / static margin, are retired); 16 = velocity
 (dv > delta_v_max), 32 = path (joint limits along the rollout), 64 = follow-arc IK failure (diagnostics; they do not change `accepted`).
-Branch rule and constraints are the planner's (`evaluateGraspPoseDetailed`, `s3AprioriRejectMask`); only the coarse grid (theta step) is exported.
+Branch rule and constraints are the planner's (`evaluateGraspPoseDetailed`, `s3AprioriRejectMaskV2`); only the coarse grid (theta step) is exported.
 
 Theta grids (CSV column `grid`): `coarse` = the selector's grid (theta = -pi + i*step, unchanged); `fine` = for each k the top `--refine-top-n`
 coarse candidates by `d_pos` (psi = 0, IK ok on the chosen branch, `reject_mask` bit 1 clear) re-evaluated at theta_c + j*`--refine-step-deg`,

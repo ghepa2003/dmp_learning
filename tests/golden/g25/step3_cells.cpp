@@ -123,7 +123,6 @@ int main(int argc, char** argv) {
 
     // Frozen S3Params (G25b)
     S3Params s3;
-    s3.mode = "v2";
     s3.branch_rule = "rotation";
     s3.use_w = true;
     s3.use_clearance = true;
@@ -133,7 +132,6 @@ int main(int argc, char** argv) {
     s3.finalists_n = 40;
     s3.posthoc_cluster_deg = 10.0;
     s3.theta_step_deg = 2.0;
-    s3.theta_refine_step_deg = 0.1;
     s3.kappa_w_mm = 7.5;
     s3.kappa_t_mm_s = 0.0;
     s3.tau_j_mm = 2.0;
@@ -152,7 +150,6 @@ int main(int argc, char** argv) {
     std::cout << "Output CSV:             " << (write_csv ? output_csv : "(disabilitato)") << std::endl;
     std::cout << "Snapshot theta_rad:     " << std::fixed << std::setprecision(16) << snap_theta_rad << std::endl;
     std::cout << "Snapshot t_s:           " << std::fixed << std::setprecision(4) << snap_t_s << " s" << std::endl;
-    std::cout << "S3Params.mode:          " << s3.mode << std::endl;
     std::cout << "S3Params.branch_rule:   " << s3.branch_rule << std::endl;
     std::cout << "S3Params.use_w:         " << (s3.use_w ? "true" : "false") << std::endl;
     std::cout << "S3Params.use_clearance: " << (s3.use_clearance ? "true" : "false") << std::endl;
@@ -161,7 +158,7 @@ int main(int argc, char** argv) {
     std::cout << "S3Params.min_margin_deg:" << s3.min_margin_deg << " deg" << std::endl;
     std::cout << "S3Params.finalists_n:   " << s3.finalists_n << std::endl;
     std::cout << "S3Params.cluster_deg:   " << s3.posthoc_cluster_deg << " deg" << std::endl;
-    std::cout << "S3Params.theta_step_deg:" << s3.theta_step_deg << " deg (refine " << s3.theta_refine_step_deg << " deg)" << std::endl;
+    std::cout << "S3Params.theta_step_deg:" << s3.theta_step_deg << " deg" << std::endl;
     std::cout << "S3Params.kappa_w_mm:    " << s3.kappa_w_mm << " mm" << std::endl;
     std::cout << "S3Params.kappa_t_mm_s:  " << s3.kappa_t_mm_s << " mm/s" << std::endl;
     std::cout << "S3Params.tau_j_mm:      " << s3.tau_j_mm << " mm" << std::endl;

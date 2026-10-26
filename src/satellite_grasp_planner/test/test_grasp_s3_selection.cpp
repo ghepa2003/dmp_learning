@@ -85,15 +85,20 @@ S3TestSetup makeS3TestSetup() {
   return s;
 }
 
-/// Constraints wide open (only IK feasibility remains), no post-hoc stage, coarse grid.
-S3Params looseParams() {
+/// Valid base parameters: the rollout needs its nullspace target (rollout_q_ref, no default: validateS3Params throws without
+/// it), here the "ready" pose of the controller.
+S3Params validParams() {
   S3Params p;
-  p.w_hat_min = 0.0;
-  p.margin_min_rad = 0.0;
+  const RobotModel::JointVector q = RobotModel::readyPose();
+  p.rollout_q_ref.assign(q.data(), q.data() + 7);
+  return p;
+}
+
+/// Constraints wide open (only IK feasibility and the rollout remain), no velocity check, coarse grid.
+S3Params looseParams() {
+  S3Params p = validParams();
   p.r_trust_m = 100.0;
   p.theta_step_deg = 5.0;
-  p.theta_refine_step_deg = 1.0;
-  p.posthoc_path_check = false;
   p.posthoc_velocity_check = false;
   return p;
 }
@@ -106,39 +111,13 @@ TEST(GraspS3Test, ImpossibleConstraintGivesNoCandidate) {
   s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
   ASSERT_NE(s.robot, nullptr);
   S3Params p = looseParams();
-  p.w_hat_min = 5.0;
+  p.r_trust_m = 1e-9;  // nothing is within a nanometre of the demo deformation
   S3Result r;
   ASSERT_NO_THROW(r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p));
   EXPECT_EQ(r.status, S3Result::kNoCandidate);
   EXPECT_TRUE(r.ranked.empty());
   EXPECT_GT(r.evaluations, 0);
   EXPECT_FALSE(r.note.empty());
-}
-
-TEST(GraspS3Test, WinnerPassesConstraintsAndIsCheapest) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
-  ASSERT_NE(s.robot, nullptr);
-  const S3Params p = looseParams();
-  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
-  if (r.status != S3Result::kSelected) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
-
-  EXPECT_TRUE(r.chosen.passes_constraints);
-  EXPECT_TRUE(r.chosen.eval.feasible_basic);
-  EXPECT_GE(r.chosen.eval.w_hat, p.w_hat_min);
-  EXPECT_GE(r.chosen.eval.margins.min_margin_rad, p.margin_min_rad);
-  EXPECT_LE(r.chosen.d_pos_m, p.r_trust_m);
-  ASSERT_FALSE(r.ranked.empty());
-  EXPECT_LE(r.ranked.size(), 20u);
-  EXPECT_DOUBLE_EQ(r.chosen.cost, r.ranked.front().cost);  // no post-hoc: the best ranked is the winner
-  for (std::size_t i = 0; i < r.ranked.size(); ++i) {
-    EXPECT_TRUE(r.ranked[i].passes_constraints);
-    EXPECT_GE(r.ranked[i].cost, r.chosen.cost);
-    if (i > 0) {
-      EXPECT_GE(r.ranked[i].cost, r.ranked[i - 1].cost);
-    }
-  }
 }
 
 TEST(GraspS3Test, DistanceIgnoresOrientationWithZeroWeight) {
@@ -171,7 +150,6 @@ TEST(GraspS3Test, WaitTimeWithinOnePeriod) {
   const double period = 2.0 * M_PI / std::abs(kOmega);  // 180 s
   EXPECT_GE(r.chosen.wait_s, s.ctx.min_delay_s);
   EXPECT_LE(r.chosen.wait_s, s.ctx.min_delay_s + period);
-  EXPECT_NEAR(r.chosen.cost, r.chosen.d + p.epsilon_wait_per_s * r.chosen.wait_s, 1e-12);
 }
 
 TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
@@ -185,14 +163,15 @@ TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
   p.max_posthoc_candidates = 5;
   const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
   if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
-  ASSERT_FALSE(r.ranked.empty());
-  EXPECT_NE(r.ranked.front().reject_reason.find("velocita'"), std::string::npos) << r.ranked.front().reject_reason;
+  if (r.posthoc_log.empty()) GTEST_SKIP() << "no rollout-feasible finalist in this fixture: " << r.note;
+  const S3PosthocEntry& first = r.posthoc_log.front();  // the first candidate examined
+  EXPECT_NE(first.reject_reason.find("velocita'"), std::string::npos) << first.reject_reason;
+  EXPECT_FALSE(first.accepted);
   EXPECT_GE(r.posthoc_checks, 1);
   if (r.status == S3Result::kSelected) {
     EXPECT_GE(r.posthoc_checks, 2);
     EXPECT_LE(r.posthoc_dv_m_s, p.delta_v_max_m_s);
-    const bool same = r.chosen.eval.k == r.ranked.front().eval.k &&
-                      r.chosen.eval.theta_rad == r.ranked.front().eval.theta_rad;
+    const bool same = r.chosen.eval.k == first.k && r.chosen.eval.theta_rad == first.theta_rad;
     EXPECT_FALSE(same);
   } else {
     EXPECT_EQ(r.status, S3Result::kPosthocFailed);
@@ -200,16 +179,28 @@ TEST(GraspS3Test, PosthocVelocityRejectsFirstCandidate) {
   }
 }
 
-TEST(GraspS3Test, PosthocClusterSkipsNearbyThetaOfSameK) {
+// The cluster rule acts on the finalists: of the candidates of the same k AND wrist branch within posthoc_cluster_deg of theta only
+// the best (J_static) is a finalist.
+TEST(GraspS3Test, ClusterKeepsOneFinalistPerNearbyThetaOfSameKAndBranch) {
   REQUIRE_URDF_OR_SKIP();
   S3TestSetup s = makeS3TestSetup();
   s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
   ASSERT_NE(s.robot, nullptr);
   S3Params p = looseParams();
-  p.posthoc_velocity_check = true;  // an impossible dv makes every checked candidate fail, so all get examined
-  p.delta_v_max_m_s = 1e-6;
-  p.max_posthoc_candidates = 100000;
-  p.theta_refine_step_deg = 1.0;  // refined candidates sit 1-2 deg from the coarse best of the same k
+  auto closePairs = [](const S3Result& r, double cluster_deg) {
+    int n = 0;
+    for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+      for (std::size_t j = i + 1; j < r.v2_finalists.size(); ++j) {
+        const auto& a = r.v2_finalists[i].cand.eval;
+        const auto& b = r.v2_finalists[j].cand.eval;
+        if (a.k != b.k || a.wrist_flip != b.wrist_flip) continue;
+        double d = std::fmod(std::abs(a.theta_rad - b.theta_rad), 2.0 * M_PI);
+        if (d > M_PI) d = 2.0 * M_PI - d;
+        if (d * 180.0 / M_PI < cluster_deg - 1e-9) ++n;
+      }
+    }
+    return n;
+  };
 
   p.posthoc_cluster_deg = 0.0;
   const S3Result off = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
@@ -217,17 +208,9 @@ TEST(GraspS3Test, PosthocClusterSkipsNearbyThetaOfSameK) {
   p.posthoc_cluster_deg = 10.0;
   const S3Result on = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
 
-  ASSERT_EQ(on.posthoc_log.size(), static_cast<std::size_t>(on.posthoc_checks));
-  ASSERT_EQ(off.posthoc_log.size(), static_cast<std::size_t>(off.posthoc_checks));
-  EXPECT_LT(on.posthoc_checks, off.posthoc_checks);  // near-duplicates (refined thetas) were skipped
-  for (std::size_t i = 0; i < on.posthoc_log.size(); ++i) {
-    for (std::size_t j = i + 1; j < on.posthoc_log.size(); ++j) {
-      if (on.posthoc_log[i].k != on.posthoc_log[j].k) continue;
-      double d = std::fmod(std::abs(on.posthoc_log[i].theta_rad - on.posthoc_log[j].theta_rad), 2.0 * M_PI);
-      if (d > M_PI) d = 2.0 * M_PI - d;
-      EXPECT_GE(d * 180.0 / M_PI, p.posthoc_cluster_deg - 1e-9) << "entries " << i << ", " << j;
-    }
-  }
+  EXPECT_EQ(closePairs(on, p.posthoc_cluster_deg), 0);
+  if (closePairs(off, p.posthoc_cluster_deg) == 0) GTEST_SKIP() << "no near-duplicate finalists without the cluster rule in this fixture";
+  EXPECT_GT(closePairs(off, p.posthoc_cluster_deg), 0);  // the rule changes the finalist set
 }
 
 TEST(GraspS3Test, PosthocChecksLimitedToMaxAndLogged) {
@@ -255,24 +238,22 @@ TEST(GraspS3Test, PosthocChecksLimitedToMaxAndLogged) {
   }
 }
 
-TEST(GraspS3Test, PosthocVelocityCheckDisabledSelectsCheapest) {
+TEST(GraspS3Test, PosthocVelocityCheckDisabledSelectsWithoutMeasuring) {
   REQUIRE_URDF_OR_SKIP();
   S3TestSetup s = makeS3TestSetup();
   s.ctx.prodmp_template = &s.tmpl;  // set here: S3TestSetup may be moved out of makeS3TestSetup()
   ASSERT_NE(s.robot, nullptr);
   S3Params p = looseParams();
   p.posthoc_velocity_check = false;
-  p.posthoc_path_check = false;
   p.delta_v_max_m_s = 1e-6;  // would reject everything if the velocity check were on
   const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
   if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << r.note;
+  if (r.posthoc_log.empty() && r.status == S3Result::kPosthocFailed) GTEST_SKIP() << "no rollout-feasible finalist: " << r.note;
   ASSERT_EQ(r.status, S3Result::kSelected);
-  ASSERT_FALSE(r.ranked.empty());
-  EXPECT_EQ(r.chosen.eval.k, r.ranked.front().eval.k);
-  EXPECT_DOUBLE_EQ(r.chosen.eval.theta_rad, r.ranked.front().eval.theta_rad);
   EXPECT_EQ(r.posthoc_checks, 1);
   ASSERT_EQ(r.posthoc_log.size(), 1u);
   EXPECT_TRUE(r.posthoc_log.front().accepted);
+  EXPECT_EQ(r.posthoc_log.front().dv_m_s, 0.0);  // not measured
 }
 
 TEST(GraspS3Test, Deterministic) {
@@ -397,7 +378,7 @@ TEST(GraspS3ForceTest, ForceSelectsExactlyTheGivenCandidate) {
   const S3Result r0 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, scan);
   if (r0.status != S3Result::kSelected) GTEST_SKIP() << "no feasible candidate in this fixture: " << r0.note;
   // force a candidate that is NOT the winner (the second ranked one), psi = 0 first
-  ASSERT_GE(r0.ranked.size(), 2u);
+  if (r0.ranked.size() < 2) GTEST_SKIP() << "need >= 2 rollout-feasible finalists, have " << r0.ranked.size();
   const S3Candidate& other = r0.ranked[1];
   S3Params p = scan;
   p.force = true;
@@ -428,7 +409,7 @@ TEST(GraspS3ForceTest, InfeasibleForcedCandidateGivesNoCandidateUnlessIgnored) {
   s.ctx.prodmp_template = &s.tmpl;
   ASSERT_NE(s.robot, nullptr);
   S3Params p = looseParams();
-  p.w_hat_min = 5.0;  // nothing passes
+  p.r_trust_m = 1e-9;  // nothing passes
   p.force = true;
   p.force_k = 0;
   p.force_theta_deg = 0.0;
@@ -436,18 +417,18 @@ TEST(GraspS3ForceTest, InfeasibleForcedCandidateGivesNoCandidateUnlessIgnored) {
   EXPECT_EQ(r.status, S3Result::kNoCandidate);
   EXPECT_EQ(r.evaluations, 1);
   EXPECT_NE(r.note.find("FORCED"), std::string::npos);
-  EXPECT_NE(r.note.find("w_hat"), std::string::npos);
+  EXPECT_NE(r.note.find("r_trust"), std::string::npos);
 
   p.force_ignore_constraints = true;
   r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
   EXPECT_EQ(r.status, S3Result::kSelected);
   EXPECT_EQ(r.evaluations, 1);
   EXPECT_FALSE(r.chosen.passes_constraints);
-  EXPECT_NE(r.forced_violations.find("w_hat"), std::string::npos);
+  EXPECT_NE(r.forced_violations.find("r_trust"), std::string::npos);
 }
 
 TEST(GraspS3ForceTest, InvalidForceInputsThrow) {
-  S3Params p;
+  S3Params p = validParams();
   p.force = true;
   EXPECT_NO_THROW(validateS3Params(p));
   S3Params q = p;
@@ -568,7 +549,7 @@ TEST(GraspS3FlipTest, NonConvergingForcedBranchGivesNoCandidateAndNoFallback) {
 }
 
 TEST(GraspS3FlipTest, DefaultAutoAndValidation) {
-  S3Params p;
+  S3Params p = validParams();
   EXPECT_EQ(p.force_flip, -1);
   EXPECT_NO_THROW(validateS3Params(p));
   p.force = true;
@@ -722,11 +703,11 @@ TEST(GraspS3BranchRuleTest, UnknownValueIsAnError) {
   EXPECT_EQ(parseBranchRule("rotation"), BranchRule::kRotation);
   for (const char* bad : {"", "Margin", "ROTATION", "rotation ", "auto", "margine"}) {
     EXPECT_THROW(parseBranchRule(bad), std::invalid_argument) << "'" << bad << "'";
-    S3Params p;
+    S3Params p = validParams();
     p.branch_rule = bad;
     EXPECT_THROW(validateS3Params(p), std::invalid_argument) << "'" << bad << "'";
   }
-  S3Params ok;
+  S3Params ok = validParams();
   ok.branch_rule = "rotation";
   EXPECT_NO_THROW(validateS3Params(ok));
 
@@ -771,74 +752,26 @@ TEST(GraspS3BranchRuleTest, ForceFlipTakesPrecedenceOverRotation) {
   EXPECT_TRUE(r.chosen.eval.wrist_flip);
 }
 
-// ---- s1.mode "v2" (written without being able to build/run) ----
+// ---- selection: J_static / J, finalists, rollout (written without being able to build/run) ----
 
 namespace {
 
 S3Params v2Params() {
   S3Params p = looseParams();
-  p.mode = "v2";
   p.branch_rule = "rotation";
-  const RobotModel::JointVector q = RobotModel::readyPose();
-  p.rollout_q_ref.assign(q.data(), q.data() + 7);
   return p;
 }
 
 PoseEvaluation syntheticEval(double ori_deg) {
   PoseEvaluation e;
   e.feasible_basic = true;
-  e.w_hat = 0.0;                   // would fail w_hat_min in legacy
-  e.margins.min_margin_rad = 0.0;  // would fail margin_min_rad in legacy
+  e.w_hat = 0.0;                   // w_hat and the static margin are not constraints
+  e.margins.min_margin_rad = 0.0;
   e.dist_to_demo.ori_rad = ori_deg * M_PI / 180.0;
   return e;
 }
 
 }  // namespace
-
-TEST(GraspS3V2Test, LegacyIsTheDefaultAndModeIsValidated) {
-  S3Params p;
-  EXPECT_EQ(p.mode, "legacy");
-  EXPECT_NO_THROW(validateS3Params(p));
-  EXPECT_EQ(parseS3Mode("legacy"), S3Mode::kLegacy);
-  EXPECT_EQ(parseS3Mode("v2"), S3Mode::kV2);
-  for (const char* bad : {"", "V2", "Legacy", "v3", "v2 "}) {
-    EXPECT_THROW(parseS3Mode(bad), std::invalid_argument) << "'" << bad << "'";
-    S3Params q;
-    q.mode = bad;
-    EXPECT_THROW(validateS3Params(q), std::invalid_argument) << "'" << bad << "'";
-  }
-}
-
-TEST(GraspS3V2Test, LegacySelectionIgnoresEveryV2Parameter) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  const S3Params base = looseParams();  // mode = "legacy" by default
-  S3Params other = looseParams();
-  other.mode = "legacy";
-  other.max_start_goal_deg = 10.0;
-  other.finalists_n = 1;
-  other.use_w = false;
-  other.kappa_w_mm = 99.0;
-  other.kappa_t_mm_s = 5.0;
-  other.tau_j_mm = 50.0;
-  const RobotModel::JointVector q = RobotModel::readyPose();
-  other.rollout_q_ref.assign(q.data(), q.data() + 7);
-  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
-  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
-  ASSERT_EQ(a.status, b.status);
-  EXPECT_EQ(a.evaluations, b.evaluations);
-  EXPECT_EQ(a.ranked.size(), b.ranked.size());
-  EXPECT_TRUE(a.v2_finalists.empty());
-  EXPECT_TRUE(b.v2_finalists.empty());
-  if (a.status == S3Result::kSelected) {
-    EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
-    EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
-    EXPECT_EQ(a.chosen.cost, b.chosen.cost);
-    EXPECT_EQ(a.chosen.reject_mask, b.chosen.reject_mask);
-  }
-}
 
 TEST(GraspS3V2Test, EqualDistanceHigherWWins) {
   const S3Params p;  // use_w = true, kappa_w = 7.5 mm, tau_j = 2 mm
@@ -888,12 +821,11 @@ TEST(GraspS3V2Test, TieBandPicksSmallerWait) {
 
 TEST(GraspS3V2Test, MaxStartGoalDiscardsAndV2SkipsWHatAndMargin) {
   S3Params p;
-  p.mode = "v2";
   const PoseEvaluation far = syntheticEval(100.0);
   p.max_start_goal_deg = 90.0;
   EXPECT_EQ(s3AprioriRejectMaskV2(far, 0.0, p) & kRejectStartGoal, static_cast<unsigned>(kRejectStartGoal));
   p.max_start_goal_deg = 110.0;
-  EXPECT_EQ(s3AprioriRejectMaskV2(far, 0.0, p), 0u);  // w_hat = 0 and margin = 0 are NOT rejected in v2
+  EXPECT_EQ(s3AprioriRejectMaskV2(far, 0.0, p), 0u);  // w_hat = 0 and margin = 0 are not constraints
   p.max_start_goal_deg = 180.0;                       // disabled, even at exactly pi
   EXPECT_EQ(s3AprioriRejectMaskV2(syntheticEval(180.0), 0.0, p), 0u);
   // r_trust and ik still apply
@@ -902,10 +834,6 @@ TEST(GraspS3V2Test, MaxStartGoalDiscardsAndV2SkipsWHatAndMargin) {
   PoseEvaluation bad = far;
   bad.feasible_basic = false;
   EXPECT_EQ(s3AprioriRejectMaskV2(bad, 0.0, p), static_cast<unsigned>(kRejectIk));
-  // legacy mask: unchanged bits, never the new one
-  const unsigned legacy = s3AprioriRejectMask(far, 0.0, S3Params());
-  EXPECT_EQ(legacy, static_cast<unsigned>(kRejectWHat | kRejectMargin));
-  EXPECT_EQ(legacy & kRejectStartGoal, 0u);
 }
 
 TEST(GraspS3V2Test, ValidationErrors) {
@@ -923,12 +851,8 @@ TEST(GraspS3V2Test, ValidationErrors) {
   bad([](S3Params& p) { p.max_start_goal_deg = -1.0; });
   bad([](S3Params& p) { p.rollout_q_ref.pop_back(); });      // 6 values
   bad([](S3Params& p) { p.rollout_q_ref.push_back(0.0); });  // 8 values
-  bad([](S3Params& p) { p.rollout_q_ref.clear(); });         // v2: mandatory
+  bad([](S3Params& p) { p.rollout_q_ref.clear(); });         // mandatory
   bad([](S3Params& p) { p.rollout_q_ref[2] = std::nan(""); });
-  S3Params legacy;  // legacy: empty is fine, wrong length is not
-  EXPECT_NO_THROW(validateS3Params(legacy));
-  legacy.rollout_q_ref = {0.0, 0.0, 0.0};
-  EXPECT_THROW(validateS3Params(legacy), std::invalid_argument);
 }
 
 TEST(GraspS3V2Test, MissingRolloutQRefIsAnError) {
@@ -937,8 +861,13 @@ TEST(GraspS3V2Test, MissingRolloutQRefIsAnError) {
   s.ctx.prodmp_template = &s.tmpl;
   ASSERT_NE(s.robot, nullptr);
   S3Params p = looseParams();
-  p.mode = "v2";  // rollout_q_ref left empty
-  EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
+  p.rollout_q_ref.clear();  // mandatory, no default: the error names the parameter
+  try {
+    selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    FAIL() << "expected std::invalid_argument";
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("rollout_q_ref"), std::string::npos) << e.what();
+  }
   p = v2Params();
   p.rollout_q_ref[1] = 10.0;  // outside the URDF joint limits
   EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
@@ -950,8 +879,6 @@ TEST(GraspS3V2Test, EndToEndFinalistsAndWinner) {
   s.ctx.prodmp_template = &s.tmpl;
   ASSERT_NE(s.robot, nullptr);
   S3Params p = v2Params();
-  p.w_hat_min = 1e9;       // would reject everything in legacy; ignored in v2
-  p.margin_min_rad = 1e9;  // idem
   p.finalists_n = 3;
   const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
   if (r.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << r.note;
@@ -1011,24 +938,11 @@ bool sameCandidate(const ClearanceQuery& q, const S3Candidate& c) {
 
 S3Params v2LooseParams() {
   S3Params p = v2Params();
-  p.w_hat_min = 1e9;       // ignored in v2
-  p.margin_min_rad = 1e9;  // idem
   p.finalists_n = 4;
   return p;
 }
 
 }  // namespace
-
-TEST(GraspS3ClearanceTest, LegacyWithUseClearanceIsAnError) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  S3Params p = looseParams();  // legacy
-  p.use_clearance = true;
-  s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(100.0); };
-  EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p), std::invalid_argument);
-}
 
 TEST(GraspS3ClearanceTest, MissingEvaluatorIsAnError) {
   REQUIRE_URDF_OR_SKIP();
@@ -1208,9 +1122,6 @@ TEST(GraspS3MarginTest, DefaultsAndValidation) {
   EXPECT_DOUBLE_EQ(d.margin_follow_s, 3.0);
   EXPECT_DOUBLE_EQ(d.margin_follow_dt_s, 0.01);
   EXPECT_NO_THROW(validateS3Params(v2MarginParams(24.0)));
-  S3Params legacy = looseParams();
-  legacy.use_margin = true;  // legacy: error
-  EXPECT_THROW(validateS3Params(legacy), std::invalid_argument);
   auto bad = [](auto mutate) {
     S3Params p = v2MarginParams(24.0);
     mutate(p);
@@ -1253,81 +1164,6 @@ TEST(GraspS3MarginTest, DisabledIsUnchangedV2Selection) {
     EXPECT_FALSE(b.v2_finalists[i].margin_done);
     EXPECT_TRUE(b.v2_finalists[i].discard_reason.empty());
   }
-}
-
-// Legacy ignores every margin field (use_margin true is an error there, so only the other three fields are varied).
-TEST(GraspS3MarginTest, LegacySelectionIgnoresTheMarginFields) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  const S3Params base = looseParams();
-  S3Params other = base;
-  other.min_margin_deg = 1e6;
-  other.margin_follow_s = 99.0;
-  other.margin_follow_dt_s = 0.5;
-  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
-  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
-  ASSERT_EQ(a.status, b.status);
-  EXPECT_EQ(a.evaluations, b.evaluations);
-  EXPECT_EQ(a.rollouts_done, 0);
-  EXPECT_EQ(b.rollouts_done, 0);
-  if (a.status == S3Result::kSelected) {
-    EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
-    EXPECT_EQ(a.chosen.cost, b.chosen.cost);
-  }
-}
-
-// RUN15 (production weights, RUN15 scenario of analysis/s3_landscape.cpp --selftest): the legacy default selection gives the
-// recorded winner, and the margin fields do not change it. Parameters = code defaults (every s1.* line of
-// config/grasp_planner_example.yaml is commented) with posthoc_velocity_check = false and min_delay 5.0 as the landscape tool
-// (ASSUMED equal to the 15/10 campaign; if this test fails check them first). Skipped if the run directory or URDF is missing.
-TEST(GraspS3MarginTest, Run15LegacyWinnerUnchanged) {
-  REQUIRE_URDF_OR_SKIP();
-  const char* home = std::getenv("HOME");
-  const std::string weights =
-      std::string(home ? home : "/root") + "/thesis_ws/tests/golden/g25/weights_demo_params.yaml";
-  if (!std::ifstream(weights).good()) GTEST_SKIP() << "RUN15 demo parameters not found: " << weights;
-
-  SatelliteSnapshot snap;
-  snap.center = Eigen::Vector3d(0.70, 0.0, 0.77);
-  snap.axis = Eigen::Vector3d::UnitZ();
-  snap.omega_rad_s = -2.0 * M_PI / 180.0;
-  snap.theta_rad = -1.6727670737402633;
-  snap.t_s = 18.318;
-  CubeSatelliteModel::Params cube;
-  cube.center_world = snap.center;
-  cube.axis_world = snap.axis;
-  cube.face_normal_body = Eigen::Vector3d(1.0, 0.0, 0.0);
-  cube.cube_side_m = 0.150;
-  cube.standoff_m = 0.08;
-  cube.collar_radius_m = 0.0725;
-  cube.wall_thickness_m = 0.009;
-  cube.grasp_radius_m = 0.068;
-  cube.grasp_depth_m = 0.0125;
-  const std::vector<double> q = {-9e-06, -0.786572, 2e-06, -2.378914, -6e-06, 3.141609, 0.785398};
-  const StartState start = makeStartStateFromOverride(q, tf::urdfPath());
-  const SelectionInputs in = buildSelectionInputs(weights, tf::urdfPath(), snap, cube, start);
-
-  S3Params base;
-  base.posthoc_velocity_check = false;
-  S3Params other = base;
-  other.min_margin_deg = 1e6;
-  other.margin_follow_s = 99.0;
-  other.margin_follow_dt_s = 0.5;
-  S3Result ra, rb;
-  planGraspAndLaunchS1(in, snap, 5.0, base, snap.t_s, &ra);
-  planGraspAndLaunchS1(in, snap, 5.0, other, snap.t_s, &rb);
-  ASSERT_EQ(ra.status, S3Result::kSelected) << ra.note;
-  ASSERT_EQ(rb.status, S3Result::kSelected) << rb.note;
-  EXPECT_EQ(static_cast<int>(ra.chosen.eval.k), 0);
-  EXPECT_NEAR(ra.chosen.eval.theta_rad * 180.0 / M_PI, -163.5, 0.05);
-  EXPECT_NEAR(ra.chosen.d_pos_m * 1000.0, 7.1713, 0.001);
-  EXPECT_NEAR(ra.chosen.wait_s, 9.3548, 0.01);
-  EXPECT_NEAR(ra.chosen.eval.w_hat, 0.8238, 1e-3);
-  EXPECT_EQ(ra.chosen.eval.theta_rad, rb.chosen.eval.theta_rad);
-  EXPECT_EQ(ra.chosen.cost, rb.chosen.cost);
-  EXPECT_EQ(ra.evaluations, rb.evaluations);
 }
 
 // Margin below the threshold: discarded; the next admissible finalist (J_static order) is chosen; the ones after it get no rollout.
@@ -1707,69 +1543,6 @@ TEST(GraspS3PosthocCharacterizationTest, V2MaxPosthocCapStopsAfterFirstDiscard) 
   }
 }
 
-// Characterization (L6a0): legacy with max_posthoc_candidates == 0 (~l.826): the best ranked candidate is taken, no check made.
-TEST(GraspS3PosthocCharacterizationTest, LegacyMaxPosthocZeroSelectsRankedFrontWithoutAnyCheck) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  const S3Params base_p = looseParams();
-  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base_p);
-  if (base.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << base.note;
-
-  S3Params p = base_p;
-  p.posthoc_velocity_check = true;  // with an impossible limit and one check allowed the status would be kPosthocFailed
-  p.posthoc_path_check = true;
-  p.delta_v_max_m_s = kTinyDv;
-  p.max_posthoc_candidates = 0;
-  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
-  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
-  EXPECT_EQ(r.posthoc_checks, 0);
-  EXPECT_TRUE(r.posthoc_log.empty());
-  EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
-  EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
-  ASSERT_FALSE(r.ranked.empty());
-  EXPECT_EQ(r.chosen.eval.k, r.ranked.front().eval.k);
-  EXPECT_EQ(r.chosen.eval.theta_rad, r.ranked.front().eval.theta_rad);
-  EXPECT_EQ(r.chosen.cost, r.ranked.front().cost);
-  EXPECT_TRUE(r.chosen.reject_reason.empty()) << r.chosen.reject_reason;
-  EXPECT_EQ(r.chosen.eval.k, base.chosen.eval.k);  // same winner as the run without post-hoc stage
-  EXPECT_EQ(r.chosen.eval.theta_rad, base.chosen.eval.theta_rad);
-  EXPECT_TRUE(r.forced_violations.empty());
-}
-
-// Characterization (L6a0): legacy force + force_ignore_constraints, every post-hoc check fails (~l.817-825): fallback to the forced candidate.
-TEST(GraspS3PosthocCharacterizationTest, LegacyForceIgnoreFallbackAfterPosthocDiscardsAll) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  S3Params p = looseParams();
-  p.force = true;
-  p.force_k = 0;
-  p.force_theta_deg = 0.0;
-  p.force_ignore_constraints = true;  // the forced candidate is accepted whatever its a-priori verdict
-  p.posthoc_velocity_check = true;
-  p.delta_v_max_m_s = kTinyDv;
-  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
-  ASSERT_EQ(r.evaluations, 1);
-  ASSERT_EQ(r.posthoc_log.size(), 1u);
-  const S3PosthocEntry& e = r.posthoc_log.front();
-  EXPECT_EQ(r.posthoc_checks, 1);
-  EXPECT_TRUE(startsWith(e.reject_reason, kVelocityReason)) << e.reject_reason;
-  EXPECT_FALSE(e.accepted);
-  EXPECT_GT(e.dv_m_s, kTinyDv);
-  // The failure is reported, not obeyed: kSelected on the forced candidate, with the log entry copied into the result.
-  EXPECT_EQ(r.status, S3Result::kSelected) << r.note;
-  EXPECT_EQ(r.chosen.eval.k, e.k);
-  EXPECT_EQ(r.chosen.eval.theta_rad, e.theta_rad);
-  EXPECT_TRUE(startsWith(r.chosen.reject_reason, kVelocityReason)) << r.chosen.reject_reason;
-  EXPECT_EQ(r.posthoc_dv_m_s, e.dv_m_s);
-  EXPECT_EQ(r.posthoc_min_margin_rad, e.min_margin_rad);
-  EXPECT_TRUE(endsWith(r.forced_violations, "post-hoc: " + e.reject_reason)) << r.forced_violations;
-  EXPECT_TRUE(r.forced);
-}
-
 // Characterization (L6a0): v2 force + force_ignore_constraints, no finalist passes (~l.810-814): the candidate is taken anyway.
 TEST(GraspS3PosthocCharacterizationTest, V2ForceIgnoreFallbackAfterNoFinalistPasses) {
   REQUIRE_URDF_OR_SKIP();
@@ -1803,7 +1576,7 @@ TEST(GraspS3PosthocCharacterizationTest, V2ForceIgnoreFallbackAfterNoFinalistPas
   EXPECT_EQ(r.chosen.eval.theta_rad, f.cand.eval.theta_rad);
   EXPECT_FALSE(f.winner);  // chosen by the fallback, not by a passing check: no finalist is flagged as winner
   EXPECT_TRUE(endsWith(r.forced_violations, "v2: no finalist passed the rollout / post-hoc checks")) << r.forced_violations;
-  // The v2 fallback does not copy anything from the post-hoc log (the legacy one does).
+  // The fallback does not copy anything from the post-hoc log.
   EXPECT_EQ(r.posthoc_dv_m_s, 0.0);
   EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
   const bool checked = f.rollout_feasible && std::isfinite(f.j);  // otherwise the eager flow has nothing to pick
@@ -1817,7 +1590,7 @@ TEST(GraspS3PosthocCharacterizationTest, V2ForceIgnoreFallbackAfterNoFinalistPas
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Characterization (L6a0b): branches left uncovered by the L6a0 tests (gcov): velocity check passed, a-priori r_trust /
-// start_goal rejections, legacy path violation, lazy rollout discard. Same rules: the discard string / counter that proves
+// start_goal rejections, lazy rollout discard. Same rules: the discard string / counter that proves
 // the branch was traversed is asserted unconditionally; a test whose fixture cannot reach the branch is SKIPPED (= failure).
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -1825,7 +1598,6 @@ namespace {
 
 /// |v_target - v_ee| is far below this: every velocity check passes.
 constexpr double kPassDv = 1e3;
-const char kPathViolationReason[] = "percorso: violazione limiti";
 
 /// v2 (flow decided by @p base_p: lazy with use_margin, else eager): velocity check ON with a limit that always passes. The
 /// winner must be the one of the run without velocity check, and the measured dv must reach the result.
@@ -1873,41 +1645,6 @@ void expectV2VelocityPassPropagatesDv(S3TestSetup& s, const S3Params& base_p) {
 
 }  // namespace
 
-// Characterization (L6a0b): legacy, velocity check active and PASSED (posthocVelocityPasses `return true` ~l.460, dv -> res.posthoc_dv_m_s).
-TEST(GraspS3PosthocCharacterizationTest, LegacyVelocityPassKeepsMeasuredDv) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  const S3Params ref_p = looseParams();  // no post-hoc stage
-  const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, ref_p);
-  if (ref.status == S3Result::kNoCandidate) GTEST_SKIP() << "no feasible candidate in this fixture: " << ref.note;
-
-  S3Params p = ref_p;
-  p.posthoc_velocity_check = true;
-  p.delta_v_max_m_s = kPassDv;
-  p.posthoc_path_check = false;
-  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
-  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
-  ASSERT_EQ(r.posthoc_checks, 1);
-  ASSERT_EQ(r.posthoc_log.size(), 1u);
-  const S3PosthocEntry& e = r.posthoc_log.front();
-  EXPECT_TRUE(e.accepted);
-  EXPECT_TRUE(e.reject_reason.empty()) << e.reject_reason;
-  EXPECT_GT(e.dv_m_s, 0.0);
-  EXPECT_LT(e.dv_m_s, kPassDv);
-  EXPECT_GT(e.v_target.norm(), 0.0);
-  EXPECT_DOUBLE_EQ(e.dv_m_s, (e.v_target - e.v_ee).norm());
-  EXPECT_FALSE(e.path_checked);           // path check off
-  EXPECT_EQ(r.posthoc_dv_m_s, e.dv_m_s);  // legacy accept branch: the dv set by the lambda goes to the result
-  EXPECT_EQ(r.posthoc_min_margin_rad, 0.0);
-  EXPECT_EQ(r.chosen.eval.k, ref.chosen.eval.k);
-  EXPECT_EQ(r.chosen.eval.theta_rad, ref.chosen.eval.theta_rad);
-  EXPECT_EQ(r.chosen.eval.wrist_flip, ref.chosen.eval.wrist_flip);
-  EXPECT_EQ(e.k, r.chosen.eval.k);
-  EXPECT_EQ(e.theta_rad, r.chosen.eval.theta_rad);
-}
-
 // Characterization (L6a0b): v2 lazy flow, velocity check PASSED: acceptRolloutWinner propagates dv and the rollout margin (~l.650-660, call ~705).
 TEST(GraspS3PosthocCharacterizationTest, V2LazyVelocityPassPropagatesDvToResult) {
   REQUIRE_URDF_OR_SKIP();
@@ -1932,7 +1669,7 @@ TEST(GraspS3PosthocCharacterizationTest, PriorRejectionRTrust) {
   S3TestSetup s = makeS3TestSetup();
   s.ctx.prodmp_template = &s.tmpl;
   ASSERT_NE(s.robot, nullptr);
-  const S3Params ref_p = looseParams();  // w_hat_min = margin_min_rad = 0: only ik and r_trust can reject
+  const S3Params ref_p = v2LooseParams();  // only ik and r_trust (100 m here) can reject
   const S3Result ref = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, ref_p);
   ASSERT_EQ(ref.status, S3Result::kSelected) << ref.note;  // the winner has a converged IK
   const double theta_deg = ref.chosen.eval.theta_rad * 180.0 / M_PI;
@@ -2001,55 +1738,15 @@ TEST(GraspS3PosthocCharacterizationTest, PriorRejectionStartGoal) {
   EXPECT_EQ(r.best_per_k[ki].reject_reason, "start_goal");  // r_trust cannot fail (100 m)
 }
 
-// Characterization (L6a0b): legacy post-hoc path check FAILS (~l.483-490): "percorso: violazione limiti", logged, next candidate examined.
-TEST(GraspS3PosthocCharacterizationTest, LegacyPathViolationLogsAndContinues) {
-  REQUIRE_URDF_OR_SKIP();
-  S3TestSetup s = makeS3TestSetup();
-  s.ctx.prodmp_template = &s.tmpl;
-  ASSERT_NE(s.robot, nullptr);
-  // Lever without touching production code: q_start with joint 7 beyond its upper limit. The TCP lies on the joint-7 axis (p0
-  // unchanged), the IK clamps its seed to the limits, and the path simulation starts AT q_start (JointPathSimulator: output[0].q
-  // == q0), so every path check violates the limit by at least this amount (cf. KinematicFeasibilityTest.StartBeyondJointLimit...).
-  const double excess = 0.1;
-  s.q_start(6) = s.robot->jointUpperLimits()(6) + excess;
-  S3Params p = looseParams();
-  p.posthoc_path_check = true;
-  p.posthoc_velocity_check = false;
-  p.posthoc_cluster_deg = 0.0;  // no cluster skip: consecutive ranked candidates are examined
-  p.max_posthoc_candidates = 3;
-  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
-  if (r.status == S3Result::kNoCandidate) GTEST_SKIP() << "no IK-feasible candidate from this q_start: " << r.note;
-  const std::size_t expected = std::min<std::size_t>(3, r.ranked.size());
-  ASSERT_GE(expected, 2u);  // a second candidate is needed to show that the loop goes on
-  EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
-  EXPECT_EQ(static_cast<std::size_t>(r.posthoc_checks), expected);
-  ASSERT_EQ(r.posthoc_log.size(), expected);
-  for (std::size_t i = 0; i < expected; ++i) {
-    const S3PosthocEntry& e = r.posthoc_log[i];
-    EXPECT_TRUE(startsWith(e.reject_reason, kPathViolationReason)) << i << ": " << e.reject_reason;
-    EXPECT_NE(e.reject_reason.find(" rad (giunto "), std::string::npos) << e.reject_reason;
-    EXPECT_TRUE(e.path_checked) << i;
-    EXPECT_FALSE(e.path_ok) << i;
-    EXPECT_FALSE(e.accepted) << i;
-    EXPECT_EQ(e.dv_m_s, 0.0) << i;            // velocity check off
-    EXPECT_EQ(e.min_margin_rad, 0.0) << i;    // not set on a violation
-    EXPECT_EQ(e.k, r.ranked[i].eval.k) << i;  // examined in ranked order
-    EXPECT_EQ(e.theta_rad, r.ranked[i].eval.theta_rad) << i;
-    EXPECT_EQ(r.ranked[i].reject_reason, e.reject_reason) << i;
-    // the violation printed is at least the excess of the start configuration (6 significant digits)
-    const double printed = std::stod(e.reject_reason.substr(std::string(kPathViolationReason).size() + 1));
-    EXPECT_GE(printed, excess - 1e-5) << e.reject_reason;
-  }
-  EXPECT_NE(r.note.find("post-hoc candidates failed"), std::string::npos) << r.note;
-}
-
 // Characterization (L6a0b): v2 lazy flow, rollout infeasible (rec.discard_reason = "rollout", ~l.671-674): every finalist is discarded in turn.
 TEST(GraspS3PosthocCharacterizationTest, V2LazyRolloutInfeasibleFinalistIsDiscarded) {
   REQUIRE_URDF_OR_SKIP();
   S3TestSetup s = makeS3TestSetup();
   s.ctx.prodmp_template = &s.tmpl;
   ASSERT_NE(s.robot, nullptr);
-  const double excess = 0.1;  // same lever as LegacyPathViolationLogsAndContinues: every rollout starts beyond joint 7's limit
+  // Lever without touching production code: q_start with joint 7 beyond its upper limit. The TCP lies on the joint-7 axis (p0
+  // unchanged), the IK clamps its seed to the limits and every rollout starts AT q_start, i.e. beyond the limit.
+  const double excess = 0.1;
   s.q_start(6) = s.robot->jointUpperLimits()(6) + excess;
   const S3Params p = v2MarginParams(0.0);  // use_margin, no force => lazy
   const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);

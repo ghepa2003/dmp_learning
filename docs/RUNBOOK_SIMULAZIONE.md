@@ -241,7 +241,7 @@ python3 tools/s1_run.py --weights-dir runs/20261015_095418_fit_demo_20261014T150
   --planner-param s1.use_clearance=true --planner-param s1.min_clearance_mm=2.0 \
   --planner-param s1.use_margin=true --planner-param s1.min_margin_deg=28.0 \
   --planner-param s1.finalists_n=40 --planner-param s1.posthoc_cluster_deg=10.0 \
-  --planner-param s1.theta_step_deg=2.0 --planner-param s1.theta_refine_step_deg=0.1 \
+  --planner-param s1.theta_step_deg=2.0 \
   --planner-param s1.use_w=true --planner-param s1.kappa_w=7.5 \
   --planner-param s1.kappa_t=0.0 --planner-param s1.tau_j_mm=2.0 \
   --planner-param 's1.rollout_q_ref=[0.0,-0.785398163397,0.0,-2.356194490192,0.0,1.570796326795,0.785398163397]'
@@ -383,7 +383,7 @@ python3 tools/s1_campaign.py --weights-dir runs/20261015_095418_fit_demo_2026101
   --planner-param s1.use_clearance=true --planner-param s1.min_clearance_mm=2.0 \
   --planner-param s1.use_margin=true --planner-param s1.min_margin_deg=28.0 \
   --planner-param s1.finalists_n=40 --planner-param s1.posthoc_cluster_deg=10.0 \
-  --planner-param s1.theta_step_deg=2.0 --planner-param s1.theta_refine_step_deg=0.1 \
+  --planner-param s1.theta_step_deg=2.0 \
   --planner-param s1.use_w=true --planner-param s1.kappa_w=7.5 \
   --planner-param s1.kappa_t=0.0 --planner-param s1.tau_j_mm=2.0 \
   --planner-param 's1.rollout_q_ref=[0.0,-0.785398163397,0.0,-2.356194490192,0.0,1.570796326795,0.785398163397]' \
@@ -517,7 +517,7 @@ Costanti del runner: `KT_DEFAULT` 200.0 (59), `SAT_CENTER` (60), `OMEGA_DEG_S_DE
 
 Obbligatori (nessun default, il nodo fallisce): `demo_params_path` (84), `min_delay_s` (97), `cube_geometry.center_world` (99), `cube_geometry.axis_world` (100), `cube_geometry.cube_side_m` (101), `cube_geometry.standoff_m` (102), `cube_geometry.collar_radius_m` (103), `cube_geometry.face_normal_body` (105), `cube_geometry.wall_thickness_m` (106), `robot_base_world` (108), `satellite_rotation_center` (109), `satellite_rotation_axis` (110), `satellite_rotation_angular_velocity_deg_s` (111), `satellite_q_ref` (113), `satellite_odom_topic` (114), `omega_consistency_tol_deg_per_s` (115).
 Opzionali: `urdf_path` ($HOME/thesis_ws/fer_flat_effort.urdf, 89-93), `q_ref_consistency_tol_deg` 0.5 (119), `robot_base_world_tol_m` 1e-6 (120), `grasp_command_topic` /grasp_command (121), `cube_geometry.grasp_radius_m` (= collar_radius_m se assente, 130), `cube_geometry.grasp_depth_m` 0.0 (132), `start_joints_override_rad` (vuoto = readyPose, 137-140).
-`s1.*` (righe 147-206; default da grasp_s3_selection.hpp:38-106): `length_scale_m` 0.10, `orientation_weight` 0.0, `angle_scale_rad` 1.0, `epsilon_wait_per_s` 1e-4, `w_hat_min` 0.5, `margin_min_rad` 0.3, `r_trust_m` 0.30, `delta_v_max_m_s` 3e-3, `theta_step_deg` 2.0, `theta_refine_step_deg` 0.1, `posthoc_path_check` true, `posthoc_velocity_check` true (il runner: false), `posthoc_cluster_deg` 10.0, `max_posthoc_candidates` 10, `ik.pos_tol_m` 1e-4, `ik.ori_tol_rad` 1e-3, `ik.max_iter` 300, `ik.damping` 0.05, `ik.nullspace_gain` 1.0, `ik.max_step_rad` 0.2, `force` false, `force_k` 0, `force_theta_deg` 0.0, `force_psi_deg` 0.0, `force_ignore_constraints` false, `force_flip` −1, `branch_rule` "margin", `mode` "legacy", `max_start_goal_deg` 180.0, `finalists_n` 12, `rollout_q_ref` (YAML riga 94: posa ready), `use_w` true, `kappa_w` 7.5, `kappa_t` 0.0, `tau_j_mm` 2.0, `use_clearance` false, `min_clearance_mm` 2.0, `clearance_dt_s` 0.05, `gripper_open_m` 0.060, `use_margin` false, `min_margin_deg` 24.0, `margin_follow_s` 3.0, `margin_follow_dt_s` 0.01. (I default di `ik.*` e `length_scale…` sono del codice; i valori di `ik.*` qui sopra vengono dal YAML di esempio, grasp_planner_example.yaml:72-77.)
+`s1.*` (righe 147-206; default da grasp_s3_selection.hpp:38-106): `length_scale_m` 0.10, `orientation_weight` 0.0, `angle_scale_rad` 1.0, `epsilon_wait_per_s` 1e-4, `w_hat_min` 0.5, `margin_min_rad` 0.3, `r_trust_m` 0.30, `delta_v_max_m_s` 3e-3, `theta_step_deg` 2.0, `posthoc_path_check` true, `posthoc_velocity_check` true (il runner: false), `posthoc_cluster_deg` 10.0, `max_posthoc_candidates` 10, `ik.pos_tol_m` 1e-4, `ik.ori_tol_rad` 1e-3, `ik.max_iter` 300, `ik.damping` 0.05, `ik.nullspace_gain` 1.0, `ik.max_step_rad` 0.2, `force` false, `force_k` 0, `force_theta_deg` 0.0, `force_psi_deg` 0.0, `force_ignore_constraints` false, `force_flip` −1, `branch_rule` "margin", `mode` "legacy", `max_start_goal_deg` 180.0, `finalists_n` 12, `rollout_q_ref` (YAML riga 94: posa ready), `use_w` true, `kappa_w` 7.5, `kappa_t` 0.0, `tau_j_mm` 2.0, `use_clearance` false, `min_clearance_mm` 2.0, `clearance_dt_s` 0.05, `gripper_open_m` 0.060, `use_margin` false, `min_margin_deg` 24.0, `margin_follow_s` 3.0, `margin_follow_dt_s` 0.01. (I default di `ik.*` e `length_scale…` sono del codice; i valori di `ik.*` qui sopra vengono dal YAML di esempio, grasp_planner_example.yaml:72-77.)
 
 ### B.4 `prodmp_gazebo_executor_node` (haptic_dmp_learning/src/ros/prodmp_gazebo_executor_node.cpp)
 

@@ -233,15 +233,13 @@ TEST(ClearanceRoundTest, EvaluationsAreCachedAcrossRounds) {
 
 // ---- parameters ----
 
-TEST(ClearanceParamsTest, DefaultsAreValidAndLegacyRefusesTheConstraint) {
+TEST(ClearanceParamsTest, DefaultsAreValid) {
   S3Params p;
   EXPECT_FALSE(p.use_clearance);
-  EXPECT_NO_THROW(validateS3Params(p));
-  p.use_clearance = true;  // mode "legacy"
-  EXPECT_THROW(validateS3Params(p), std::invalid_argument);
-  p.mode = "v2";
   const double q[7] = {0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397};
   p.rollout_q_ref.assign(q, q + 7);
+  EXPECT_NO_THROW(validateS3Params(p));
+  p.use_clearance = true;
   EXPECT_NO_THROW(validateS3Params(p));
   auto bad = [&](auto mutate) {
     S3Params b = p;
@@ -254,15 +252,6 @@ TEST(ClearanceParamsTest, DefaultsAreValidAndLegacyRefusesTheConstraint) {
   bad([](S3Params& b) { b.clearance_dt_s = std::numeric_limits<double>::infinity(); });
   bad([](S3Params& b) { b.gripper_open_m = 0.081; });
   bad([](S3Params& b) { b.gripper_open_m = -0.01; });
-}
-
-TEST(ClearanceParamsTest, LegacyAcceptsANonEmptyRolloutQRefOfSevenValues) {
-  S3Params p;  // legacy; the YAML example now ships an active s1.rollout_q_ref
-  const double q[7] = {0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397};
-  p.rollout_q_ref.assign(q, q + 7);
-  EXPECT_NO_THROW(validateS3Params(p));
-  p.rollout_q_ref.pop_back();
-  EXPECT_THROW(validateS3Params(p), std::invalid_argument);
 }
 
 // ---- URDF / STL helpers ----

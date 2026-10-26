@@ -6,7 +6,7 @@ riga del report al CSV dei risultati e continua se un run fallisce.
 Griglia da CLI e/o da yaml (la CLI ha la precedenza); chiavi: depth, kt, spawn_yaw, follow_s,
 hold_s, squeeze, stop_cube (bool; richiede follow_s > 0) (squeeze: "default" o null = parametro non passato),
 omega_deg_s (deg/s con segno; spawn_yaw di default "auto" se omega non e' solo -2), center_xyz ("X,Y,Z" o
-[X,Y,Z]; default 0.70,0.0,0.77), arm (legacy | d_only | v2; default: non passato). spawn_yaw accetta anche
+[X,Y,Z]; default 0.70,0.0,0.77), arm (d_only | v2; default: non passato). spawn_yaw accetta anche
 "auto" (yaw0 = theta_star_ref - omega*T_total, vedi s1_run.auto_spawn_yaw_deg). Esempio:
 
     python3 tools/s1_campaign.py --weights-dir runs/<run> --outroot s1_runs/camp1 \\
@@ -14,7 +14,7 @@ omega_deg_s (deg/s con segno; spawn_yaw di default "auto" se omega non e' solo -
 
     # grid.yaml:  depth: [0.0, 0.0125]   kt: [2000]   squeeze: [null, 0.002]
     python3 tools/s1_campaign.py --weights-dir runs/<run> --outroot s1_runs/camp2 --dry-run \\
-        --omega-deg-s -2 -3 --center-xyz 0.70,0.0,0.77 0.65,0.0,0.77 --arm legacy d_only v2
+        --omega-deg-s -2 -3 --center-xyz 0.70,0.0,0.77 0.65,0.0,0.77 --arm d_only v2
 
 Il timeout e' in tempo simulato (/clock): --sim-timeout viene passato a s1_run, che lo applica
 (piu' una guardia sul /clock fermo). La campagna non ha timeout wall-clock.

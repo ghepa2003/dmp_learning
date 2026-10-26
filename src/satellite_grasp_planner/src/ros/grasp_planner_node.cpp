@@ -147,14 +147,9 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     p.length_scale_m = dbl("s1.length_scale_m", p.length_scale_m);
     p.orientation_weight = dbl("s1.orientation_weight", p.orientation_weight);
     p.angle_scale_rad = dbl("s1.angle_scale_rad", p.angle_scale_rad);
-    p.epsilon_wait_per_s = dbl("s1.epsilon_wait_per_s", p.epsilon_wait_per_s);
-    p.w_hat_min = dbl("s1.w_hat_min", p.w_hat_min);
-    p.margin_min_rad = dbl("s1.margin_min_rad", p.margin_min_rad);
     p.r_trust_m = dbl("s1.r_trust_m", p.r_trust_m);
     p.delta_v_max_m_s = dbl("s1.delta_v_max_m_s", p.delta_v_max_m_s);
     p.theta_step_deg = dbl("s1.theta_step_deg", p.theta_step_deg);
-    p.theta_refine_step_deg = dbl("s1.theta_refine_step_deg", p.theta_refine_step_deg);
-    p.posthoc_path_check = bol("s1.posthoc_path_check", p.posthoc_path_check);
     p.posthoc_velocity_check = bol("s1.posthoc_velocity_check", p.posthoc_velocity_check);
     p.posthoc_cluster_deg = dbl("s1.posthoc_cluster_deg", p.posthoc_cluster_deg);
     p.ik.pos_tol_m = dbl("s1.ik.pos_tol_m", p.ik.pos_tol_m);
@@ -179,8 +174,7 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     p.force_flip = static_cast<int>(force_flip);
     // Wrist-branch rule ("margin" | "rotation"), validated by validateS3Params below: unknown value = startup error.
     p.branch_rule = this->declare_parameter<std::string>("s1.branch_rule", p.branch_rule);
-    // Mode v2 (see S3Params::mode). "legacy" (default) ignores every parameter below. Validated by validateS3Params.
-    p.mode = this->declare_parameter<std::string>("s1.mode", p.mode);
+    // Selection parameters (see S3Params). Validated by validateS3Params below (s1.rollout_q_ref is mandatory: no default).
     p.max_start_goal_deg = dbl("s1.max_start_goal_deg", p.max_start_goal_deg);
     const int64_t finalists_n = this->declare_parameter<int64_t>("s1.finalists_n", p.finalists_n);
     if (finalists_n < 1 || finalists_n > std::numeric_limits<int>::max()) {
@@ -192,12 +186,12 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     p.kappa_w_mm = dbl("s1.kappa_w", p.kappa_w_mm);
     p.kappa_t_mm_s = dbl("s1.kappa_t", p.kappa_t_mm_s);
     p.tau_j_mm = dbl("s1.tau_j_mm", p.tau_j_mm);
-    // Clearance constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+    // Clearance constraint (default off = behaviour unchanged). Validated by validateS3Params below.
     p.use_clearance = bol("s1.use_clearance", p.use_clearance);
     p.min_clearance_mm = dbl("s1.min_clearance_mm", p.min_clearance_mm);
     p.clearance_dt_s = dbl("s1.clearance_dt_s", p.clearance_dt_s);
     p.gripper_open_m = dbl("s1.gripper_open_m", p.gripper_open_m);
-    // Joint-margin constraint (v2 only, default off = behaviour unchanged). Validated by validateS3Params below.
+    // Joint-margin constraint (default off = behaviour unchanged). Validated by validateS3Params below.
     p.use_margin = bol("s1.use_margin", p.use_margin);
     p.min_margin_deg = dbl("s1.min_margin_deg", p.min_margin_deg);
     p.margin_follow_s = dbl("s1.margin_follow_s", p.margin_follow_s);
@@ -211,9 +205,9 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     p.ik.max_iter = static_cast<int>(max_iter);
     p.max_posthoc_candidates = static_cast<int>(max_posthoc);
     core::validateS3Params(p);  // fail at startup, not after the first odometry sample
-    if (core::parseS3Mode(p.mode) == core::S3Mode::kV2 && p.branch_rule == "margin") {
+    if (p.branch_rule == "margin") {
       RCLCPP_WARN(this->get_logger(),
-                  "grasp_planner_node: s1.mode=v2 with s1.branch_rule=margin: the wrist branch is chosen by static joint "
+                  "grasp_planner_node: s1.branch_rule=margin: the wrist branch is chosen by static joint "
                   "margin, not by minimum start-goal rotation (use s1.branch_rule=rotation).");
     }
     if (p.use_margin) {
@@ -319,18 +313,14 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                   s3_params_.force_flip < 0 ? "auto(-1)" : (s3_params_.force_flip ? "1 (branch B)" : "0 (branch A)"),
                   s3_params_.force_ignore_constraints ? "true" : "false");
     }
-    const bool v2 = core::parseS3Mode(s3_params_.mode) == core::S3Mode::kV2;
-    if (v2) {
-      std::ostringstream q;
-      for (std::size_t i = 0; i < s3_params_.rollout_q_ref.size(); ++i) q << (i ? ", " : "") << s3_params_.rollout_q_ref[i];
-      RCLCPP_INFO(this->get_logger(),
-                  "grasp_planner_node: s1.mode=v2 branch_rule=%s use_w=%s kappa_w=%.3f mm kappa_t=%.3f mm/s tau_j=%.3f mm "
-                  "finalists_n=%d max_start_goal_deg=%.2f r_trust_m=%.3f posthoc_cluster_deg=%.2f rollout_q_ref=[%s] "
-                  "(w_hat_min and margin_min_rad NOT applied)",
-                  s3_params_.branch_rule.c_str(), s3_params_.use_w ? "true" : "false", s3_params_.kappa_w_mm,
-                  s3_params_.kappa_t_mm_s, s3_params_.tau_j_mm, s3_params_.finalists_n, s3_params_.max_start_goal_deg,
-                  s3_params_.r_trust_m, s3_params_.posthoc_cluster_deg, q.str().c_str());
-    }
+    std::ostringstream q;
+    for (std::size_t i = 0; i < s3_params_.rollout_q_ref.size(); ++i) q << (i ? ", " : "") << s3_params_.rollout_q_ref[i];
+    RCLCPP_INFO(this->get_logger(),
+                "grasp_planner_node: s1 selection: branch_rule=%s use_w=%s kappa_w=%.3f mm kappa_t=%.3f mm/s tau_j=%.3f mm "
+                "finalists_n=%d max_start_goal_deg=%.2f r_trust_m=%.3f posthoc_cluster_deg=%.2f rollout_q_ref=[%s]",
+                s3_params_.branch_rule.c_str(), s3_params_.use_w ? "true" : "false", s3_params_.kappa_w_mm,
+                s3_params_.kappa_t_mm_s, s3_params_.tau_j_mm, s3_params_.finalists_n, s3_params_.max_start_goal_deg,
+                s3_params_.r_trust_m, s3_params_.posthoc_cluster_deg, q.str().c_str());
     core::S3Result s3_result;
     const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
         in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
@@ -342,56 +332,54 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
                 s3_result.margin_evals_done, s3_result.posthoc_checks,
                 s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                 s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
-    if (v2) {
-      RCLCPP_INFO(this->get_logger(),
-                  "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
-                  "start_goal_deg rollout_err_mm rollout_err_deg%s",
-                  s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
-      // ALL finalists that were evaluated (rollout done), numbered by their J_static rank; the ones after the winner of the
-      // lazy use_margin flow were never evaluated and are summarised in one line.
-      std::size_t n_evaluated = 0;
-      for (const core::S3FinalistRecord& f : s3_result.v2_finalists) n_evaluated += f.rollout_done ? 1 : 0;
-      RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 finalists evaluated: %zu of %zu", n_evaluated,
-                  s3_result.v2_finalists.size());
-      for (std::size_t i = 0; i < s3_result.v2_finalists.size(); ++i) {
-        const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
-        if (!f.rollout_done) continue;
-        char jbuf[32];
-        if (f.rollout_feasible) {
-          std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
-        } else {
-          std::snprintf(jbuf, sizeof(jbuf), "n/a");
-        }
-        char cbuf[96] = "";
-        if (s3_params_.use_clearance) {
-          if (f.clearance_done) {
-            std::snprintf(cbuf, sizeof(cbuf), " clearance=%.2f mm %s t_rel=%.2f s%s", f.clearance_mm,
-                          f.clearance_pair.c_str(), f.clearance_t_rel_s, f.clearance_rejected ? " REJECTED" : "");
-          } else {
-            std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
-          }
-        }
-        char mbuf[160] = "";
-        if (s3_params_.use_margin) {
-          if (f.margin_done) {
-            std::snprintf(mbuf, sizeof(mbuf), " margin=%.2f deg limiting=fer_joint%d t_rel=%.2f s%s", f.margin_deg,
-                          f.margin_joint + 1, f.margin_t_rel_s, f.margin_rejected ? " REJECTED" : "");
-          } else {
-            std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
-          }
-        }
-        RCLCPP_INFO(this->get_logger(),
-                    "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
-                    "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
-                    i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
-                    f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
-                    f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
-                    (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
-                    f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
-                    f.winner ? " WINNER" : "");
+    RCLCPP_INFO(this->get_logger(),
+                "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
+                "start_goal_deg rollout_err_mm rollout_err_deg%s",
+                s3_params_.use_clearance ? " clearance_mm pair t_rel_s (n/v = not evaluated: lazy)" : "");
+    // ALL finalists that were evaluated (rollout done), numbered by their J_static rank; the ones after the winner of the
+    // lazy use_margin flow were never evaluated and are summarised in one line.
+    std::size_t n_evaluated = 0;
+    for (const core::S3FinalistRecord& f : s3_result.v2_finalists) n_evaluated += f.rollout_done ? 1 : 0;
+    RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 finalists evaluated: %zu of %zu", n_evaluated,
+                s3_result.v2_finalists.size());
+    for (std::size_t i = 0; i < s3_result.v2_finalists.size(); ++i) {
+      const core::S3FinalistRecord& f = s3_result.v2_finalists[i];
+      if (!f.rollout_done) continue;
+      char jbuf[32];
+      if (f.rollout_feasible) {
+        std::snprintf(jbuf, sizeof(jbuf), "%.3f", f.j);
+      } else {
+        std::snprintf(jbuf, sizeof(jbuf), "n/a");
       }
+      char cbuf[96] = "";
+      if (s3_params_.use_clearance) {
+        if (f.clearance_done) {
+          std::snprintf(cbuf, sizeof(cbuf), " clearance=%.2f mm %s t_rel=%.2f s%s", f.clearance_mm,
+                        f.clearance_pair.c_str(), f.clearance_t_rel_s, f.clearance_rejected ? " REJECTED" : "");
+        } else {
+          std::snprintf(cbuf, sizeof(cbuf), " clearance=n/v");
+        }
+      }
+      char mbuf[160] = "";
+      if (s3_params_.use_margin) {
+        if (f.margin_done) {
+          std::snprintf(mbuf, sizeof(mbuf), " margin=%.2f deg limiting=fer_joint%d t_rel=%.2f s%s", f.margin_deg,
+                        f.margin_joint + 1, f.margin_t_rel_s, f.margin_rejected ? " REJECTED" : "");
+        } else {
+          std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
+        }
+      }
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
+                  "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
+                  i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
+                  f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
+                  f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
+                  (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
+                  f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
+                  f.winner ? " WINNER" : "");
     }
-    if (v2 && s3_params_.use_clearance) {
+    if (s3_params_.use_clearance) {
       RCLCPP_INFO(this->get_logger(), "grasp_planner_node: v2 clearance stage: %.1f ms", s3_result.clearance_stage_ms);
     }
     for (const std::string& w : s3_result.warnings) {

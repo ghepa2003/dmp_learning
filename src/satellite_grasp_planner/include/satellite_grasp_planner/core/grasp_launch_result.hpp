@@ -33,7 +33,7 @@ struct GraspLaunchResult {
   /// Of the selected candidate (zero / false when status != kSelected).
   bool wrist_flip = false;  ///< goal_orientation is the nominal one rolled by pi about z_tcp
   double psi_rad = 0.0;     ///< roll about z_tcp already included in goal_orientation (not in GraspCommand)
-  double cost = 0.0;        ///< d + epsilon_wait_per_s * wait_s
+  double cost = 0.0;        ///< S3Candidate::cost of the chosen candidate: the J of its rollout (d_mm + kappa_w*(-ln w_rollout) + kappa_t*wait), to be MINIMIZED
   double d_pos_m = 0.0;
   double w_hat = 0.0;
   double min_joint_margin_rad = 0.0;  ///< min joint-limit margin of the IK solution

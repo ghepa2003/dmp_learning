@@ -1,7 +1,7 @@
 // s3_landscape: exports the "landscape" of the S3 selector, one CSV row per (k, theta, psi), also for rejected
 // candidates, for OFFLINE evaluation of alternative cost formulations (tools/s3_landscape_report.py).
 // Nothing here changes the planner: selectGraspS3 is called as is (with S3Context::eval_log on), psi-rolled
-// evaluations call the same evaluateGraspPoseDetailed / s3AprioriRejectMask / s3DPos / planLaunch /
+// evaluations call the same evaluateGraspPoseDetailed / s3AprioriRejectMaskV2 / s3DPos / planLaunch /
 // checkKinematicFeasibility / solvePoseIk the planner uses. Build/run: analysis/README.md (BUILD_ANALYSIS_TOOLS).
 //
 // psi = deliberate roll about the LOCAL z of the TCP = the approach axis z_tcp = -R(theta) n_body
@@ -272,8 +272,6 @@ struct Row {
 
 const char* firstReason(unsigned mask) {
   if (mask & kRejectIk) return "ik";
-  if (mask & kRejectWHat) return "w_hat";
-  if (mask & kRejectMargin) return "margine";
   if (mask & kRejectRTrust) return "r_trust";
   if (mask & kBitVelocity) return "velocita";
   if (mask & kBitPath) return "percorso";
@@ -344,27 +342,18 @@ int main(int argc, char** argv) {
         const auto it = kv.find(key);
         if (it != kv.end()) dst = std::stod(it->second);
       };
-      auto b = [&](const char* key, bool& dst) {
-        const auto it = kv.find(key);
-        if (it != kv.end()) dst = (it->second == "true");
-      };
       d("s1.length_scale_m", s3.length_scale_m);
       d("s1.orientation_weight", s3.orientation_weight);
       d("s1.angle_scale_rad", s3.angle_scale_rad);
-      d("s1.epsilon_wait_per_s", s3.epsilon_wait_per_s);
-      d("s1.w_hat_min", s3.w_hat_min);
-      d("s1.margin_min_rad", s3.margin_min_rad);
       d("s1.r_trust_m", s3.r_trust_m);
       d("s1.delta_v_max_m_s", s3.delta_v_max_m_s);
       d("s1.theta_step_deg", s3.theta_step_deg);
-      d("s1.theta_refine_step_deg", s3.theta_refine_step_deg);
       d("s1.posthoc_cluster_deg", s3.posthoc_cluster_deg);
       d("s1.ik.pos_tol_m", s3.ik.pos_tol_m);
       d("s1.ik.ori_tol_rad", s3.ik.ori_tol_rad);
       d("s1.ik.damping", s3.ik.damping);
       d("s1.ik.nullspace_gain", s3.ik.nullspace_gain);
       d("s1.ik.max_step_rad", s3.ik.max_step_rad);
-      b("s1.posthoc_path_check", s3.posthoc_path_check);
       if (kv.count("s1.ik.max_iter")) s3.ik.max_iter = std::stoi(kv.at("s1.ik.max_iter"));
       if (kv.count("s1.max_posthoc_candidates")) s3.max_posthoc_candidates = std::stoi(kv.at("s1.max_posthoc_candidates"));
       d("cube_geometry.cube_side_m", cube.cube_side_m);
@@ -516,12 +505,13 @@ int main(int argc, char** argv) {
       r.branch = det.selected;
       const double d_pos = s3DPos(ev.pose.position_world, in.contact_to_end_offset, in.p0, in.delta_g_demo);
       r.d_pos_mm = d_pos * 1000.0;
-      r.mask = s3AprioriRejectMask(ev, d_pos, s3);
-      r.accepted = (r.mask & (kRejectIk | kRejectWHat | kRejectMargin | kRejectRTrust)) == 0;
+      r.mask = s3AprioriRejectMaskV2(ev, d_pos, s3);
+      r.accepted = (r.mask & (kRejectIk | kRejectRTrust | kRejectStartGoal)) == 0;
       r.t_wait_s = planLaunch(snap, snap.t_s, theta, tau_launch, min_delay).delay_s;
       const double dd = s3Distance(d_pos, ev.dist_to_demo.ori_rad, s3.length_scale_m,
                                    s3.orientation_weight, s3.angle_scale_rad);
-      r.J_current = dd + s3.epsilon_wait_per_s * r.t_wait_s;
+      // CSV column kept under its old name (tools/s3_landscape_report.py reads it); the value is now J_static, as in the selector.
+      r.J_current = s3CostV2(dd * s3.length_scale_m * 1000.0, bs.w_full, 0.0, s3);
       r.w_hat = ev.w_hat;
       r.w_trans = ev.w_trans;
       r.w_rot = bs.w_rot;
@@ -617,7 +607,7 @@ int main(int argc, char** argv) {
     for (const Row& r : rows) seen.insert({r.k, tkey(r.theta_rad)});
 
     // (2) fine refinement around the top-N coarse candidates per k (by d_pos, psi = 0, IK ok on the chosen branch),
-    //     same theta expression as the selector's refinement (theta_c + j*refine), all psi of the band
+    //     the tool's own fine grid (theta_c + j*refine; the selector itself no longer refines), all psi of the band
     const double refine = a.refine_step_deg * kPi / 180.0;
     const int n_ref = static_cast<int>(std::floor(a.refine_halfwidth_deg / a.refine_step_deg + 1e-9));
     for (int ki = 0; ki < 4 && a.refine_top_n > 0; ++ki) {
@@ -666,7 +656,7 @@ int main(int argc, char** argv) {
       std::size_t n_coarse = 0;
       for (const auto& l : log) {
         by_key[{static_cast<int>(l.k), bits(l.theta_rad)}] = &l;
-        if (!l.refine_stage) ++n_coarse;
+        ++n_coarse;  // the selector has a single theta grid: every log row is a coarse row
       }
       if (static_cast<int>(log.size()) != res.evaluations) fail("log size != evaluations");
       if (n_coarse != n_coarse_rows) fail("coarse log rows != tool coarse psi=0 rows (theta step mismatch?)");
@@ -687,7 +677,7 @@ int main(int argc, char** argv) {
           if (apriori != l.reject_mask) fail("mask differs k=" + std::to_string(ki) + " i=" + std::to_string(i));
           if (!close(r.d_pos_mm / 1000.0, l.d_pos_m)) fail("d_pos differs");
           if (!close(r.t_wait_s, l.wait_s)) fail("t_wait differs");
-          if (!close(r.J_current, l.cost_current)) fail("J_current differs");
+          if (!close(r.J_current, l.j_static)) fail("J_current (= J_static) differs");
           if (!close(r.w_hat, l.w_hat)) fail("w_hat differs");
           if (!close(r.w_trans, l.w_trans)) fail("w_trans differs");
           if (!close(r.margin_ik, l.margin_rad)) fail("margin differs");
@@ -735,7 +725,7 @@ int main(int argc, char** argv) {
         for (const auto& l : log)
           if (l.passes_constraints) pass.push_back(&l);
         std::stable_sort(pass.begin(), pass.end(), [](const S3EvalRecord* x, const S3EvalRecord* y) {
-          if (x->cost_current != y->cost_current) return x->cost_current < y->cost_current;
+          if (x->j_static != y->j_static) return x->j_static < y->j_static;
           if (x->k != y->k) return static_cast<int>(x->k) < static_cast<int>(y->k);
           return x->theta_rad < y->theta_rad;
         });
@@ -750,7 +740,6 @@ int main(int argc, char** argv) {
         if (pos == pass.size())
           fail("winner not among the log's passing rows");
         else {
-          if (!close(pass[pos]->cost_current, c.cost)) fail("winner cost differs from log");
           if (!close(pass[pos]->d_pos_m, c.d_pos_m)) fail("winner d_pos differs from log");
           for (std::size_t q = 0; q < pos; ++q) {
             bool covered = false;

@@ -437,7 +437,7 @@ sono nel repo; `haptic_dmp_wrapper_node` si aspetta il topic pose su `/touch0/po
 vecchia ricerca (`scan_step_deg`, `max_rows`, `psi_tol_deg`, `w_hat_upper_bound`, `time_budget_s`) non esistono più.
 
 - **Variabili**: punto di presa `k` in {0, 90, 180, 270} e fase `theta` in [-180, 180) (passo `s1.theta_step_deg`,
-  poi raffinamento `s1.theta_refine_step_deg` attorno al migliore di ogni k).
+  griglia unica, nessun raffinamento).
 - **Distanza**: deformazione della demo in sola posizione, `d_pos = |(goal - p0) - delta_g_demo|`; costo
   `d + s1.epsilon_wait_per_s * attesa`.
 - **Vincoli a priori**: IK convergente, `w_hat >= s1.w_hat_min`, margine di giunto `>= s1.margin_min_rad`,

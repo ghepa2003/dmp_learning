@@ -65,11 +65,12 @@ OMEGA_PARAM = "satellite_rotation_angular_velocity_deg_s"
 OMEGA_TOL_RAD_S = 0.0017                 # omega_consistency_tol_deg_per_s = 0.1 deg/s (YAML) in rad/s
 THETA_STAR_REF_DEG = -163.5              # --theta-star-ref-deg (formula di --spawn-yaw-deg auto)
 T_TOTAL_S = 45.2                         # --t-total-s: tau 24.47 + attesa 10.9 + 9.85 tra spawn e pubblicazione
-# --arm: braccio di selezione -> --planner-param (stesse chiavi del planner, vedi docs/S3_SPEC.md)
+# --arm: braccio di selezione -> --planner-param (stesse chiavi del planner, vedi docs/S3_SPEC.md).
+# Il planner ha un solo selettore (J_static / J): non esiste piu' s1.mode (un -p su un parametro non dichiarato verrebbe
+# ignorato in silenzio) ne' l'arm "legacy" (rimosso). d_only = senza termine di manipolabilita' (J = d_mm).
 ARMS = {
-    "legacy": [("s1.mode", "legacy")],
-    "d_only": [("s1.mode", "v2"), ("s1.use_w", "false"), ("s1.branch_rule", "rotation")],
-    "v2": [("s1.mode", "v2"), ("s1.branch_rule", "rotation")],
+    "d_only": [("s1.use_w", "false"), ("s1.branch_rule", "rotation")],
+    "v2": [("s1.branch_rule", "rotation")],
 }
 START_JOINTS = "[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]"
 RIM_X_C_MM = 155.1                       # x_c atteso del goal = RIM_X_C_MM - depth[mm]
@@ -386,6 +387,8 @@ def axis_rate(q_prev, q_curr, dt, axis=None):
 def arm_planner_params(arm) -> list:
     if arm is None:
         return []
+    if arm == "legacy":
+        raise RunError(f"--arm 'legacy' rimosso: il planner ha un solo selettore (ammessi: {', '.join(ARMS)})")
     if arm not in ARMS:
         raise RunError(f"--arm '{arm}' sconosciuto (ammessi: {', '.join(ARMS)})")
     return list(ARMS[arm])

@@ -53,22 +53,18 @@ grasp_planner_node:
     # file has it). When set it wins over the demo file. p0 / start_position then are FK(this q).
     # start_joints_override_rad: [0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]
 
-    # Selection (selectGraspS3): reduced problem, position-only deformation distance + constraints, velocity and
-    # path checked a posteriori. All s1.* are optional; the values below are the defaults.
+    # Selection (selectGraspS3): reduced problem, position-only deformation distance, single theta grid; finalists ranked by
+    # J_static and checked by rollout / margin / clearance / velocity. All s1.* are optional EXCEPT s1.rollout_q_ref (below, no
+    # default: the node refuses to start without it); the values below are the defaults.
     # s1.length_scale_m: 0.10          # l in d = sqrt(d_pos^2/l^2 + orientation_weight*ori^2/angle_scale^2)
     # s1.orientation_weight: 0.0       # 0 = distance on position only
     # s1.angle_scale_rad: 1.0
-    # s1.epsilon_wait_per_s: 1.0e-4    # cost = d + epsilon * wait_s
-    # s1.w_hat_min: 0.5                # constraint: w_trans / w_trans_demo >= w_hat_min
-    # s1.margin_min_rad: 0.3           # constraint: min joint-limit margin of the IK solution
     # s1.r_trust_m: 0.30               # constraint: d_pos <= r_trust
     # s1.delta_v_max_m_s: 3.0e-3       # post-hoc: |v_target - v_ProDMP| at contact
-    # s1.theta_step_deg: 2.0           # coarse theta scan over [-180, 180)
-    # s1.theta_refine_step_deg: 0.1    # refinement of the best candidate of each k, +- theta_step_deg
-    # s1.posthoc_path_check: true      # post-hoc: checkKinematicFeasibility along the ProDMP path
+    # s1.theta_step_deg: 2.0           # theta scan over [-180, 180) (single grid, no refinement)
     # s1.posthoc_velocity_check: true  # false: skip the velocity check (e.g. demo that ends at rest)
     # s1.max_posthoc_candidates: 10    # max number of post-hoc checks actually performed
-    # s1.posthoc_cluster_deg: 10.0     # post-hoc: skip a candidate of the same k within this theta distance of one already checked (0 = off)
+    # s1.posthoc_cluster_deg: 10.0     # finalists: skip a candidate of the same k and branch within this theta distance of one already kept (0 = off)
     # s1.ik.pos_tol_m: 1.0e-4
     # s1.ik.ori_tol_rad: 1.0e-3
     # s1.ik.max_iter: 300
@@ -76,14 +72,13 @@ grasp_planner_node:
     # s1.ik.nullspace_gain: 1.0
     # s1.ik.max_step_rad: 0.2
 
-    # ===== s1.* mode v2 e vincolo di clearance: un parametro per riga =====
+    # ===== s1.* selezione (J_static / J), vincolo di margine e di clearance: un parametro per riga =====
     # Commento = valore | origine (MISURATO, DERIVATO, ASSUNTO) | dipendenza esterna file:riga. Le righe commentate sono i default del
-    # codice (omessi = invariati); s1.rollout_q_ref e' ATTIVA: con s1.mode "legacy" viene ignorata (validateS3Params accetta 7 valori finiti).
-    # v2 = scansione statica (ik + limiti + r_trust + max_start_goal_deg; w_hat_min e margin_min_rad NON applicati) -> finalisti (miglior
+    # codice (omessi = invariati); s1.rollout_q_ref e' ATTIVA e OBBLIGATORIA (validateS3Params: 7 valori finiti, nessun default; senza = errore all'avvio).
+    # selezione = scansione statica (ik + limiti + r_trust + max_start_goal_deg) -> finalisti (miglior
     #      J_static per k x ramo x cluster di posthoc_cluster_deg) -> rollout cinematico con target nullspace s1.rollout_q_ref ->
     #      J = d_mm + kappa_w*(-ln w_full) + kappa_t*t_wait -> [clearance, se attiva] -> tra i J <= J_min + tau_j la minima attesa -> velocita'.
-    # s1.mode: "legacy"                # "legacy" | "v2" (altro = errore all'avvio) | ASSUNTO (selettore, default = comportamento storico) | -
-    # s1.branch_rule: "margin"         # "margin" | "rotation" (altro = errore); v2 usa "rotation" | ASSUNTO | s1.force_flip >= 0 prevale
+    # s1.branch_rule: "margin"         # "margin" | "rotation" (altro = errore); la selezione di tesi usa "rotation" | ASSUNTO | s1.force_flip >= 0 prevale
     # s1.max_start_goal_deg: 180.0     # 180 = disattivo | ASSUNTO; evidenza MISURATA: 16.5 e 34.5 gradi riusciti, 179.6 fallito | -
     # s1.finalists_n: 12               # >= 1 | ASSUNTO | -
     # s1.use_w: true                   # false: J = d_mm (+ kappa_t * t_wait) | ASSUNTO | -
@@ -91,12 +86,12 @@ grasp_planner_node:
     # s1.kappa_t: 0.0                  # mm/s, >= 0 | ASSUNTO | -
     # s1.tau_j_mm: 2.0                 # mm, >= 0 | ASSUNTO | -
     # (s1.rollout_q_ref NON e' in franka_gazebo_controllers.yaml: il blocco cartesian_impedance_controller, righe ~112-131, ha solo le rigidezze.)
-    s1.rollout_q_ref: [0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397]  # 7 giunti [rad], OBBLIGATORIA in v2 | DERIVATO: postura "ready" = initial_value del controllore, nullspace target all'attivazione | franka_arm.ros2_control.xacro:51 (= RobotModel::readyPose(), robot_model.cpp:79; cartesian_impedance_controller.cpp:313); con FRANKA_START_POSE diverso va cambiata
-    # s1.use_clearance: false          # true solo con s1.mode "v2" (legacy = errore) | ASSUNTO (vincolo disattivo di default) | docs/S3_SPEC.md "vincolo di clearance"
+    s1.rollout_q_ref: [0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397]  # 7 giunti [rad], OBBLIGATORIA | DERIVATO: postura "ready" = initial_value del controllore, nullspace target all'attivazione | franka_arm.ros2_control.xacro:51 (= RobotModel::readyPose(), robot_model.cpp:79; cartesian_impedance_controller.cpp:313); con FRANKA_START_POSE diverso va cambiata
+    # s1.use_clearance: false          # ASSUNTO (vincolo disattivo di default) | docs/S3_SPEC.md "vincolo di clearance"
     # s1.min_clearance_mm: 2.0         # mm, finito e >= 0; sotto soglia il finalista e' scartato (con s1.force: solo WARN) | ASSUNTO | -
     # s1.clearance_dt_s: 0.05          # s, > 0, passo di campionamento della finestra [0, tau] | DERIVATO dal predittore validato (20 Hz) | _data/diag_audit/_diag_1019/interference/predict_distance.py:376
     # s1.gripper_open_m: 0.060         # m per dito, in [0, 0.08]; DEVE coincidere con gripper_open_position dell'executor | DERIVATO | haptic_dmp_learning/config/params.yaml:93 (prodmp_gazebo_executor_node; :49 e' lo stesso valore per l'orchestrator), default di codice prodmp_gazebo_executor_node.cpp:129
-    # s1.use_margin: false             # true solo con s1.mode "v2" (legacy = errore); valutazione LAZY in ordine di J statico (rollout, margine, clearance, velocita'): vince il primo ammissibile, la banda tau_j_mm NON si applica; nessun ammissibile = kNoCandidate; con s1.force: solo WARN | ASSUNTO (vincolo disattivo di default) | docs/S3_SPEC.md §10.8, criterio 11
+    # s1.use_margin: false             # valutazione LAZY in ordine di J statico (rollout, margine, clearance, velocita'): vince il primo ammissibile, la banda tau_j_mm NON si applica; nessun ammissibile = kNoCandidate; con s1.force: solo WARN | ASSUNTO (vincolo disattivo di default) | docs/S3_SPEC.md §10.8, criterio 11
     # s1.min_margin_deg: 24.0          # gradi, finito e >= 0; margine di giunto minimo previsto su [start, AT_END + margin_follow_s] | ASSUNTO: intervallo osservato in G16 20.84-28.63 (falliti 13.26, 17.67, 20.84; riusciti 28.63, 35.00), NON ottimizzato | _data/diag_audit/_diag_1019/g16/g16_results.csv, step0c_margins.cpp
     # s1.margin_follow_s: 3.0          # s, finito e >= 0; durata del follow simulato dopo AT_END | DERIVATO: post_grasp_follow_s dell'executor (default 3.0) = follow dei run G16 | prodmp_gazebo_executor_node.cpp:142
     # s1.margin_follow_dt_s: 0.01      # s, finito e > 0; passo di integrazione del follow | DERIVATO: step0c_margins.cpp (valori G16/criterio 11); run_rollout_follow_all.cpp usa 0.1 | _data/diag_audit/_diag_1019/step0c_margins.cpp

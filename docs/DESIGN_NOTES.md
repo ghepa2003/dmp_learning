@@ -81,8 +81,8 @@ dependency cycle.
 | `satellite_grasp_planner/core/joint_path_simulator` | Simulates a Cartesian task-space trajectory via `RobotModel`/`VelocityIkSolver` |
 
 **Selection S1** (`selectGraspS3`, the only selection of the planner; legacy search removed):
-- Variables: the grasp point `k` in {0, 90, 180, 270} and the phase `theta` in [-180, 180) deg (coarse step
-  `s1.theta_step_deg`, then refinement of the best of each k with `s1.theta_refine_step_deg`).
+- Variables: the grasp point `k` in {0, 90, 180, 270} and the phase `theta` in [-180, 180) deg (single grid,
+  step `s1.theta_step_deg`, no refinement).
 - Distance: deformation of the single demo, position only (`orientation_weight = 0` by default):
   `d_pos = |(goal - p0) - delta_g_demo|`, `goal` = grasp position + `contact_to_end_offset`,
   `d = sqrt(d_pos^2/l^2 + orientation_weight*ori^2/angle_scale^2)`; cost `d + epsilon_wait_per_s * wait_s`
