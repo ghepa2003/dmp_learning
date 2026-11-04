@@ -1,0 +1,128 @@
+# real_replay configuration (modes: hold | step | replay). Relative paths are resolved against this file's directory.
+# Every number the control path uses lives here; nothing numeric is hardcoded in the code.
+
+robot:
+  ip: "192.168.0.201"
+  ee_frame: "fer_link8"          # flange (no hand mounted). Needs the no-hand URDF.
+  joint_names: [fer_joint1, fer_joint2, fer_joint3, fer_joint4, fer_joint5, fer_joint6, fer_joint7]
+
+paths:
+  urdf: "../urdf/fer_nohand.urdf"   # generate with scripts/gen_urdf_nohand.py (inside the container)
+  log_dir: "../build/logs"          # build/ is git-ignored by the repo's .gitignore
+
+run:
+  max_duration_s: 120.0           # hard cap on trajectory time; also sizes the preallocated log
+
+hold:
+  duration_s: 60.0                # can be overridden with --duration
+
+trajectory:
+  target_update_divisor: 1        # target sampled every N-th 1 kHz cycle (N=5 reproduces the 200 Hz ZOH of the simulation)
+  stop_at_fraction: 1.0           # replay only: freeze the target at this fraction of tau, in (0, 1]
+
+step:                             # --mode step: small smoothstep translation from the activation pose
+  axis: [0.0, 0.0, 1.0]           # robot BASE frame, normalised internally
+  amplitude_m: 0.02
+  move_duration_s: 5.0
+  dwell_s: 2.0                    # pause at the displaced pose
+  return_to_start: true
+  return_duration_s: 5.0
+  rot_axis: [0.0, 0.0, 1.0]
+  rot_angle_rad: 0.087
+
+replay:                           # --mode replay: ProDMP + QuaternionDMP, anchored to the activation pose
+  weights_path: "../../runs/20260914_150515_fit_reach_task_baseline_prodmp_n80_lam1e-10_w0.05/weights.yaml"
+  expected_sha256: "03d4bc158bbaf652f135d6c0dd736db77ef67fab7a2da4c717ab5bbd86c7ac3a"   # empty = not checked
+  hold_after_end_s: 2.0           # target frozen for this long after the end (or after stop_at_fraction), then controlled stop
+
+gains:
+  translational_stiffness: 600.0    # Kt [N/m]
+  rotational_stiffness: 10.0        # Kr [Nm/rad]
+  translational_damping: 10.0       # Dt [Ns/m]   NOT USED any more: damping is designed per axis, see `damping:`
+  rotational_damping: 8.8           # Dr [Nms/rad] NOT USED any more (kept so the file stays readable/compatible)
+  nullspace_stiffness: 0.2          # K_ns (unchanged from the Gazebo YAML)
+  joint1_nullspace_stiffness: 100.0 # joint1_ns (unchanged from the Gazebo YAML)
+  nullspace_pinv_damping: 0.02
+  delta_tau_max: 1.0                # solver-internal slew limit [Nm/cycle]
+  gain_ramp_s: 3.0                  # K, K_rot and K_ns ramp up smoothstep over this time (D stays full)
+  gain_ramp_initial: 0.1            # K scale at t = 0, in (0, 1]
+
+damping:                            # per-axis Cartesian damping, axes [x y z rx ry rz] in the robot BASE frame
+  # D_i = min( 2*zeta_i*sqrt(K_i*Lambda_act_i),  max_damping_per_sample * Lambda_min_i / dt )
+  # Lambda_act: diag of the reflected Cartesian inertia at activation; Lambda_min: its minimum along the
+  # joint path (needs --check-joint-limits; otherwise Lambda_act is used and a warning is printed).
+  zeta_trans: 1.0
+  zeta_rot: 1.0
+  max_damping_per_sample: 0.5       # cap_a: a_i = D_i*dt/Lambda_min_i never exceeds this
+  max_q_drift_rad: 0.02             # abort if q at activation differs from the q the design was made with
+  override_d: []                    # empty, or 6 values [Dx Dy Dz Drx Dry Drz]: bypass the design (used by tests)
+
+safety:
+  effort_limits_nm: [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0]   # URDF effort limits
+  torque_limit_fraction: 0.3        # absolute clamp = fraction * effort limit
+  max_torque_step_nm: 0.5           # explicit rate limit per cycle on the SENT torque
+  joint_limit_margin_rad: 0.10
+  max_joint_speed_rad_s: 1.0
+  joint_speed_consecutive: 3
+  max_tracking_error_m: 0.03
+  max_tracking_error_rad: 0.3
+  tracking_consecutive: 5
+  period_abort_s: 0.005             # a single cycle period above this aborts
+  callback_budget_us: 600.0
+  callback_budget_consecutive: 5
+  min_success_rate: 0.9
+  success_rate_consecutive: 20
+  watchdog_grace_cycles: 500        # success-rate check ignored for the first N cycles
+  stop_duration_s: 0.5              # controlled stop (target = pose at stop time, higher damping)
+  stop_damping_scale: 2.0
+
+collision:                          # values used by joint_impedance_control.cpp:119-123 (ran fine)
+  lower_torque_acc: [20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0]
+  upper_torque_acc: [20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0]
+  lower_torque_nom: [20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0]
+  upper_torque_nom: [20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0]
+  lower_force_acc: [20.0, 20.0, 20.0, 25.0, 25.0, 25.0]
+  upper_force_acc: [20.0, 20.0, 20.0, 25.0, 25.0, 25.0]
+  lower_force_nom: [20.0, 20.0, 20.0, 25.0, 25.0, 25.0]
+  upper_force_nom: [20.0, 20.0, 20.0, 25.0, 25.0, 25.0]
+  joint_impedance: [3000.0, 3000.0, 3000.0, 2500.0, 2500.0, 2000.0, 2000.0]   # examples_common.cpp:18
+  cartesian_impedance: [3000.0, 3000.0, 3000.0, 300.0, 300.0, 300.0]          # examples_common.cpp:19
+
+end_effector:
+  # NOTE: the mass and F_T_NE of the end effector are set in Desk (administrator interface), NOT here.
+  # setEE only changes NE_T_EE; setLoad only the payload. Identity / zero = "nothing mounted".
+  set_ee: true
+  ne_t_ee: [1.0, 0.0, 0.0, 0.0,   0.0, 1.0, 0.0, 0.0,   0.0, 0.0, 1.0, 0.0,   0.0, 0.0, 0.0, 1.0]   # column-major
+  set_load: true
+  load_mass: 0.0
+  f_x_cload: [0.0, 0.0, 0.0]
+  load_inertia: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+preflight:
+  abort_on_failure: true
+  m_ee_max_kg: 0.05                 # Desk must have no hand configured
+  m_load_max_kg: 0.05
+  fk_position_tol_m: 0.001
+  fk_rotation_tol_deg: 0.5
+  check_gravity: true               # franka::Model::gravity(state) vs Pinocchio (arm only)
+  gravity_vs_measured_tol_nm: 0.8
+  gravity_still_max_dq_rad_s: 0.02
+  gravity_urdf_warn_nm: 4.0
+  max_damping_per_sample: 0.5       # WARN when a_i = D_i*dt/Lambda_min_i (dt = 1 ms) exceeds this on any of the 6 axes
+  fail_damping_per_sample: 1.0       # FAIL (robot mode; WARN in dry-run) when a_i exceeds this
+  # Screening model per axis: rigid double integrator, ONE cycle of delay, no rotor inertia, no filters.
+  # a = D dt/Lambda_min, b = K dt^2/Lambda_min; max|z| = spectral radius of z^3 - 2z^2 + (1+a)z + (b-a) = 0.
+  # Gain margin g*: largest g with max|z| < 1 for (g a, g b)   (closed form (a-2b)/(a-b)^2 when a > 2b).
+  warn_gain_margin: 2.0              # WARN when g* is below this
+  fail_gain_margin: 1.2              # FAIL (robot mode; WARN in dry-run) when g* is below this
+  fail_spectral_radius: 1.0          # FAIL (robot mode; WARN in dry-run) when max|z| >= this
+
+runtime:
+  mlockall: false
+  sched_fifo: false
+  expected_libfranka_dir: "/root/comanipulation_dualpanda/libfranka-active-control-non-rt/build"
+
+dry_run:
+  q: [0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0, 1.5707963267948966, 0.7853981633974483]   # "ready" pose
+  paced: true                       # sleep to a 1 kHz cadence between cycles (--no-pace to disable)
+  ignore_tracking_error: false       # fixed state + moving target: the tracking guard would end the run

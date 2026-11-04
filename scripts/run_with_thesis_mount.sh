@@ -37,4 +37,6 @@ docker run --user root:root \
     --volume "$HOME/.Xauthority:/root/.Xauthority:ro" \
     --volume /dev/shm:/dev/shm \
     --volume "$THESIS_WS:/root/thesis_ws" \
+    --volume "$HOME/comanipulation_dualpanda:/root/comanipulation_dualpanda" \
     -it "$IMAGE_NAME:$TAG" "$SHELL" -c "$CMD_INTERACTIVE"
+
