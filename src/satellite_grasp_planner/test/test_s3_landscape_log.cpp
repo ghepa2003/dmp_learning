@@ -213,3 +213,40 @@ TEST(S3LandscapeLog, FollowArcMatchesRotatePoseAboutZ) {
   EXPECT_DOUBLE_EQ(ts.back(), 3.0);
   EXPECT_THROW(s3_landscape::followSampleTimes(3.0, 1), std::invalid_argument);
 }
+
+// Axis, satellite_q_ref and face normal for a tilted axis: the values are the ones tools/s1_run.py wrote in the cell runs
+// (results/val_C5, val_C6, val_C11: run_meta.json "axis"/"q_ref", planner_params_passed cube_geometry.face_normal_body).
+// val_C5: alpha 20, phi 0; val_C6: alpha 20, phi 90; val_C11: alpha 15, phi 315.
+TEST(S3LandscapeAxisTilt, MatchesTheValuesOfTheCellRuns) {
+  struct Case {
+    double alpha, phi;
+    Eigen::Vector3d axis, normal;
+    Eigen::Vector4d q_xyzw;
+  };
+  const Case cases[] = {
+      {20.0, 0.0, {0.3420201433256687, 0.0, 0.9396926207859084}, {0.9396926207859084, 0.0, -0.3420201433256687},
+       {-0.0, 0.17364817766693033, 0.0, 0.984807753012208}},
+      {20.0, 90.0, {2.094269368838496e-17, 0.3420201433256687, 0.9396926207859084}, {1.0, -3.692761945975143e-18, -2.094269368838496e-17},
+       {-0.17364817766693033, 1.0632884247878856e-17, 0.0, 0.984807753012208}},
+      {15.0, 315.0, {0.18301270189221927, -0.18301270189221935, 0.9659258262890683}, {0.9829629131445342, 0.017037086855465844, -0.18301270189221927},
+       {0.09229595564125727, 0.09229595564125723, 0.0, 0.9914448613738104}},
+  };
+  for (const Case& c : cases) {
+    const s3_landscape::AxisTilt t = s3_landscape::axisTilt(c.alpha, c.phi);
+    EXPECT_LT((t.axis - c.axis).norm(), 1e-12) << c.alpha << " " << c.phi;
+    EXPECT_LT((t.face_normal - c.normal).norm(), 1e-12) << c.alpha << " " << c.phi;
+    EXPECT_LT((Eigen::Vector4d(t.q_ref.x(), t.q_ref.y(), t.q_ref.z(), t.q_ref.w()) - c.q_xyzw).norm(), 1e-12) << c.alpha << " " << c.phi;
+    EXPECT_NEAR(t.axis.norm(), 1.0, 1e-14);
+    EXPECT_NEAR(t.face_normal.dot(t.axis), 0.0, 1e-12);  // the selector's cube model requires <= 1e-6
+  }
+}
+
+TEST(S3LandscapeAxisTilt, ZeroTiltIsTheVerticalAxisAndRangeErrorsThrow) {
+  const s3_landscape::AxisTilt t = s3_landscape::axisTilt(0.0, 123.0);
+  EXPECT_LT((t.axis - Eigen::Vector3d::UnitZ()).norm(), 1e-15);
+  EXPECT_LT((t.face_normal - Eigen::Vector3d::UnitX()).norm(), 1e-15);
+  EXPECT_NEAR(t.q_ref.angularDistance(Eigen::Quaterniond::Identity()), 0.0, 1e-15);
+  EXPECT_THROW(s3_landscape::axisTilt(20.5, 0.0), std::invalid_argument);
+  EXPECT_THROW(s3_landscape::axisTilt(-1.0, 0.0), std::invalid_argument);
+  EXPECT_THROW(s3_landscape::axisTilt(10.0, 360.0), std::invalid_argument);
+}

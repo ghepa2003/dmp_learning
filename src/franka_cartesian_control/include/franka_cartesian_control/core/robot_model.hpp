@@ -57,6 +57,15 @@ class RobotModel {
    */
   void update(const JointVector& q, const JointVector& dq);
 
+  /// @brief Number of configuration entries of the URDF model that are not one of the 7 arm joints (gripper fingers).
+  int numPassiveJoints() const;
+
+  /// @brief Sets the position held by the non-arm joints (gripper fingers, in ascending configuration order) in every
+  /// following update(): FK, Jacobian, g, c and M are evaluated with the fingers there. 1 value = all of them; otherwise
+  /// exactly numPassiveJoints() values. Default (never called) = 0.0, the behaviour before this setter existed.
+  /// @throws std::invalid_argument for any other number of values.
+  void setPassiveJointPositions(const std::vector<double>& values);
+
   /// @brief Returns cached end-effector position [x, y, z] in robot base frame (meters).
   const Eigen::Vector3d& eePosition() const { return ee_position_; }
 

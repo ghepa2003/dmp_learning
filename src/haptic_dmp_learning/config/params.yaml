@@ -58,6 +58,13 @@ demo_replay_sync_orchestrator:
     # button_scheme: "single_button"
     # button_index: 0
     # debounce_s: 0.30
+    # Spawn orientation of the target [rad], extrinsic R = Rz(yaw) Ry(pitch) Rx(roll) (ros_gz_sim create
+    # -R -P -Y). target_roll_rad / target_pitch_rad (default 0.0) are forwarded to free_target_object.launch.py
+    # as roll:= / pitch:= ONLY when non-zero; target_yaw (default 0.0) is always forwarded. |pitch| < pi/2.
+    # target_wx/wy/wz are in the BODY frame: with roll/pitch/yaw = R_tilt.Rz(yaw0) and wz only, the target
+    # spins about R_tilt.z (see tools/demo_orchestrator_cmd.py).
+    # target_roll_rad: 0.0
+    # target_pitch_rad: 0.0
 
 dmp_gazebo_executor_node:
   ros__parameters:

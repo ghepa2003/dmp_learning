@@ -1,0 +1,94 @@
+---
+# Campagna di validazione, configurazione congelata del planner. campaign_A.yaml e campaign_B.yaml differiscono SOLO per la riga
+# s1.use_dynamic_follow (A false, B true). Formato = grasp_planner_example.yaml (parametri ROS, blocco grasp_planner_node), letto da:
+#   - s3_landscape  --params <questo file> --node-config   (lettore piatto: una chiave per riga, valori senza virgolette)
+#   - tools/s1_run.py --arm A|B   (le sole chiavi s1.* diventano --planner-param; la geometria e i valori di scenario restano a s1_run)
+# NON contiene i valori di scenario (demo_params_path, urdf_path, satellite_rotation_*, cube_geometry.center_world/axis_world/
+# face_normal_body, omega): li passano s1_run.py / s3_landscape per scenario.
+# Etichette: MISURATO = valore registrato in results/val_C0/run_meta.json (riga citata); LETTO = valore letto dal codice o da un
+# file citato (file:riga); DERIVATO = default di codice o regola derivata; ASSUNTO = scelta non misurata. Cella reale = results/val_C0.
+grasp_planner_node:
+  ros__parameters:
+    # ---- parametri fissi della campagna, non s1.* ----
+    min_delay_s: 5.0                          # MISURATO run_meta.json:74 (cella: 5.0) | tools/s1_run.py:747
+    cube_geometry.grasp_depth_m: 0.0125       # MISURATO run_meta.json:72 (0.012500) | tools/s1_run.py:1082
+    start_joints_override_rad: [-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]  # MISURATO run_meta.json:64 | tools/s1_run.py:75; s3_landscape senza questa chiave userebbe la posa ready
+    cube_geometry.cube_side_m: 0.150          # LETTO grasp_planner_example.yaml:38 (la cella non lo passa: usa il YAML di esempio)
+    cube_geometry.standoff_m: 0.08            # LETTO grasp_planner_example.yaml:39
+    cube_geometry.collar_radius_m: 0.0725     # LETTO grasp_planner_example.yaml:40
+    cube_geometry.grasp_radius_m: 0.068       # LETTO grasp_planner_example.yaml:43 (s3_landscape rifiuta un file senza)
+    cube_geometry.wall_thickness_m: 0.009     # LETTO grasp_planner_example.yaml:46
+
+    # ---- s1.* selezione statica ----
+    s1.length_scale_m: 0.10                   # DERIVATO default di codice grasp_s3_selection.hpp:49; cella: non passato
+    s1.orientation_weight: 0.0                # DERIVATO grasp_s3_selection.hpp:50; cella: non passato
+    s1.angle_scale_rad: 1.0                   # DERIVATO grasp_s3_selection.hpp:51; cella: non passato
+    s1.r_trust_m: 0.30                        # DERIVATO grasp_s3_selection.hpp:52; cella: non passato
+    s1.delta_v_max_m_s: 3.0e-3                # DERIVATO grasp_s3_selection.hpp:53; cella: non passato
+    s1.theta_step_deg: 2.0                    # MISURATO run_meta.json:94 (2.0)
+    s1.posthoc_velocity_check: false          # MISURATO run_meta.json:76 (false); esplicito: il default di codice e' true (grasp_s3_selection.hpp:56)
+    s1.max_posthoc_candidates: 10             # DERIVATO grasp_s3_selection.hpp:57; cella: non passato
+    s1.posthoc_cluster_deg: 10.0              # MISURATO run_meta.json:92 (10.0)
+    s1.ik.pos_tol_m: 1.0e-4                   # DERIVATO grasp_pose_eval.hpp:28; cella: non passato
+    s1.ik.ori_tol_rad: 1.0e-3                 # DERIVATO grasp_pose_eval.hpp:29; cella: non passato
+    s1.ik.max_iter: 300                       # DERIVATO grasp_pose_eval.hpp:30; cella: non passato
+    s1.ik.damping: 0.05                       # DERIVATO grasp_pose_eval.hpp:31; cella: non passato
+    s1.ik.nullspace_gain: 1.0                 # DERIVATO grasp_pose_eval.hpp:32; cella: non passato
+    s1.ik.max_step_rad: 0.2                   # DERIVATO grasp_pose_eval.hpp:33; cella: non passato
+    s1.branch_rule: rotation                  # MISURATO run_meta.json:80 (rotation); senza virgolette: il lettore piatto di s3_landscape non le toglie
+    s1.max_start_goal_deg: 180.0              # DERIVATO grasp_s3_selection.hpp:90; cella: non passato
+    s1.finalists_n: 40                        # MISURATO run_meta.json:90 (40)
+    s1.rollout_q_ref: [0.0, -0.785398163397, 0.0, -2.356194490192, 0.0, 1.570796326795, 0.785398163397]  # MISURATO run_meta.json:106 (stesso valore)
+    s1.use_w: true                            # MISURATO run_meta.json:98 (true)
+    s1.kappa_w: 7.5                           # MISURATO run_meta.json:100 (7.5)
+    s1.kappa_t: 0.0                           # MISURATO run_meta.json:102 (0.0)
+    s1.tau_j_mm: 0.0                          # tau_j_mm = 0.0: spareggio sull'attesa spento; vince il candidato ammesso di costo minimo (decisione 2 novembre 2026)
+    s1.lazy_static_order: true                # A e B decidono sul costo statico J_s (flusso pigro); decisione 2 novembre 2026
+
+    # ---- candidato forzato: spento (la forzatura si passa per scenario con --planner-param s1.force=true ... o --force-k di s3_landscape) ----
+    s1.force: false                           # DERIVATO grasp_s3_selection.hpp:67; cella: non passato
+    s1.force_k: 0                             # DERIVATO grasp_s3_selection.hpp:68; cella: non passato
+    s1.force_theta_deg: 0.0                   # DERIVATO grasp_s3_selection.hpp:69; cella: non passato
+    s1.force_psi_deg: 0.0                     # DERIVATO grasp_s3_selection.hpp:70; cella: non passato
+    s1.force_ignore_constraints: false        # DERIVATO grasp_s3_selection.hpp:71; cella: non passato
+    s1.force_flip: -1                         # DERIVATO grasp_s3_selection.hpp:75; cella: non passato
+
+    # ---- V2 clearance ----
+    s1.use_clearance: true                    # MISURATO run_meta.json:82 (true)
+    s1.min_clearance_mm: 2.0                  # MISURATO run_meta.json:84 (2.0)
+    s1.clearance_dt_s: 0.05                   # DERIVATO grasp_s3_selection.hpp:109; cella: non passato
+    s1.gripper_open_m: 0.060                  # DERIVATO grasp_s3_selection.hpp:112 = gripper_open_position dell'executor (haptic_dmp_learning/config/params.yaml:93)
+
+    # ---- margine cinematico (vecchio criterio): spento. La cella lo aveva acceso (use_margin true, min_margin_deg 28.0) ----
+    s1.use_margin: false                      # cella: true (run_meta.json:86) | ASSUNTO: differenza voluta della campagna (L2 sostituisce use_margin)
+    s1.min_margin_deg: 28.0                   # MISURATO run_meta.json:88 (28.0); inattivo con use_margin false
+    s1.margin_follow_s: 3.0                   # LETTO = post_grasp_follow_s dell'executor (s1_run.py --follow-s 3.0; prodmp_gazebo_executor_node.cpp:142); cella: non passato
+    s1.margin_follow_dt_s: 0.01               # DERIVATO grasp_s3_selection.hpp:128; cella: non passato; inattivo con use_margin false
+
+    # ---- V1' (fine tenuta) ----
+    s1.use_hold_end: true                     # ASSUNTO: differenza voluta della campagna (cella: non passato = false)
+    s1.hold_follow_s: 3.0                     # LETTO = post_grasp_follow_s dell'executor (prodmp_gazebo_executor_node.cpp:142) e = margin_follow_s
+
+    # ---- L2 (forward dynamics): A false, B true: e' l'UNICA riga che differisce tra campaign_A.yaml e campaign_B.yaml ----
+    s1.use_dynamic_follow: true               # ASSUNTO: A false, B true; cella: non passato = false
+    s1.margin_delta_deg: 0.0                  # ASSUNTO: limite fisico del giunto, configurazione finale L2 (grasp_planner_example.yaml:128); default di codice 5.0 (grasp_s3_selection.hpp:146); cella: non passato
+
+    # ---- parametri di L2: configurazione finale L2, grasp_planner_example.yaml:130-147 (nessuno e' stato validato in una cella Gazebo) ----
+    s1.follow_dt_s: 0.0005                    # LETTO grasp_planner_example.yaml:130
+    s1.follow_divergence_rad: 6.283185307179586  # LETTO grasp_planner_example.yaml:131
+    s1.follow_finger_pos_m: 0.06              # LETTO grasp_planner_example.yaml:132
+    s1.follow_translational_stiffness: 2000.0 # LETTO grasp_planner_example.yaml:133 = Kt della campagna (s1_run.py --kt 2000)
+    s1.follow_rotational_stiffness: 150.0     # LETTO grasp_planner_example.yaml:134
+    s1.follow_translational_damping: 10.0     # LETTO grasp_planner_example.yaml:135
+    s1.follow_rotational_damping: 1.0         # LETTO grasp_planner_example.yaml:136
+    s1.follow_nullspace_stiffness: 0.2        # LETTO grasp_planner_example.yaml:137
+    s1.follow_joint1_nullspace_stiffness: 100.0  # LETTO grasp_planner_example.yaml:138
+    s1.follow_nullspace_pinv_damping: 0.02    # LETTO grasp_planner_example.yaml:139
+    s1.follow_delta_tau_max: 1.0              # LETTO grasp_planner_example.yaml:140 (per passo: con follow_dt_s 0.0005 il limite per secondo e' 2000 Nm/s)
+    s1.follow_compensate_gravity: true        # LETTO grasp_planner_example.yaml:141
+    s1.follow_plant_gravity_z: -9.80665       # LETTO grasp_planner_example.yaml:142
+    s1.follow_friction_eps: 0.1               # LETTO grasp_planner_example.yaml:143
+    s1.follow_apply_urdf_damping: true        # LETTO grasp_planner_example.yaml:144
+    s1.follow_apply_urdf_friction: true       # LETTO grasp_planner_example.yaml:145
+    s1.follow_abort_on_divergence: true       # LETTO grasp_planner_example.yaml:146
+    s1.follow_dq0_zero: true                  # LETTO grasp_planner_example.yaml:147

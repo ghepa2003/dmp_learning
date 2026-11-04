@@ -59,5 +59,8 @@ slip_tang_axial_3_end:
 # (limiti del URDF), finestra [TRIGGER, AT_END + follow_s].
 # aggiunto il 19/10/2026 dopo aver visto il run scaleA_A8; i criteri 1-10 sono del 15/10/2026; criterio post hoc
 # (scaleA_A8 passava i 10 criteri con il giunto 6 a margine 0.00 deg a +3.0 s da AT_END, 3.08 al contatto).
+# 02/11/2026: riportato A PARTE. L'esito principale "success" di s1_report.py e' l'AND dei criteri 1-10
+# (s1_report.SEPARATE_CRITERIA esclude questa chiave); il criterio 11 e' in criterion_11_ok, l'AND di tutti
+# e 11 in success_1_11. Soglia invariata.
 min_joint_margin_deg:
   min: 10

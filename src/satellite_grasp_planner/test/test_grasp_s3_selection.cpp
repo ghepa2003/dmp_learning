@@ -4,11 +4,15 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -1766,4 +1770,1274 @@ TEST(GraspS3PosthocCharacterizationTest, V2LazyRolloutInfeasibleFinalistIsDiscar
   EXPECT_TRUE(r.posthoc_log.empty());
   EXPECT_EQ(r.status, S3Result::kPosthocFailed) << r.note;
   EXPECT_NE(r.note.find("v2: no finalist passed the rollout and the post-hoc checks"), std::string::npos) << r.note;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// L2 dynamic follow (S3Params::use_dynamic_follow, stage 2b). Written without being able to build/run. As the use_margin tests,
+// the L2 margins of the synthetic fixture are not known a priori: a probe run with an unreachable threshold lists them and the
+// expected outcome is built from it.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+S3Params v2DynParams(double margin_delta_deg) {
+  S3Params p = v2LooseParams();
+  p.use_dynamic_follow = true;
+  p.margin_delta_deg = margin_delta_deg;
+  // dynamic_follow.dt_s stays at the selector default (0.0005 s)
+  return p;
+}
+
+JointDynamics testJointDynamics() {
+  std::vector<std::string> names;
+  for (int i = 1; i <= 7; ++i) names.push_back("fer_joint" + std::to_string(i));
+  return loadJointDynamicsFromUrdfFile(tf::urdfPath(), names);
+}
+
+/// One line per finalist (J_static order): what the L2 stage saw. Printed when a fixture precondition fails and, for the record, always.
+std::string dynTable(const S3Result& r) {
+  std::ostringstream o;
+  o << std::fixed << std::setprecision(3) << r.v2_finalists.size() << " finalists, status " << static_cast<int>(r.status)
+    << ", rollouts_done " << r.rollouts_done << ", dynamic_evals_done " << r.dynamic_evals_done << "\n";
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    const S3FinalistRecord& f = r.v2_finalists[i];
+    o << "  [" << i << "] k=" << static_cast<int>(f.cand.eval.k) << (f.cand.eval.wrist_flip ? 'B' : 'A')
+      << " theta=" << f.cand.eval.theta_rad * 180.0 / M_PI << " rollout_done=" << f.rollout_done
+      << " feasible=" << f.rollout_feasible << " dyn_done=" << f.dyn_done;
+    if (f.dyn_done) {
+      o << " approach=" << f.dyn_approach_margin_deg << " hold=" << f.dyn_hold_margin_deg << " (fer_joint" << f.dyn_hold_joint + 1
+        << " t=" << f.dyn_hold_t_rel_s << ") total=" << f.dyn_total_margin_deg << " diverged=" << f.dyn_diverged;
+    }
+    o << " reason='" << f.discard_reason << "'" << (f.winner ? " WINNER" : "") << "\n";
+  }
+  return o.str();
+}
+
+/// Evaluation order = J_static order = index order: the indices of the finalists the L2 stage evaluated.
+std::vector<std::size_t> dynEvaluated(const S3Result& r) {
+  std::vector<std::size_t> idx;
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    if (r.v2_finalists[i].dyn_done) {
+      idx.push_back(i);
+    }
+  }
+  return idx;
+}
+
+}  // namespace
+
+TEST(GraspS3DynamicFollowTest, DefaultsAndValidation) {
+  const S3Params d;
+  EXPECT_FALSE(d.use_dynamic_follow);
+  EXPECT_DOUBLE_EQ(d.margin_delta_deg, 5.0);  // ASSUMED
+  EXPECT_DOUBLE_EQ(d.dynamic_follow.dt_s, 0.0005);  // the selector's default (the DynamicFollowParams struct default stays 0.001)
+  EXPECT_DOUBLE_EQ(DynamicFollowParams().dt_s, 0.001);
+  EXPECT_NO_THROW(validateS3Params(v2DynParams(5.0)));
+  auto bad = [](auto mutate, const char* what) {
+    S3Params p = v2DynParams(5.0);
+    mutate(p);
+    try {
+      validateS3Params(p);
+      ADD_FAILURE() << "expected std::invalid_argument for " << what;
+    } catch (const std::invalid_argument& e) {
+      EXPECT_NE(std::string(e.what()).find(what), std::string::npos) << e.what();
+    }
+  };
+  bad([](S3Params& p) { p.use_margin = true; }, "mutually exclusive");  // incompatible flags, clear message
+  bad([](S3Params& p) { p.margin_delta_deg = std::numeric_limits<double>::infinity(); }, "margin_delta_deg");
+  bad([](S3Params& p) { p.margin_delta_deg = std::nan(""); }, "margin_delta_deg");
+  bad([](S3Params& p) { p.dynamic_follow.friction_tanh_eps_rad_s = 0.0; }, "friction_tanh_eps_rad_s");
+  bad([](S3Params& p) { p.dynamic_follow.dq0_zero = false; }, "follow_dq0_zero");
+  bad([](S3Params& p) { p.margin_follow_s = 0.0001; }, "margin_follow_s");  // shorter than one L2 step (0.5 ms)
+  bad([](S3Params& p) { p.margin_delta_deg = -1.0; }, "margin_delta_deg");
+  bad([](S3Params& p) { p.margin_delta_deg = -1e-9; }, "margin_delta_deg");
+  bad([](S3Params& p) { p.dynamic_follow.dt_s = 0.0; }, "dt_s");
+  bad([](S3Params& p) { p.dynamic_follow.dt_s = -0.001; }, "dt_s");
+  // V1' (use_hold_end) together with L2 is valid; with use_margin it is still the use_margin / use_dynamic_follow exclusion.
+  EXPECT_NO_THROW(validateS3Params([] { S3Params p = v2DynParams(5.0); p.use_hold_end = true; return p; }()));
+  bad([](S3Params& p) { p.use_hold_end = true; p.use_margin = true; }, "mutually exclusive");
+  bad([](S3Params& p) { p.use_hold_end = true; p.hold_follow_s = -1.0; }, "hold_follow_s");
+  bad([](S3Params& p) { p.use_hold_end = true; p.use_dynamic_follow = false; p.hold_follow_s = -1.0; }, "hold_follow_s");
+  // use_margin alone is still valid, and a disabled flag does not constrain the other follow_* values
+  EXPECT_NO_THROW(validateS3Params(v2MarginParams(24.0)));
+  S3Params off = v2LooseParams();
+  off.dynamic_follow.friction_tanh_eps_rad_s = 0.0;
+  off.dynamic_follow.dq0_zero = false;
+  off.margin_delta_deg = std::nan("");
+  EXPECT_NO_THROW(validateS3Params(off));
+}
+
+// use_dynamic_follow = false: every dynamic parameter is ignored, the selection is the current one (eager v2, no L2 evaluation).
+TEST(GraspS3DynamicFollowTest, DisabledIsUnchangedV2Selection) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base = v2LooseParams();
+  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+  if (a.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << a.note;
+  S3Params other = base;  // use_dynamic_follow stays false; ctx.joint_dynamics stays null
+  other.margin_delta_deg = 1e6;
+  other.dynamic_follow.translational_stiffness = 1.0;
+  other.dynamic_follow.finger_pos_m = 0.0789;
+  other.dynamic_follow.dt_s = 0.5;
+  other.dynamic_follow.divergence_rad = 1e-9;
+  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+  ASSERT_EQ(a.status, b.status);
+  EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+  EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+  EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+  EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+  EXPECT_EQ(a.evaluations, b.evaluations);
+  EXPECT_EQ(a.rollouts_done, b.rollouts_done);
+  EXPECT_EQ(a.posthoc_min_margin_rad, b.posthoc_min_margin_rad);
+  EXPECT_EQ(b.dynamic_evals_done, 0);
+  EXPECT_EQ(b.dynamic_stage_ms, 0.0);
+  EXPECT_EQ(b.dyn_counters.rolled_out, 0);
+  EXPECT_EQ(b.dyn_counters.evaluated_l2, 0);
+  EXPECT_EQ(b.dyn_counters.discarded_v1_rollout + b.dyn_counters.discarded_v2_clearance + b.dyn_counters.discarded_l2_approach +
+                b.dyn_counters.discarded_l2_hold + b.dyn_counters.discarded_l2_diverged + b.dyn_counters.discarded_velocity,
+            0);
+  EXPECT_TRUE(std::isnan(b.winner_l2_clearance_mm));
+  EXPECT_EQ(a.note, b.note);
+  EXPECT_EQ(a.warnings, b.warnings);
+  EXPECT_EQ(a.posthoc_checks, b.posthoc_checks);
+  EXPECT_EQ(a.chosen.psi_rad, b.chosen.psi_rad);
+  ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+  for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+    EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+    EXPECT_EQ(a.v2_finalists[i].winner, b.v2_finalists[i].winner);
+    EXPECT_FALSE(b.v2_finalists[i].dyn_done);
+    EXPECT_TRUE(b.v2_finalists[i].discard_reason.empty());
+  }
+}
+
+TEST(GraspS3DynamicFollowTest, NeedsJointDynamics) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  ASSERT_EQ(s.ctx.joint_dynamics, nullptr);
+  EXPECT_THROW(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2DynParams(5.0)), std::invalid_argument);
+}
+
+// Lazy flow, two passes (no GTEST_SKIP: a fixture that cannot exercise the scenario makes the test FAIL and prints the margins).
+// Pass 1 with an unreachable threshold (+1e6 deg: it records the margin of every finalist that reaches L2). Pass 2 with a threshold
+// between the total margin of the first evaluated finalist and that of a later one: the first is discarded ("dynamic_approach" or
+// "dynamic_hold"), the later one wins, nothing after it is rolled out or evaluated. The thresholds are >= 0 (validateS3Params), so the
+// fixture must give non-negative L2 margins for the finalists used: otherwise the precondition fails and the table is printed.
+TEST(GraspS3DynamicFollowTest, BelowThresholdDiscardedNextChosenLazy) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+
+  const S3Result probe = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2DynParams(kHugeMarginDeg));
+  const std::string table = dynTable(probe);
+  std::cerr << "[dyn pass 1, threshold " << kHugeMarginDeg << " deg]\n" << table;
+  const std::vector<std::size_t> evaluated = dynEvaluated(probe);
+  ASSERT_GE(evaluated.size(), 2u) << "fixture: need >= 2 finalists reaching the L2 stage\n" << table;
+  EXPECT_EQ(probe.status, S3Result::kNoCandidate) << table;  // unreachable threshold: nothing admissible, no fallback
+  EXPECT_NE(probe.note.find("dynamic follow"), std::string::npos) << probe.note;
+  EXPECT_EQ(probe.dynamic_evals_done, static_cast<int>(evaluated.size())) << table;
+  for (std::size_t i : evaluated) {
+    EXPECT_TRUE(probe.v2_finalists[i].dyn_rejected) << table;
+  }
+
+  const std::size_t first = evaluated.front();
+  const double first_total = probe.v2_finalists[first].dyn_total_margin_deg;
+  ASSERT_TRUE(std::isfinite(first_total) && !probe.v2_finalists[first].dyn_diverged)
+      << "fixture: the first evaluated finalist has no finite L2 margin\n" << table;
+  // The first finalist may have a negative L2 margin (L2 has no joint limits: the path can go beyond one). The threshold must be >= 0
+  // (validateS3Params), so it is taken between max(first_total, 0) and the margin of the later finalist.
+  const double lower = std::max(first_total, 0.0);
+  std::size_t later = probe.v2_finalists.size();
+  for (std::size_t k = 1; k < evaluated.size() && later == probe.v2_finalists.size(); ++k) {
+    const S3FinalistRecord& f = probe.v2_finalists[evaluated[k]];
+    if (std::isfinite(f.dyn_total_margin_deg) && !f.dyn_diverged && f.dyn_total_margin_deg > lower + 1e-3) {
+      later = evaluated[k];
+    }
+  }
+  ASSERT_LT(later, probe.v2_finalists.size())
+      << "fixture: no later finalist has a total L2 margin above max(first, 0) = " << lower
+      << " deg: the discard-then-choose scenario cannot be built; margins below\n" << table;
+  const double threshold = 0.5 * (lower + probe.v2_finalists[later].dyn_total_margin_deg);
+
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2DynParams(threshold));
+  std::cerr << "[dyn pass 2, threshold " << threshold << " deg]\n" << dynTable(r);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note << "\n" << dynTable(r);
+  EXPECT_TRUE(r.v2_finalists[first].discard_reason == "dynamic_approach" || r.v2_finalists[first].discard_reason == "dynamic_hold")
+      << r.v2_finalists[first].discard_reason;
+  EXPECT_TRUE(r.v2_finalists[first].dyn_rejected);
+  EXPECT_FALSE(r.v2_finalists[first].winner);
+  EXPECT_TRUE(r.v2_finalists[later].winner) << dynTable(r);
+  EXPECT_TRUE(r.v2_finalists[later].discard_reason.empty());
+  EXPECT_EQ(r.chosen.eval.theta_rad, r.v2_finalists[later].cand.eval.theta_rad);
+  for (std::size_t i = later + 1; i < r.v2_finalists.size(); ++i) {
+    EXPECT_FALSE(r.v2_finalists[i].rollout_done) << "finalist " << i << " was rolled out after the winner\n" << dynTable(r);
+    EXPECT_FALSE(r.v2_finalists[i].dyn_done) << "finalist " << i << " was evaluated after the winner\n" << dynTable(r);
+  }
+  // dynamic_evals_done = the finalists actually evaluated = those of pass 1 up to and including the winner
+  std::size_t expected_evals = 0;
+  for (std::size_t i : evaluated) {
+    if (i <= later) {
+      ++expected_evals;
+    }
+  }
+  EXPECT_EQ(r.dynamic_evals_done, static_cast<int>(expected_evals)) << dynTable(r);
+  EXPECT_EQ(dynEvaluated(r).size(), expected_evals) << dynTable(r);
+  // the evaluation does not depend on the threshold: same margins as in pass 1
+  for (std::size_t i : dynEvaluated(r)) {
+    EXPECT_DOUBLE_EQ(r.v2_finalists[i].dyn_total_margin_deg, probe.v2_finalists[i].dyn_total_margin_deg) << i;
+  }
+}
+
+// The winner carries the L2 state at AT_END, at +1.5 s and +3.0 s and the two margins it was judged on (additive fields). The threshold
+// is the best total margin of a pass-1 run: a winner exists by construction whenever one finalist has a finite, non-negative L2 margin
+// (validateS3Params rejects a negative threshold); otherwise the test FAILS and prints the table.
+TEST(GraspS3DynamicFollowTest, WinnerCarriesL2States) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+
+  const S3Result probe = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2DynParams(kHugeMarginDeg));
+  const std::string table = dynTable(probe);
+  std::cerr << "[dyn winner test, pass 1]\n" << table;
+  double best = -std::numeric_limits<double>::infinity();
+  for (std::size_t i : dynEvaluated(probe)) {
+    const S3FinalistRecord& f = probe.v2_finalists[i];
+    if (std::isfinite(f.dyn_total_margin_deg) && !f.dyn_diverged) {
+      best = std::max(best, f.dyn_total_margin_deg);
+    }
+  }
+  ASSERT_TRUE(std::isfinite(best)) << "fixture: no finalist with a finite, non-diverged L2 margin\n" << table;
+  ASSERT_GE(best, 0.0) << "fixture: every L2 margin is negative (path beyond a joint limit); the threshold would be rejected\n" << table;
+
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2DynParams(best));
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note << "\n" << dynTable(r);
+  const S3FinalistRecord* w = nullptr;
+  for (const auto& f : r.v2_finalists) {
+    if (f.winner) {
+      w = &f;
+    }
+  }
+  ASSERT_NE(w, nullptr) << dynTable(r);
+  ASSERT_TRUE(w->dyn_done);
+  EXPECT_FALSE(w->dyn_rejected);
+  EXPECT_FALSE(w->dyn_diverged);
+  EXPECT_GT(w->dyn_at_end_s, 0.0);
+  EXPECT_DOUBLE_EQ(w->dyn_total_margin_deg, std::min(w->dyn_approach_margin_deg, w->dyn_hold_margin_deg));
+  EXPECT_GE(w->dyn_total_margin_deg, best);
+  EXPECT_TRUE(std::isfinite(w->dyn_approach_margin_deg) && std::isfinite(w->dyn_hold_margin_deg));
+  EXPECT_GE(w->dyn_hold_joint, 0);
+  EXPECT_LE(w->dyn_hold_joint, 6);
+  EXPECT_GE(w->dyn_approach_joint, 0);
+  EXPECT_LE(w->dyn_approach_joint, 6);
+  EXPECT_GE(w->dyn_hold_t_rel_s, 0.0);
+  EXPECT_LE(w->dyn_hold_t_rel_s, 3.0 + 1e-9);
+  EXPECT_GT(w->dyn_elapsed_ms, 0.0);
+  EXPECT_LE(w->dyn_approach_t_rel_s, 0.0);
+  ASSERT_TRUE(w->rollout_end_valid);
+  static_assert(RobotModel::kNumJoints == 7, "the seven-element vectors below");
+  EXPECT_EQ(w->dyn_q_end_deg.size(), 7);
+  EXPECT_EQ(w->dyn_q_h1p5_deg.size(), 7);
+  EXPECT_EQ(w->dyn_q_h3_deg.size(), 7);
+  EXPECT_TRUE(w->dyn_q_end_deg.allFinite());
+  EXPECT_TRUE(w->dyn_q_h1p5_deg.allFinite());
+  EXPECT_TRUE(w->dyn_q_h3_deg.allFinite());
+  EXPECT_TRUE(std::isfinite(w->dyn_initial_rot_err_deg));
+  EXPECT_LT(w->dyn_initial_rot_err_deg, 3.0);
+  EXPECT_TRUE(std::isfinite(w->dyn_vs_rollout_qend_deg));
+  EXPECT_LT((w->dyn_q_end_deg - w->rollout_end.q_end * 180.0 / M_PI).cwiseAbs().maxCoeff() - w->dyn_vs_rollout_qend_deg, 1e-9);
+  EXPECT_GE(r.dyn_counters.evaluated_l2, 1);
+  EXPECT_GT(r.dynamic_stage_ms, 0.0);
+  EXPECT_GE(r.dynamic_evals_done, 1);
+  EXPECT_LE(r.dynamic_evals_done, r.rollouts_done);  // only the rollout-feasible finalists reach the L2 stage
+}
+
+// Clearance (V2) is evaluated BEFORE L2 and discards without calling it: every finalist below the threshold -> no L2 run at all.
+TEST(GraspS3DynamicFollowTest, FailedClearanceDoesNotCallL2) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  int clearance_calls = 0;
+  s.ctx.clearance_eval = [&clearance_calls](const ClearanceQuery&) {
+    ++clearance_calls;
+    return fakeClearance(1.5);
+  };
+  S3Params p = v2DynParams(0.0);  // L2 would accept anything non-negative
+  p.use_clearance = true;
+  p.min_clearance_mm = 2.0;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_EQ(r.status, S3Result::kNoCandidate);
+  ASSERT_GT(clearance_calls, 0) << "fixture: no rollout-feasible finalist reached the clearance stage: " << r.note;
+  EXPECT_EQ(r.dynamic_evals_done, 0);
+  EXPECT_EQ(r.dyn_counters.evaluated_l2, 0);
+  EXPECT_EQ(r.dynamic_stage_ms, 0.0);
+  EXPECT_EQ(r.dyn_counters.discarded_v2_clearance, clearance_calls);
+  EXPECT_EQ(r.dyn_counters.discarded_l2_approach + r.dyn_counters.discarded_l2_hold + r.dyn_counters.discarded_l2_diverged, 0);
+  for (const auto& f : r.v2_finalists) {
+    EXPECT_FALSE(f.dyn_done);
+    EXPECT_NE(f.discard_reason, "dynamic_approach");
+  }
+}
+
+// With the clearance passing, the counters add up: every finalist that reached L2 is either the winner or discarded by one L2 criterion
+// (an unreachable threshold: none is the winner); the clearance of the winner is recomputed on the L2 path and reported.
+TEST(GraspS3DynamicFollowTest, CountersAndWinnerClearanceOnTheL2Path) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  std::vector<std::size_t> sizes;
+  std::vector<double> last_t;
+  s.ctx.clearance_eval = [&](const ClearanceQuery& q) {
+    sizes.push_back(q.trajectory->size());
+    last_t.push_back(q.trajectory->back().t_s);
+    return fakeClearance(10.0);
+  };
+  S3Params p = v2DynParams(kHugeMarginDeg);
+  p.use_clearance = true;
+  const S3Result r1 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_EQ(r1.status, S3Result::kNoCandidate);
+  ASSERT_GE(r1.dynamic_evals_done, 1) << r1.note;
+  EXPECT_EQ(r1.dyn_counters.evaluated_l2, r1.dynamic_evals_done);
+  EXPECT_EQ(r1.dyn_counters.discarded_l2_approach + r1.dyn_counters.discarded_l2_hold + r1.dyn_counters.discarded_l2_diverged,
+            r1.dynamic_evals_done);
+  EXPECT_TRUE(std::isnan(r1.winner_l2_clearance_mm));  // no winner
+
+  // threshold = best total margin of pass 1 (>= 0): a winner exists; its clearance is queried one more time, on the L2 path
+  double best = -std::numeric_limits<double>::infinity();
+  for (const auto& f : r1.v2_finalists) {
+    if (f.dyn_done && !f.dyn_diverged && std::isfinite(f.dyn_total_margin_deg)) best = std::max(best, f.dyn_total_margin_deg);
+  }
+  ASSERT_GE(best, 0.0) << dynTable(r1);
+  sizes.clear();
+  last_t.clear();
+  p.margin_delta_deg = best;
+  const S3Result r2 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r2.status, S3Result::kSelected) << r2.note << "\n" << dynTable(r2);
+  ASSERT_GE(sizes.size(), 2u);
+  EXPECT_DOUBLE_EQ(r2.winner_l2_clearance_mm, 10.0);
+  EXPECT_EQ(r2.winner_l2_clearance_pair, "dito 1-collare");
+  EXPECT_GE(last_t.back(), s.tmpl.tau() - 1e-9);  // the L2-path trajectory covers [0, tau]
+  EXPECT_EQ(r2.dyn_counters.evaluated_l2, r2.dynamic_evals_done);
+  EXPECT_GT(r2.dynamic_stage_ms, 0.0);
+}
+
+// A divergent L2 run (excursion guard so tight that any motion trips it) discards every finalist as "dynamic_diverged", is counted, and
+// does not throw.
+TEST(GraspS3DynamicFollowTest, DivergentFinalistIsDiscardedAndCounted) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  S3Params p = v2DynParams(0.0);
+  p.dynamic_follow.divergence_rad = 1e-6;
+  S3Result r;
+  ASSERT_NO_THROW(r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p));
+  EXPECT_EQ(r.status, S3Result::kNoCandidate);
+  ASSERT_GE(r.dynamic_evals_done, 1) << r.note;
+  EXPECT_EQ(r.dyn_counters.discarded_l2_diverged, r.dynamic_evals_done);
+  EXPECT_EQ(r.dyn_counters.discarded_l2_approach + r.dyn_counters.discarded_l2_hold, 0);
+  for (const auto& f : r.v2_finalists) {
+    if (f.dyn_done) {
+      EXPECT_TRUE(f.dyn_diverged);
+      EXPECT_TRUE(f.dyn_rejected);
+      EXPECT_EQ(f.discard_reason, "dynamic_diverged");
+    }
+  }
+}
+
+// The velocity check runs before L2 under use_dynamic_follow: a finalist failing it is discarded as "velocity" without an L2 run.
+TEST(GraspS3DynamicFollowTest, VelocityFailureSkipsL2) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  S3Params p = v2DynParams(0.0);
+  p.posthoc_velocity_check = true;
+  p.delta_v_max_m_s = 1e-12;  // no finalist can satisfy it
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_NE(r.status, S3Result::kSelected);
+  EXPECT_EQ(r.dynamic_evals_done, 0);
+  EXPECT_GT(r.dyn_counters.discarded_velocity, 0) << r.note;
+  EXPECT_EQ(static_cast<std::size_t>(r.posthoc_checks), r.posthoc_log.size());
+  for (const auto& f : r.v2_finalists) EXPECT_FALSE(f.dyn_done);
+}
+
+// ==============================================================================================
+// GraspS3HoldEndTest (Stadio V1', tutor decision 28/10): IK at grasp AND at hold end within limits
+// ==============================================================================================
+
+// 1. With use_hold_end == false (default): selection is unchanged.
+TEST(GraspS3HoldEndTest, DisabledIsUnchangedSelection) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base = v2LooseParams();
+  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+  ASSERT_EQ(a.status, S3Result::kSelected);
+
+  S3Params other = base;
+  other.use_hold_end = false;
+  other.hold_follow_s = 10.0;
+  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+
+  ASSERT_EQ(a.status, b.status);
+  EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+  EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+  EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+  EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+  EXPECT_EQ(a.evaluations, b.evaluations);
+  EXPECT_EQ(a.rollouts_done, b.rollouts_done);
+  EXPECT_FALSE(b.hold_end_done);
+  ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+  for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+    EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+    EXPECT_EQ(a.v2_finalists[i].winner, b.v2_finalists[i].winner);
+    EXPECT_FALSE(b.v2_finalists[i].hold_end_done);
+  }
+}
+
+// 2. Unit test of holdPoseIk:
+//    - the rotated pose strictly matches rotatePoseAboutAxis;
+//    - small rotation: the grasp pose is FK(q_start) (reachable by construction, seed = q_start), so the IK converges;
+//    - infeasible case: the rotated position is more than 3.5 m from the base (rotation of 180 deg about an axis 2 m away from the
+//      TCP), far beyond any reach of the arm, so the IK cannot converge whatever the orientation.
+TEST(GraspS3HoldEndTest, HoldPoseIkRotationAndLimits) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  ASSERT_NE(s.robot, nullptr);
+
+  // Grasp pose = FK(q_start), the frame of the model (fer_hand_tcp); s.demo was built from q_start in makeS3TestSetup().
+  const Eigen::Vector3d grasp_pos = s.demo.position;
+  const Eigen::Quaterniond grasp_quat = s.demo.orientation;
+  const Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
+  const double t_follow = 1.0;
+
+  // Small rotation (0.05 rad ~ 2.86 deg) about an axis 0.15 m behind the TCP: the pose moves by ~7.5 mm and 0.05 rad.
+  const Eigen::Vector3d center_small = grasp_pos - Eigen::Vector3d(0.15, 0.0, 0.0);
+  const double omega_small = 0.05;
+  const HoldPoseIkResult r_small =
+      holdPoseIk(*s.robot, grasp_pos, grasp_quat, center_small, axis, omega_small, t_follow, s.q_start);
+
+  const haptic_dmp_learning::core::RotatablePose expected_pose_small =
+      haptic_dmp_learning::core::rotatePoseAboutAxis(center_small, axis, {grasp_pos, grasp_quat}, omega_small * t_follow);
+  EXPECT_LT((r_small.hold_pose.position - expected_pose_small.position).norm(), 1e-12);
+  EXPECT_LT(r_small.hold_pose.orientation.angularDistance(expected_pose_small.orientation), 1e-12);
+  EXPECT_TRUE(r_small.end_ok);
+  EXPECT_TRUE(r_small.ik.converged);
+  EXPECT_TRUE(r_small.ik.limits_ok);
+  EXPECT_EQ(r_small.end_ok, r_small.ik.converged && r_small.ik.limits_ok);
+  EXPECT_GT(r_small.w_end, 0.0);
+
+  // Infeasible: axis 2 m in front of the TCP, rotation of 180 deg -> position = grasp_pos + (4, 0, 0).
+  const Eigen::Vector3d center_far = grasp_pos + Eigen::Vector3d(2.0, 0.0, 0.0);
+  const double omega_large = M_PI / t_follow;
+  const HoldPoseIkResult r_large =
+      holdPoseIk(*s.robot, grasp_pos, grasp_quat, center_far, axis, omega_large, t_follow, s.q_start);
+
+  const haptic_dmp_learning::core::RotatablePose expected_pose_large =
+      haptic_dmp_learning::core::rotatePoseAboutAxis(center_far, axis, {grasp_pos, grasp_quat}, omega_large * t_follow);
+  EXPECT_LT((r_large.hold_pose.position - expected_pose_large.position).norm(), 1e-12);
+  EXPECT_LT(r_large.hold_pose.orientation.angularDistance(expected_pose_large.orientation), 1e-12);
+  ASSERT_GT(r_large.hold_pose.position.norm(), 3.5) << "precondition: the target must be unreachable (base at the origin)";
+  EXPECT_FALSE(r_large.ik.converged);
+  EXPECT_EQ(r_large.end_ok, r_large.ik.converged && r_large.ik.limits_ok);
+  EXPECT_FALSE(r_large.end_ok);
+}
+
+// 3. With use_hold_end == true: finalists that cannot reach hold-end within joint limits
+//    are discarded with discard_reason = "hold_end_infeasible", and the first feasible wins.
+TEST(GraspS3HoldEndTest, InfeasibleHoldEndDiscarded) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+
+  S3Params p = v2LooseParams();
+  p.use_hold_end = true;
+  p.hold_follow_s = 3.0;
+
+  // Set snapshot omega to -0.3 rad/s (approx -51.6 deg over 3s)
+  s.ctx.snapshot.omega_rad_s = -0.3;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected);
+  EXPECT_TRUE(r.hold_end_done);
+  EXPECT_TRUE(r.end_ok);
+  EXPECT_GT(r.w_end, 0.0);
+  EXPECT_GT(r.w_eff, 0.0);
+
+  // Verify that any finalist that failed hold-end has discard_reason == "hold_end_infeasible"
+  // and is not the winner.
+  for (const auto& f : r.v2_finalists) {
+    if (f.hold_end_done && !f.end_ok) {
+      EXPECT_EQ(f.discard_reason, "hold_end_infeasible");
+      EXPECT_FALSE(f.winner);
+    }
+  }
+}
+
+// 4. Effective manipulability: w_eff = min(w_presa, w_end) enters the cost with verifiable synthetic numbers.
+TEST(GraspS3HoldEndTest, EffectiveManipulability) {
+  S3Params p;
+  p.use_w = true;
+  p.kappa_w_mm = 7.5;
+  p.kappa_t_mm_s = 0.0;
+  const double d_mm = 12.0;
+  const double t_wait_s = 0.0;
+
+  // Case A: w_end is lower than w_presa
+  const double w_presa_A = 0.050;
+  const double w_end_A = 0.020;
+  const double w_eff_A = std::min(w_presa_A, w_end_A);
+  EXPECT_DOUBLE_EQ(w_eff_A, 0.020);
+  const double cost_A = s3CostV2(d_mm, w_eff_A, t_wait_s, p);
+  const double expected_cost_A = d_mm + p.kappa_w_mm * (-std::log(0.020));
+  EXPECT_DOUBLE_EQ(cost_A, expected_cost_A);
+
+  // Case B: w_presa is lower than w_end
+  const double w_presa_B = 0.030;
+  const double w_end_B = 0.080;
+  const double w_eff_B = std::min(w_presa_B, w_end_B);
+  EXPECT_DOUBLE_EQ(w_eff_B, 0.030);
+  const double cost_B = s3CostV2(d_mm, w_eff_B, t_wait_s, p);
+  const double expected_cost_B = d_mm + p.kappa_w_mm * (-std::log(0.030));
+  EXPECT_DOUBLE_EQ(cost_B, expected_cost_B);
+}
+
+// ==============================================================================================
+// V1' (use_hold_end) together with L2 (use_dynamic_follow): order rollout -> clearance -> V1' -> velocity -> L2
+// ==============================================================================================
+
+namespace {
+
+/// Number of finalists discarded by V1' ("hold_end_infeasible").
+int holdEndDiscards(const S3Result& r) {
+  int n = 0;
+  for (const auto& f : r.v2_finalists) n += f.discard_reason == "hold_end_infeasible" ? 1 : 0;
+  return n;
+}
+
+/// hold_follow_s [s] for which at least one finalist reaching V1' is discarded by it (probe without L2: cheap). 0 if none of the tried
+/// values does. The omega of the fixture is set by the caller.
+double holdFollowWithInfeasibleFinalist(S3TestSetup& s) {
+  for (const double hold_s : {3.0, 6.0, 10.0, 20.0, 40.0, 80.0}) {
+    S3Params p = v2LooseParams();
+    p.use_hold_end = true;
+    p.hold_follow_s = hold_s;
+    const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+    int reached = 0;
+    for (const auto& f : r.v2_finalists) reached += f.hold_end_done ? 1 : 0;
+    if (holdEndDiscards(r) > 0 && reached > holdEndDiscards(r)) return hold_s;
+  }
+  return 0.0;
+}
+
+}  // namespace
+
+// The combination is accepted; use_dynamic_follow + use_margin is still refused with the exclusion message (also with use_hold_end).
+TEST(GraspS3DynamicHoldEndTest, CombinationAcceptedMarginStillRefused) {
+  S3Params p = v2DynParams(5.0);
+  p.use_hold_end = true;
+  EXPECT_NO_THROW(validateS3Params(p));
+  S3Params q = p;
+  q.use_margin = true;
+  try {
+    validateS3Params(q);
+    ADD_FAILURE() << "expected std::invalid_argument";
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("mutually exclusive"), std::string::npos) << e.what();
+    EXPECT_NE(std::string(e.what()).find("use_margin"), std::string::npos) << e.what();
+  }
+}
+
+// A finalist discarded by V1' never reaches L2 (no dyn_done, no L2 evaluation counted); the clearance (V2) was evaluated before V1'.
+TEST(GraspS3DynamicHoldEndTest, FailedHoldEndDoesNotCallL2) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  s.ctx.snapshot.omega_rad_s = -0.3;
+  int clearance_calls = 0;
+  s.ctx.clearance_eval = [&clearance_calls](const ClearanceQuery&) {
+    ++clearance_calls;
+    return fakeClearance(10.0);
+  };
+  const double hold_s = holdFollowWithInfeasibleFinalist(s);
+  ASSERT_GT(hold_s, 0.0) << "fixture: no hold_follow_s in {3, 6, 10, 20, 40, 80} makes V1' discard a finalist and leaves another one";
+
+  S3Params p = v2DynParams(kHugeMarginDeg);  // L2 never admits: every finalist that reaches L2 is evaluated and discarded by it
+  p.use_hold_end = true;
+  p.hold_follow_s = hold_s;
+  p.use_clearance = true;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const std::string table = dynTable(r);
+  const int n_v1p = holdEndDiscards(r);
+  ASSERT_GT(n_v1p, 0) << table;
+  EXPECT_EQ(r.dyn_counters.discarded_v1p_hold_end, n_v1p) << table;
+  int reached_v1p = 0;
+  int with_l2 = 0;
+  for (const auto& f : r.v2_finalists) {
+    if (f.hold_end_done) {
+      ++reached_v1p;
+      EXPECT_TRUE(f.clearance_done) << "V1' ran before the clearance\n" << table;
+    }
+    if (f.discard_reason == "hold_end_infeasible") {
+      EXPECT_FALSE(f.end_ok);
+      EXPECT_FALSE(f.dyn_done) << "L2 ran on a finalist discarded by V1'\n" << table;
+      EXPECT_EQ(f.dyn_elapsed_ms, 0.0);
+    }
+    with_l2 += f.dyn_done ? 1 : 0;
+  }
+  EXPECT_EQ(r.dynamic_evals_done, with_l2) << table;
+  EXPECT_EQ(r.dyn_counters.evaluated_l2, with_l2) << table;
+  EXPECT_EQ(with_l2, reached_v1p - n_v1p) << "every finalist that passed V1' reaches L2 (no velocity check here)\n" << table;
+  EXPECT_EQ(r.status, S3Result::kNoCandidate) << table;
+  EXPECT_EQ(r.dyn_counters.discarded_v2_clearance, 0) << table;
+}
+
+// With both on, the winner's record carries w_eff = min(w_rollout, w_end), the J built on it, and the L2 fields; the result mirrors it.
+TEST(GraspS3DynamicHoldEndTest, WinnerRecordCarriesWEffAndL2) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  S3Params base = v2DynParams(kHugeMarginDeg);
+  base.use_hold_end = true;
+  base.hold_follow_s = 3.0;
+  const S3Result probe = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+  const std::string table = dynTable(probe);
+  double best = -std::numeric_limits<double>::infinity();
+  for (std::size_t i : dynEvaluated(probe)) {
+    const S3FinalistRecord& f = probe.v2_finalists[i];
+    if (std::isfinite(f.dyn_total_margin_deg) && !f.dyn_diverged) best = std::max(best, f.dyn_total_margin_deg);
+  }
+  ASSERT_TRUE(std::isfinite(best) && best >= 0.0) << "fixture: no finalist with a finite, non-negative L2 margin after V1'\n" << table;
+
+  S3Params p = base;
+  p.margin_delta_deg = best;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note << "\n" << dynTable(r);
+  const S3FinalistRecord* w = nullptr;
+  for (const auto& f : r.v2_finalists) {
+    if (f.winner) w = &f;
+  }
+  ASSERT_NE(w, nullptr) << dynTable(r);
+  EXPECT_TRUE(w->hold_end_done);
+  EXPECT_TRUE(w->end_ok);
+  EXPECT_TRUE(w->dyn_done);
+  EXPECT_GT(w->w_end, 0.0);
+  EXPECT_GT(w->w_rollout, 0.0);
+  EXPECT_DOUBLE_EQ(w->w_eff, std::min(w->w_rollout, w->w_end));
+  EXPECT_DOUBLE_EQ(w->j, s3CostV2(w->d_mm, w->w_eff, w->t_wait_s, p));
+  EXPECT_TRUE(r.hold_end_done);
+  EXPECT_TRUE(r.end_ok);
+  EXPECT_DOUBLE_EQ(r.w_eff, w->w_eff);
+  EXPECT_DOUBLE_EQ(r.w_end, w->w_end);
+  EXPECT_GE(w->dyn_total_margin_deg, best);
+}
+
+// Both flags off: the result does not depend on the V1' / L2 parameters and the new counter stays 0.
+TEST(GraspS3DynamicHoldEndTest, BothOffIsUnchanged) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base = v2LooseParams();
+  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+  ASSERT_EQ(a.status, S3Result::kSelected);
+  S3Params other = base;
+  other.use_dynamic_follow = false;
+  other.use_hold_end = false;
+  other.hold_follow_s = 10.0;
+  other.margin_delta_deg = 99.0;
+  other.dynamic_follow.dt_s = 0.01;
+  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+  ASSERT_EQ(a.status, b.status);
+  EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+  EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+  EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+  EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+  EXPECT_EQ(a.rollouts_done, b.rollouts_done);
+  EXPECT_EQ(b.dynamic_evals_done, 0);
+  EXPECT_EQ(b.dyn_counters.discarded_v1p_hold_end, 0);
+  EXPECT_EQ(b.dyn_counters.rolled_out, 0);
+  EXPECT_FALSE(b.hold_end_done);
+  ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+  for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+    EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+    EXPECT_FALSE(b.v2_finalists[i].hold_end_done);
+    EXPECT_FALSE(b.v2_finalists[i].dyn_done);
+  }
+}
+
+// hold_follow_s != margin_follow_s with both V1' and L2 on: a warning (not a refusal); equal values: no warning; V1' alone: none.
+TEST(GraspS3DynamicHoldEndTest, HoldFollowMismatchWarns) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  auto has = [](const S3Result& r) {
+    for (const std::string& w : r.warnings) {
+      if (w.find("hold_follow_s") != std::string::npos) return true;
+    }
+    return false;
+  };
+  S3Params p = v2DynParams(kHugeMarginDeg);
+  p.use_hold_end = true;
+  p.margin_follow_s = 3.0;
+  p.hold_follow_s = 2.0;
+  EXPECT_TRUE(has(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p)));
+  p.hold_follow_s = 3.0;
+  EXPECT_FALSE(has(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p)));
+  S3Params q = v2LooseParams();  // V1' without L2: no mismatch to report
+  q.use_hold_end = true;
+  q.hold_follow_s = 2.0;
+  EXPECT_FALSE(has(selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, q)));
+}
+
+// ---- per-stage timing fields (additive diagnostics): defaults, bounds, and no effect on the selection ----
+
+TEST(GraspS3StageTimingTest, NewFieldsDefaultToZero) {
+  S3Result r;
+  EXPECT_EQ(r.scan_ms, 0.0);
+  EXPECT_EQ(r.posthoc_ms, 0.0);
+  GraspLaunchResult g;
+  EXPECT_EQ(g.stage_ms.scan, 0.0);
+  EXPECT_EQ(g.stage_ms.rollout, 0.0);
+  EXPECT_EQ(g.stage_ms.clearance, 0.0);
+  EXPECT_EQ(g.stage_ms.hold_end, 0.0);
+  EXPECT_EQ(g.stage_ms.dynamic, 0.0);
+  EXPECT_EQ(g.stage_ms.posthoc, 0.0);
+  EXPECT_EQ(g.stage_ms.finalists, 0);
+}
+
+namespace {
+
+/// Runs the selection twice on the same inputs. Checks: every stage time is >= 0 and finite; scan + V1 + V2 + V1' + L2 + post-hoc
+/// (each the sum over the finalists examined) does not exceed the wall-clock time measured around the call; the two runs choose
+/// the same winner and list the finalists in the same order with the same counters (the timers do not change the selection).
+void checkStageTimes(S3TestSetup& s, const S3Params& p, bool expect_hold_end, bool expect_dynamic) {
+  const auto t0 = std::chrono::steady_clock::now();
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  const double wall_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  double rollout = 0.0, hold_end = 0.0;
+  for (const S3FinalistRecord& f : r.v2_finalists) {
+    EXPECT_GE(f.rollout_ms, 0.0);
+    EXPECT_GE(f.hold_end_ms, 0.0);
+    rollout += f.rollout_ms;
+    hold_end += f.hold_end_ms;
+  }
+  for (double v : {r.scan_ms, r.posthoc_ms, r.clearance_stage_ms, r.dynamic_stage_ms, rollout, hold_end}) {
+    EXPECT_TRUE(std::isfinite(v));
+    EXPECT_GE(v, 0.0);
+  }
+  EXPECT_GT(r.scan_ms, 0.0);  // the scan always runs
+  if (!r.v2_finalists.empty()) {
+    EXPECT_GT(rollout, 0.0);
+  }
+  bool any_hold_end = false;
+  for (const S3FinalistRecord& f : r.v2_finalists) any_hold_end = any_hold_end || f.hold_end_done;
+  if (expect_hold_end && any_hold_end) {
+    EXPECT_GT(hold_end, 0.0);
+  }
+  if (!expect_hold_end) {
+    EXPECT_EQ(hold_end, 0.0);
+  }
+  if (!expect_dynamic) {
+    EXPECT_EQ(r.dynamic_stage_ms, 0.0);
+  }
+  if (!p.posthoc_velocity_check) {
+    EXPECT_EQ(r.posthoc_ms, 0.0);
+  }
+  EXPECT_LE(r.scan_ms + rollout + r.clearance_stage_ms + hold_end + r.dynamic_stage_ms + r.posthoc_ms, wall_ms);
+
+  const S3Result r2 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_EQ(r.status, r2.status);
+  EXPECT_EQ(r.evaluations, r2.evaluations);
+  EXPECT_EQ(r.rollouts_done, r2.rollouts_done);
+  EXPECT_EQ(r.posthoc_checks, r2.posthoc_checks);
+  ASSERT_EQ(r.v2_finalists.size(), r2.v2_finalists.size());
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    EXPECT_EQ(r.v2_finalists[i].cand.eval.k, r2.v2_finalists[i].cand.eval.k);
+    EXPECT_DOUBLE_EQ(r.v2_finalists[i].cand.eval.theta_rad, r2.v2_finalists[i].cand.eval.theta_rad);
+    EXPECT_EQ(r.v2_finalists[i].winner, r2.v2_finalists[i].winner);
+    EXPECT_EQ(r.v2_finalists[i].discard_reason, r2.v2_finalists[i].discard_reason);
+  }
+}
+
+}  // namespace
+
+TEST(GraspS3StageTimingTest, EagerFlow) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  checkStageTimes(s, v2LooseParams(), /*expect_hold_end=*/false, /*expect_dynamic=*/false);
+}
+
+// use_hold_end without L2 is the eager flow (use_margin and use_hold_end are mutually exclusive): this is the campaign arm A.
+TEST(GraspS3StageTimingTest, EagerFlowWithHoldEnd) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  S3Params p = v2LooseParams();
+  p.use_hold_end = true;
+  checkStageTimes(s, p, /*expect_hold_end=*/true, /*expect_dynamic=*/false);
+}
+
+TEST(GraspS3StageTimingTest, LazyFlowWithHoldEndAndDynamicFollow) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+  S3Params p = v2DynParams(kHugeMarginDeg);
+  p.use_hold_end = true;
+  checkStageTimes(s, p, /*expect_hold_end=*/true, /*expect_dynamic=*/true);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// S3Params::lazy_static_order: the lazy flow in J_static order WITHOUT margin and WITHOUT L2 (campaign arm A). Per finalist: rollout (V1),
+// V1' (if use_hold_end), clearance (if use_clearance), velocity check; the first one that passes all of them wins. Written without being
+// able to build/run: as the use_margin / L2 tests, the expected outcome is built from probe runs of the same fixture and a test is
+// skipped when the fixture cannot build its scenario.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+S3Params v2LazyStaticParams() {
+  S3Params p = v2LooseParams();
+  p.tau_j_mm = 0.0;  // the campaign value; the lazy flow does not read it, the eager reference runs below do
+  p.lazy_static_order = true;
+  return p;
+}
+
+/// Index of the finalist flagged winner, or v2_finalists.size() if there is none.
+std::size_t winnerIndex(const S3Result& r) {
+  for (std::size_t i = 0; i < r.v2_finalists.size(); ++i) {
+    if (r.v2_finalists[i].winner) return i;
+  }
+  return r.v2_finalists.size();
+}
+
+}  // namespace
+
+TEST(GraspS3LazyStaticOrderTest, DefaultIsOffAndEveryCombinationValidates) {
+  const S3Params d;
+  EXPECT_FALSE(d.lazy_static_order);
+  S3Params p = v2LooseParams();
+  p.lazy_static_order = true;
+  EXPECT_NO_THROW(validateS3Params(p));
+  p.use_hold_end = true;
+  p.use_clearance = true;
+  EXPECT_NO_THROW(validateS3Params(p));
+  S3Params dyn = v2DynParams(5.0);
+  dyn.lazy_static_order = true;
+  EXPECT_NO_THROW(validateS3Params(dyn));
+  S3Params margin = v2MarginParams(24.0);
+  margin.lazy_static_order = true;
+  EXPECT_NO_THROW(validateS3Params(margin));
+}
+
+// The first rollout-feasible finalist (J_static order = finalists' order) wins, even if a later one has a lower J built on w_rollout
+// (the eager flow, with tau_j_mm = 0, picks that one).
+TEST(GraspS3LazyStaticOrderTest, FirstAdmissibleInStaticOrderBeatsLowerRolloutJ) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  // J_static (kappa_w * -ln w_static, t_wait = 0) orders the finalists; the eager J uses w_rollout and kappa_t * t_wait. The situation "a
+  // later finalist has a lower eager J" is searched in this fixed list of alternatives, in order, until one provides it. kappa_t > 0 puts the
+  // wait time of each candidate (it changes with theta, up to a period) into the eager J only; a larger kappa_w and more finalists make a
+  // w_static / w_rollout order inversion more likely. The first alternative is the original one (kappa_w 7.5, kappa_t 0, 4 finalists).
+  struct Alternative {
+    double kappa_w_mm;
+    double kappa_t_mm_s;
+    int finalists_n;
+  };
+  const Alternative alternatives[] = {{7.5, 0.0, 4},  {7.5, 0.0, 12}, {7.5, 1.0, 4},  {7.5, 1.0, 12},
+                                      {7.5, 10.0, 4}, {7.5, 10.0, 12}, {30.0, 0.0, 12}, {30.0, 1.0, 12}};
+  int tried = 0;
+  bool found = false;
+  Alternative used = alternatives[0];
+  S3Result eager;
+  std::size_t n = 0, first = 0, lower = 0;
+  for (const Alternative& alt : alternatives) {
+    ++tried;
+    S3Params eager_p = v2LooseParams();
+    eager_p.tau_j_mm = 0.0;
+    eager_p.kappa_w_mm = alt.kappa_w_mm;
+    eager_p.kappa_t_mm_s = alt.kappa_t_mm_s;
+    eager_p.finalists_n = alt.finalists_n;
+    S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, eager_p);
+    if (r.status != S3Result::kSelected) continue;
+    const std::size_t m = r.v2_finalists.size();
+    std::size_t f = m;
+    for (std::size_t i = 0; i < m && f == m; ++i) {
+      if (r.v2_finalists[i].rollout_feasible) f = i;
+    }
+    if (f == m) continue;
+    std::size_t lo = m;
+    for (std::size_t i = f + 1; i < m && lo == m; ++i) {
+      if (r.v2_finalists[i].rollout_feasible && r.v2_finalists[i].j < r.v2_finalists[f].j) lo = i;
+    }
+    if (lo == m) continue;
+    found = true;
+    used = alt;
+    eager = std::move(r);
+    n = m;
+    first = f;
+    lower = lo;
+    break;
+  }
+  if (!found) {
+    GTEST_SKIP() << "no later finalist has a lower eager J than the first feasible one in any of the " << tried
+                 << " alternatives (kappa_w, kappa_t, finalists_n) tried in this fixture";
+  }
+  std::cerr << "[lazy_static] alternative " << tried << " of 8: kappa_w " << used.kappa_w_mm << ", kappa_t " << used.kappa_t_mm_s
+            << ", finalists_n " << used.finalists_n << "; first feasible " << first << ", lower-J finalist " << lower << "\n";
+  EXPECT_NE(winnerIndex(eager), first);  // eager: minimum J
+
+  S3Params lazy_p = v2LazyStaticParams();
+  lazy_p.kappa_w_mm = used.kappa_w_mm;
+  lazy_p.kappa_t_mm_s = used.kappa_t_mm_s;
+  lazy_p.finalists_n = used.finalists_n;
+  const S3Result lazy = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, lazy_p);
+  ASSERT_EQ(lazy.status, S3Result::kSelected) << lazy.note;
+  ASSERT_EQ(lazy.v2_finalists.size(), n);
+  EXPECT_EQ(winnerIndex(lazy), first);
+  EXPECT_EQ(lazy.chosen.eval.k, eager.v2_finalists[first].cand.eval.k);
+  EXPECT_EQ(lazy.chosen.eval.wrist_flip, eager.v2_finalists[first].cand.eval.wrist_flip);
+  EXPECT_EQ(lazy.chosen.eval.theta_rad, eager.v2_finalists[first].cand.eval.theta_rad);
+  EXPECT_EQ(lazy.rollouts_done, static_cast<int>(first) + 1);  // lazy: up to and including the winner
+  for (std::size_t i = 0; i < first; ++i) {
+    EXPECT_FALSE(lazy.v2_finalists[i].rollout_feasible) << i;
+    EXPECT_EQ(lazy.v2_finalists[i].discard_reason, "rollout") << i;
+  }
+  for (std::size_t i = first + 1; i < n; ++i) EXPECT_FALSE(lazy.v2_finalists[i].rollout_done) << i;
+}
+
+// No margin stage: followMargin never runs and nothing is discarded by "margin", whatever the margin parameters say.
+TEST(GraspS3LazyStaticOrderTest, NeverEvaluatesTheMarginEvenWithAHugeThreshold) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Result plain = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LazyStaticParams());
+  if (plain.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << plain.note;
+  S3Params p = v2LazyStaticParams();  // use_margin stays false
+  p.min_margin_deg = kHugeMarginDeg;
+  p.margin_follow_s = 99.0;
+  p.margin_follow_dt_s = 0.5;
+  const S3Result r = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(r.status, S3Result::kSelected) << r.note;
+  EXPECT_EQ(r.margin_evals_done, 0);
+  for (const auto& f : r.v2_finalists) {
+    EXPECT_FALSE(f.margin_done);
+    EXPECT_FALSE(f.margin_rejected);
+    EXPECT_NE(f.discard_reason, "margin");
+  }
+  EXPECT_EQ(winnerIndex(r), winnerIndex(plain));
+  EXPECT_EQ(r.chosen.eval.theta_rad, plain.chosen.eval.theta_rad);
+}
+
+// Order of the checks without L2: V1 (rollout), then V1' (hold-end IK), then clearance; each finalist records the stage that discarded it
+// and the later stages are not run for it. The velocity check is off here (v2LooseParams).
+TEST(GraspS3LazyStaticOrderTest, ChecksRunV1ThenV1pThenClearanceWithTheirDiscardReasons) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  s.ctx.snapshot.omega_rad_s = -0.3;  // as the L2 + V1' tests: a slow target makes a long hold reach the joint limits
+  int calls = 0;
+  double clearance_mm = 10.0;
+  s.ctx.clearance_eval = [&calls, &clearance_mm](const ClearanceQuery&) {
+    ++calls;
+    return fakeClearance(clearance_mm);
+  };
+  const double hold_s = holdFollowWithInfeasibleFinalist(s);
+  ASSERT_GT(hold_s, 0.0) << "fixture: no hold_follow_s in {3, 6, 10, 20, 40, 80} makes V1' discard a finalist and leaves another one";
+  S3Params p = v2LazyStaticParams();
+  p.use_hold_end = true;
+  p.hold_follow_s = hold_s;
+  p.use_clearance = true;
+
+  calls = 0;  // clearance 10 mm passes
+  const S3Result ok = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  ASSERT_EQ(ok.status, S3Result::kSelected) << ok.note;
+  int n_clearance = 0;
+  for (const auto& f : ok.v2_finalists) {
+    EXPECT_FALSE(f.margin_done);
+    if (f.discard_reason == "rollout") {
+      EXPECT_FALSE(f.rollout_feasible);
+      EXPECT_FALSE(f.hold_end_done);
+      EXPECT_FALSE(f.clearance_done);
+    }
+    if (f.discard_reason == "hold_end_infeasible") {
+      EXPECT_TRUE(f.rollout_feasible);
+      EXPECT_TRUE(f.hold_end_done);
+      EXPECT_FALSE(f.end_ok);
+      EXPECT_FALSE(f.clearance_done) << "V1' discards before the clearance";
+    }
+    if (f.clearance_done) {
+      ++n_clearance;
+      EXPECT_TRUE(f.rollout_feasible);
+      EXPECT_TRUE(f.hold_end_done);
+      EXPECT_TRUE(f.end_ok);
+    }
+  }
+  EXPECT_EQ(calls, n_clearance);
+  const std::size_t w = winnerIndex(ok);
+  ASSERT_LT(w, ok.v2_finalists.size());
+  EXPECT_TRUE(ok.v2_finalists[w].clearance_done);
+  EXPECT_FALSE(ok.v2_finalists[w].clearance_rejected);
+  EXPECT_TRUE(ok.v2_finalists[w].discard_reason.empty());
+  for (std::size_t i = 0; i < w; ++i) EXPECT_FALSE(ok.v2_finalists[i].discard_reason.empty()) << i;
+  for (std::size_t i = w + 1; i < ok.v2_finalists.size(); ++i) EXPECT_FALSE(ok.v2_finalists[i].rollout_done) << i;
+
+  calls = 0;  // clearance 0.5 mm < 2 mm: every finalist that passes V1 and V1' is discarded by "clearance"
+  clearance_mm = 0.5;
+  const S3Result rej = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  EXPECT_EQ(rej.status, S3Result::kNoCandidate);
+  int n_clearance_rej = 0;
+  for (const auto& f : rej.v2_finalists) {
+    EXPECT_FALSE(f.winner);
+    if (f.hold_end_done && f.end_ok) {
+      EXPECT_TRUE(f.clearance_done);
+      EXPECT_TRUE(f.clearance_rejected);
+      EXPECT_EQ(f.discard_reason, "clearance");
+    }
+    if (f.discard_reason == "hold_end_infeasible") {
+      EXPECT_FALSE(f.clearance_done);
+    }
+    n_clearance_rej += f.clearance_done ? 1 : 0;
+  }
+  EXPECT_GT(n_clearance_rej, 0);
+  EXPECT_EQ(calls, n_clearance_rej);
+  EXPECT_GT(holdEndDiscards(rej), 0);
+}
+
+// force: the flag is ignored (lazy = ... && !force). Discriminating case: a forced candidate with clearance below the threshold is KEPT with a
+// warning in the non-lazy flow, while the lazy flow would discard it.
+TEST(GraspS3LazyStaticOrderTest, ForceReturnsToTheNonLazyFlow) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Result base = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, v2LooseParams());
+  if (base.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << base.note;
+  const double theta_deg = base.chosen.eval.theta_rad * 180.0 / M_PI;
+  if (std::abs(theta_deg) > 180.0) GTEST_SKIP() << "winner theta outside [-180, 180]";
+  s.ctx.clearance_eval = [](const ClearanceQuery&) { return fakeClearance(0.5); };  // below 2 mm
+  auto forced = [&](bool lazy_static_order) {
+    S3Params p = v2LooseParams();
+    p.use_clearance = true;
+    p.lazy_static_order = lazy_static_order;
+    p.force = true;
+    p.force_k = static_cast<int>(base.chosen.eval.k);
+    p.force_theta_deg = theta_deg;
+    p.force_flip = base.chosen.eval.wrist_flip ? 1 : 0;
+    return selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, p);
+  };
+  const S3Result off = forced(false);
+  const S3Result on = forced(true);
+  ASSERT_EQ(off.status, S3Result::kSelected) << off.note;
+  ASSERT_GE(off.warnings.size(), 1u);
+  EXPECT_NE(off.warnings[0].find("use_clearance"), std::string::npos);
+  EXPECT_EQ(on.status, off.status) << on.note;
+  ASSERT_EQ(on.warnings.size(), off.warnings.size());
+  EXPECT_EQ(on.warnings[0], off.warnings[0]);
+  EXPECT_EQ(on.chosen.eval.k, off.chosen.eval.k);
+  EXPECT_EQ(on.chosen.eval.wrist_flip, off.chosen.eval.wrist_flip);
+  EXPECT_EQ(on.chosen.eval.theta_rad, off.chosen.eval.theta_rad);
+  ASSERT_EQ(on.v2_finalists.size(), 1u);
+  EXPECT_TRUE(on.v2_finalists[0].clearance_rejected);  // below threshold, but kept
+  EXPECT_TRUE(on.v2_finalists[0].winner);
+}
+
+// A and B share the same J_static order and the same per-finalist checks (rollout, V1'): with an L2 that discards nothing (threshold =
+// the L2 margin of A's winner, taken from a probe) B picks the same finalist as A, and only that one reaches L2.
+TEST(GraspS3LazyStaticOrderTest, SameWinnerAsDynamicFollowWhenL2DiscardsNothing) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const JointDynamics dyn = testJointDynamics();
+  s.ctx.joint_dynamics = &dyn;
+
+  // The L2 margin of A's winner must be finite and >= 0 (validateS3Params refuses a negative margin_delta_deg, and L2 has no joint limits, so
+  // the first finalist can have a negative margin). It is searched in this fixed list of alternatives, in order: for each target omega,
+  //   (natural) A's own winner; (steered) the first finalist, in J_static order, that reaches L2 with a finite non-negative margin in a
+  //   probe, with the clearance stub failing (0.5 mm) every finalist before it that reached L2 in the probe, so that A (and B, where the
+  //   clearance runs before L2) discards those and picks the target. Clearance is on in every attempt (the stub passes with 10 mm
+  //   unless the candidate is blocked), as in the campaign. The L2 evaluation of a finalist does not depend on the threshold or on the stub.
+  std::vector<S3Candidate> blocked;
+  s.ctx.clearance_eval = [&blocked](const ClearanceQuery& q) {
+    for (const S3Candidate& c : blocked) {
+      if (sameCandidate(q, c)) return fakeClearance(0.5);
+    }
+    return fakeClearance(10.0);
+  };
+  S3Params a = v2LazyStaticParams();
+  a.use_hold_end = true;
+  a.hold_follow_s = 3.0;
+  a.use_clearance = true;
+  S3Params probe_p = v2DynParams(kHugeMarginDeg);
+  probe_p.tau_j_mm = 0.0;
+  probe_p.lazy_static_order = true;  // as in the campaign YAML of arm B: no effect, use_dynamic_follow is already lazy
+  probe_p.use_hold_end = true;
+  probe_p.hold_follow_s = 3.0;
+  probe_p.use_clearance = true;
+
+  int tried = 0;
+  std::string last_reason;
+  bool found = false;
+  S3Result ra, rb;
+  std::size_t w = 0;
+  for (const double omega : {kOmega, -0.3, -0.1}) {
+    for (const bool steered : {false, true}) {
+      ++tried;
+      s.ctx.snapshot.omega_rad_s = omega;
+      blocked.clear();
+      const S3Result probe = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, probe_p);
+      auto usable = [&probe](std::size_t i) {
+        const S3FinalistRecord& f = probe.v2_finalists[i];
+        return f.dyn_done && !f.dyn_diverged && std::isfinite(f.dyn_total_margin_deg) && f.dyn_total_margin_deg >= 0.0;
+      };
+      if (steered) {
+        std::size_t target = probe.v2_finalists.size();
+        for (std::size_t i = 0; i < probe.v2_finalists.size() && target == probe.v2_finalists.size(); ++i) {
+          if (usable(i)) target = i;
+        }
+        if (target == probe.v2_finalists.size()) {
+          last_reason = "no finalist reaches L2 with a finite non-negative margin (omega " + std::to_string(omega) + ")";
+          continue;
+        }
+        for (std::size_t i = 0; i < target; ++i) {
+          if (probe.v2_finalists[i].dyn_done) blocked.push_back(probe.v2_finalists[i].cand);
+        }
+      }
+      ra = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, a);
+      if (ra.status != S3Result::kSelected) {
+        last_reason = "arm A selects nothing (omega " + std::to_string(omega) + "): " + ra.note;
+        continue;
+      }
+      w = winnerIndex(ra);
+      if (w >= ra.v2_finalists.size() || ra.v2_finalists.size() != probe.v2_finalists.size() || !usable(w)) {
+        last_reason = "A's winner has no finite non-negative L2 margin (omega " + std::to_string(omega) + ")";
+        continue;
+      }
+      S3Params b = probe_p;
+      b.margin_delta_deg = probe.v2_finalists[w].dyn_total_margin_deg;  // total >= delta passes: L2 discards nothing at A's winner
+      rb = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, b);
+      std::cerr << "[lazy_static] alternative " << tried << " of 6: omega " << omega << (steered ? " steered" : " natural")
+                << ", A's winner = finalist " << w << ", L2 margin " << b.margin_delta_deg << " deg\n";
+      found = true;
+      break;
+    }
+    if (found) break;
+  }
+  if (!found) {
+    GTEST_SKIP() << "no alternative gives arm A a winner with a finite, non-negative L2 margin: " << tried
+                 << " tried (3 omegas x natural/steered); last: " << last_reason;
+  }
+  ASSERT_EQ(rb.status, S3Result::kSelected) << rb.note << "\n" << dynTable(rb);
+  EXPECT_EQ(winnerIndex(rb), w) << dynTable(rb);
+  EXPECT_EQ(rb.chosen.eval.k, ra.chosen.eval.k);
+  EXPECT_EQ(rb.chosen.eval.wrist_flip, ra.chosen.eval.wrist_flip);
+  EXPECT_EQ(rb.chosen.eval.theta_rad, ra.chosen.eval.theta_rad);
+  EXPECT_EQ(rb.dynamic_evals_done, 1) << dynTable(rb);  // everything before A's winner was discarded before L2, as in A
+  EXPECT_DOUBLE_EQ(rb.v2_finalists[w].j, ra.v2_finalists[w].j);  // same reported J (w_eff)
+}
+
+// lazy_static_order = false is the current eager selection: unchanged result whatever the margin parameters, every finalist rolled out,
+// no followMargin, the reported J is the cost built on w_rollout.
+TEST(GraspS3LazyStaticOrderTest, OffIsTheEagerSelectionUnchanged) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  const S3Params base = v2LooseParams();
+  EXPECT_FALSE(base.lazy_static_order);
+  const S3Result a = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, base);
+  if (a.status != S3Result::kSelected) GTEST_SKIP() << "no v2 candidate in this fixture: " << a.note;
+  S3Params other = base;
+  other.lazy_static_order = false;  // explicit
+  other.min_margin_deg = 1e6;
+  other.margin_follow_s = 99.0;
+  other.margin_follow_dt_s = 0.5;
+  const S3Result b = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, other);
+  ASSERT_EQ(a.status, b.status);
+  EXPECT_EQ(a.chosen.eval.theta_rad, b.chosen.eval.theta_rad);
+  EXPECT_EQ(a.chosen.eval.k, b.chosen.eval.k);
+  EXPECT_EQ(a.chosen.eval.wrist_flip, b.chosen.eval.wrist_flip);
+  EXPECT_EQ(a.chosen.cost, b.chosen.cost);
+  EXPECT_EQ(a.evaluations, b.evaluations);
+  ASSERT_EQ(a.v2_finalists.size(), b.v2_finalists.size());
+  EXPECT_EQ(b.rollouts_done, static_cast<int>(b.v2_finalists.size()));  // eager: every finalist
+  EXPECT_EQ(b.margin_evals_done, 0);
+  std::size_t wins = 0;
+  for (std::size_t i = 0; i < a.v2_finalists.size(); ++i) {
+    EXPECT_EQ(a.v2_finalists[i].j, b.v2_finalists[i].j);
+    EXPECT_EQ(a.v2_finalists[i].winner, b.v2_finalists[i].winner);
+    EXPECT_TRUE(b.v2_finalists[i].rollout_done) << i;
+    EXPECT_TRUE(b.v2_finalists[i].discard_reason.empty()) << i;  // the eager flow records no lazy discard reason
+    if (b.v2_finalists[i].rollout_feasible) {
+      EXPECT_DOUBLE_EQ(b.v2_finalists[i].j, s3CostV2(b.v2_finalists[i].d_mm, b.v2_finalists[i].w_rollout, b.v2_finalists[i].t_wait_s, other));
+    }
+    wins += b.v2_finalists[i].winner ? 1 : 0;
+  }
+  EXPECT_EQ(wins, 1u);
+}
+
+// With use_margin (already lazy) the flag changes nothing: same result with true and false.
+TEST(GraspS3LazyStaticOrderTest, IsInertWhenUseMarginIsAlreadyLazy) {
+  REQUIRE_URDF_OR_SKIP();
+  S3TestSetup s = makeS3TestSetup();
+  s.ctx.prodmp_template = &s.tmpl;
+  ASSERT_NE(s.robot, nullptr);
+  for (const double thr : {0.0, kHugeMarginDeg}) {
+    S3Params off = v2MarginParams(thr);
+    S3Params on = off;
+    on.lazy_static_order = true;
+    const S3Result r0 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, off);
+    const S3Result r1 = selectGraspS3(s.model, *s.robot, s.q_start, s.demo, s.delta_g, s.ctx, on);
+    ASSERT_EQ(r0.status, r1.status) << thr;
+    EXPECT_EQ(r0.chosen.eval.theta_rad, r1.chosen.eval.theta_rad) << thr;
+    EXPECT_EQ(r0.rollouts_done, r1.rollouts_done) << thr;
+    EXPECT_EQ(r0.margin_evals_done, r1.margin_evals_done) << thr;
+    ASSERT_EQ(r0.v2_finalists.size(), r1.v2_finalists.size()) << thr;
+    for (std::size_t i = 0; i < r0.v2_finalists.size(); ++i) {
+      EXPECT_EQ(r0.v2_finalists[i].j, r1.v2_finalists[i].j) << thr << " " << i;
+      EXPECT_EQ(r0.v2_finalists[i].winner, r1.v2_finalists[i].winner) << thr << " " << i;
+      EXPECT_EQ(r0.v2_finalists[i].discard_reason, r1.v2_finalists[i].discard_reason) << thr << " " << i;
+      EXPECT_EQ(r0.v2_finalists[i].margin_deg, r1.v2_finalists[i].margin_deg) << thr << " " << i;
+    }
+  }
 }

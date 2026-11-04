@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -196,6 +197,32 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
     p.min_margin_deg = dbl("s1.min_margin_deg", p.min_margin_deg);
     p.margin_follow_s = dbl("s1.margin_follow_s", p.margin_follow_s);
     p.margin_follow_dt_s = dbl("s1.margin_follow_dt_s", p.margin_follow_dt_s);
+    p.lazy_static_order = bol("s1.lazy_static_order", p.lazy_static_order);
+    // L2 dynamic follow (default off; replaces s1.use_margin, validated by validateS3Params below).
+    p.use_dynamic_follow = bol("s1.use_dynamic_follow", p.use_dynamic_follow);
+    p.margin_delta_deg = dbl("s1.margin_delta_deg", p.margin_delta_deg);
+    // V1' hold-end IK constraint (default off = behaviour unchanged). Validated by validateS3Params below.
+    p.use_hold_end = bol("s1.use_hold_end", p.use_hold_end);
+    p.hold_follow_s = dbl("s1.hold_follow_s", p.hold_follow_s);
+    core::DynamicFollowParams& df = p.dynamic_follow;
+    df.translational_stiffness = dbl("s1.follow_translational_stiffness", df.translational_stiffness);
+    df.rotational_stiffness = dbl("s1.follow_rotational_stiffness", df.rotational_stiffness);
+    df.translational_damping = dbl("s1.follow_translational_damping", df.translational_damping);
+    df.rotational_damping = dbl("s1.follow_rotational_damping", df.rotational_damping);
+    df.nullspace_stiffness = dbl("s1.follow_nullspace_stiffness", df.nullspace_stiffness);
+    df.joint1_nullspace_stiffness = dbl("s1.follow_joint1_nullspace_stiffness", df.joint1_nullspace_stiffness);
+    df.nullspace_pinv_damping = dbl("s1.follow_nullspace_pinv_damping", df.nullspace_pinv_damping);
+    df.delta_tau_max = dbl("s1.follow_delta_tau_max", df.delta_tau_max);
+    df.compensate_gravity_internally = bol("s1.follow_compensate_gravity", df.compensate_gravity_internally);
+    df.plant_gravity_z_m_s2 = dbl("s1.follow_plant_gravity_z", df.plant_gravity_z_m_s2);
+    df.friction_tanh_eps_rad_s = dbl("s1.follow_friction_eps", df.friction_tanh_eps_rad_s);
+    df.apply_urdf_damping = bol("s1.follow_apply_urdf_damping", df.apply_urdf_damping);
+    df.apply_urdf_friction = bol("s1.follow_apply_urdf_friction", df.apply_urdf_friction);
+    df.dt_s = dbl("s1.follow_dt_s", df.dt_s);
+    df.abort_on_divergence = bol("s1.follow_abort_on_divergence", df.abort_on_divergence);
+    df.divergence_rad = dbl("s1.follow_divergence_rad", df.divergence_rad);
+    df.finger_pos_m = dbl("s1.follow_finger_pos_m", df.finger_pos_m);
+    df.dq0_zero = bol("s1.follow_dq0_zero", df.dq0_zero);
     const int64_t max_iter = this->declare_parameter<int64_t>("s1.ik.max_iter", p.ik.max_iter);
     const int64_t max_posthoc = this->declare_parameter<int64_t>("s1.max_posthoc_candidates", p.max_posthoc_candidates);
     if (max_iter < 1 || max_iter > std::numeric_limits<int>::max() || max_posthoc < 0 ||
@@ -216,6 +243,36 @@ GraspPlannerNode::GraspPlannerNode() : rclcpp::Node("grasp_planner_node") {
                   "margin_follow_s=%.3f margin_follow_dt_s=%.4f; lazy evaluation in J_static order, the wait tie-break "
                   "(tau_j_mm) is not applied",
                   p.min_margin_deg, p.margin_follow_s, p.margin_follow_dt_s);
+    }
+    if (p.use_hold_end) {
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1.use_hold_end=true hold_follow_s=%.3f s; hold-end IK and w_eff=min(w_grasp, w_end) active",
+                  p.hold_follow_s);
+      RCLCPP_WARN(this->get_logger(),
+                  "grasp_planner_node: s1.use_hold_end=true: cannot verify executor's post_grasp_follow_s at startup; "
+                  "ensure it matches s1.hold_follow_s=%.3f s.",
+                  p.hold_follow_s);
+    }
+    if (p.use_dynamic_follow && p.use_hold_end && std::fabs(p.hold_follow_s - p.margin_follow_s) > 1e-9) {
+      RCLCPP_WARN(this->get_logger(),
+                  "grasp_planner_node: s1.use_hold_end + s1.use_dynamic_follow: s1.hold_follow_s=%.3f s differs from "
+                  "s1.margin_follow_s=%.3f s (V1' and L2 judge different holds).",
+                  p.hold_follow_s, p.margin_follow_s);
+    }
+    if (p.use_dynamic_follow) {
+      // Per-joint damping / Coulomb friction of the plant for the L2 follow, from the URDF <dynamics> tags (a missing tag is a startup error).
+      std::vector<std::string> arm_joints;
+      for (int j = 1; j <= 7; ++j) arm_joints.push_back("fer_joint" + std::to_string(j));
+      joint_dynamics_ = std::make_shared<core::JointDynamics>(core::loadJointDynamicsFromUrdfFile(urdf_path_, arm_joints));
+      const core::DynamicFollowParams& d = p.dynamic_follow;
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1.use_dynamic_follow=true margin_delta_deg=%.3f (ASSUMED) hold=%.3f s (s1.margin_follow_s) "
+                  "dt=%.4f s eps=%.3f rad/s gains kt=%.1f kr=%.1f dt=%.1f dr=%.1f nullspace=%.3f/%.1f delta_tau_max=%.2f "
+                  "comp_gravity=%s plant_gz=%.5f fingers=%.4f m; ONE continuous run from q_start (dq0=0 assumed) over approach + hold; replaces s1.use_margin; lazy flow, clearance before L2",
+                  p.margin_delta_deg, p.margin_follow_s, d.dt_s, d.friction_tanh_eps_rad_s, d.translational_stiffness,
+                  d.rotational_stiffness, d.translational_damping, d.rotational_damping, d.nullspace_stiffness,
+                  d.joint1_nullspace_stiffness, d.delta_tau_max, d.compensate_gravity_internally ? "true" : "false",
+                  d.plant_gravity_z_m_s2, d.finger_pos_m);
     }
     if (p.use_clearance) {
       // fer_hand collision mesh from the URDF (checked closed and convex), built once here (a missing mesh is a startup error).
@@ -324,14 +381,34 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
     core::S3Result s3_result;
     const core::GraspLaunchResult result = core::planGraspAndLaunchS1(
         in, snapshot, min_delay_s_, s3_params_, /*t_now_override_s=*/std::nullopt, &s3_result,
-        /*eval_log=*/nullptr, clearance_model_.get());
+        /*eval_log=*/nullptr, clearance_model_.get(), joint_dynamics_.get());
     RCLCPP_INFO(this->get_logger(),
-                "grasp_planner_node: s1 status=%d evaluations=%d rollouts=%d margin_evals=%d posthoc_checks=%d dv=%.3g m/s "
-                "path_margin=%.3f rad%s%s",
+                "grasp_planner_node: s1 status=%d evaluations=%d rollouts=%d margin_evals=%d dynamic_evals=%d posthoc_checks=%d "
+                "dv=%.3g m/s path_margin=%.3f rad%s%s",
                 static_cast<int>(s3_result.status), s3_result.evaluations, s3_result.rollouts_done,
-                s3_result.margin_evals_done, s3_result.posthoc_checks,
+                s3_result.margin_evals_done, s3_result.dynamic_evals_done, s3_result.posthoc_checks,
                 s3_result.posthoc_dv_m_s, s3_result.posthoc_min_margin_rad,
                 s3_result.note.empty() ? "" : " note: ", s3_result.note.c_str());
+    {
+      // One stable key=value line per selection (also for status 2 / 3), parsed by tools/s1_report.py. Each stage is the SUM over
+      // the finalists examined (the lazy flow interleaves the stages); other_ms = total - sum of the stages, reported as it is.
+      const core::GraspLaunchResult::StageTimesMs& t = result.stage_ms;
+      const double total_ms = result.elapsed_s * 1000.0;
+      const double other_ms = total_ms - (t.scan + t.rollout + t.clearance + t.hold_end + t.dynamic + t.posthoc);
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: s1 timing: total_s=%.6f scan_ms=%.3f rollout_ms=%.3f clearance_ms=%.3f hold_end_ms=%.3f "
+                  "dynamic_ms=%.3f posthoc_ms=%.3f other_ms=%.3f finalists=%d",
+                  result.elapsed_s, t.scan, t.rollout, t.clearance, t.hold_end, t.dynamic, t.posthoc, other_ms, t.finalists);
+    }
+    if (s3_params_.use_dynamic_follow) {
+      const core::S3Result::DynamicCounters& n = s3_result.dyn_counters;
+      RCLCPP_INFO(this->get_logger(),
+                  "grasp_planner_node: L2 counters rolled_out=%d evaluated_l2=%d discarded: v1_rollout=%d v2_clearance=%d "
+                  "l2_approach=%d l2_hold=%d l2_diverged=%d velocity=%d; L2 stage %.1f ms; winner clearance on the L2 path %.3f mm",
+                  n.rolled_out, n.evaluated_l2, n.discarded_v1_rollout, n.discarded_v2_clearance, n.discarded_l2_approach,
+                  n.discarded_l2_hold, n.discarded_l2_diverged, n.discarded_velocity, s3_result.dynamic_stage_ms,
+                  s3_result.winner_l2_clearance_mm);
+    }
     RCLCPP_INFO(this->get_logger(),
                 "grasp_planner_node: v2 finalists (J_static order): k branch theta_deg d_mm w_static w_rollout J wait_s "
                 "start_goal_deg rollout_err_mm rollout_err_deg%s",
@@ -369,12 +446,34 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
           std::snprintf(mbuf, sizeof(mbuf), " margin=n/v");
         }
       }
+      char dbuf[320] = "";
+      if (s3_params_.use_dynamic_follow) {
+        if (f.dyn_done) {
+          std::snprintf(dbuf, sizeof(dbuf),
+                        " dyn: approach=%.2f deg (fer_joint%d t_rel=%.2f s) L2_hold=%.2f deg (fer_joint%d t_rel=%.2f s) "
+                        "total=%.2f deg L2_ms=%.1f%s%s",
+                        f.dyn_approach_margin_deg, f.dyn_approach_joint + 1, f.dyn_approach_t_rel_s, f.dyn_hold_margin_deg,
+                        f.dyn_hold_joint + 1, f.dyn_hold_t_rel_s, f.dyn_total_margin_deg, f.dyn_elapsed_ms,
+                        f.dyn_diverged ? " L2_DIVERGED" : "", f.dyn_rejected ? " REJECTED" : "");
+        } else {
+          std::snprintf(dbuf, sizeof(dbuf), " dyn=n/v");
+        }
+      }
+      char hbuf[160] = "";
+      if (s3_params_.use_hold_end) {
+        if (f.hold_end_done) {
+          std::snprintf(hbuf, sizeof(hbuf), " hold_end: ok=%d w_end=%.5f w_eff=%.5f%s",
+                        f.end_ok ? 1 : 0, f.w_end, f.w_eff, f.end_ok ? "" : " REJECTED");
+        } else {
+          std::snprintf(hbuf, sizeof(hbuf), " hold_end=n/v");
+        }
+      }
       RCLCPP_INFO(this->get_logger(),
                   "grasp_planner_node: v2 finalist %2zu k=%d %c theta=%8.3f d_mm=%7.3f w_static=%.5f w_rollout=%.5f "
-                  "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s",
+                  "J=%s wait_s=%7.3f start_goal_deg=%6.2f err=%.2f mm/%.3f deg%s%s%s%s%s%s%s",
                   i + 1, static_cast<int>(f.cand.eval.k), f.cand.eval.wrist_flip ? 'B' : 'A',
                   f.cand.eval.theta_rad * 180.0 / M_PI, f.d_mm, f.w_static, f.w_rollout, jbuf, f.t_wait_s,
-                  f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, cbuf,
+                  f.start_goal_deg, f.rollout_pos_err_mm, f.rollout_ori_err_deg, mbuf, dbuf, hbuf, cbuf,
                   (f.rollout_done && !f.rollout_feasible) ? " ROLLOUT_INFEASIBLE" : "",
                   f.discard_reason.empty() ? "" : (" DISCARDED(" + f.discard_reason + ")").c_str(),
                   f.winner ? " WINNER" : "");
@@ -409,6 +508,35 @@ void GraspPlannerNode::runSelection(const core::SatelliteSnapshot& snapshot) {
         }
         RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner: predicted margin %s, clearance %s", mbuf,
                     cbuf);
+        if (f.hold_end_done) {
+          auto deg7 = [](const core::RobotModel::JointVector& v) {
+            std::ostringstream o;
+            o << std::fixed << std::setprecision(4);
+            for (int j = 0; j < 7; ++j) o << (j ? ", " : "") << v(j) * 180.0 / M_PI;
+            return o.str();
+          };
+          RCLCPP_INFO(this->get_logger(),
+                      "grasp_planner_node: selected winner hold_end: ok=%d w_end=%.5f w_eff=%.5f "
+                      "q_hold_end_deg = [%s]",
+                      f.end_ok ? 1 : 0, f.w_end, f.w_eff, deg7(f.q_hold_end).c_str());
+        }
+        if (f.dyn_done) {
+          // PLANNED values (kinematic rollout q_end, dq = 0, L2 forward dynamics), degrees, fer_joint1..7: input of the validation sample.
+          auto deg7 = [](const core::RobotModel::JointVector& v) {
+            std::ostringstream o;
+            o << std::fixed << std::setprecision(4);
+            for (int j = 0; j < 7; ++j) o << (j ? ", " : "") << v(j);
+            return o.str();
+          };
+          RCLCPP_INFO(this->get_logger(),
+                      "grasp_planner_node: selected winner L2: total margin %.3f deg (approach %.3f deg, L2 hold %.3f deg at "
+                      "fer_joint%d t_rel %.3f s)",
+                      f.dyn_total_margin_deg, f.dyn_approach_margin_deg, f.dyn_hold_margin_deg, f.dyn_hold_joint + 1,
+                      f.dyn_hold_t_rel_s);
+          RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner q_L2_end_deg = [%s]", deg7(f.dyn_q_end_deg).c_str());
+          RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner q_L2_h1p5_deg = [%s]", deg7(f.dyn_q_h1p5_deg).c_str());
+          RCLCPP_INFO(this->get_logger(), "grasp_planner_node: selected winner q_L2_h3_deg = [%s]", deg7(f.dyn_q_h3_deg).c_str());
+        }
       }
     }
     if (!s3_result.forced_violations.empty()) {

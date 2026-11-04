@@ -29,6 +29,11 @@ struct RobotModel::Impl {
    */
   std::array<int, kNumJoints> q_index;
   std::array<int, kNumJoints> v_index;
+
+  /// Configuration entries of the full Pinocchio model that are NOT one of the 7 arm joints (gripper fingers), ascending
+  /// order, and the value update() writes there (default 0.0 = the previous behaviour, bit for bit).
+  std::vector<int> passive_q_index;
+  std::vector<double> passive_q_value;
 };
 
 RobotModel::RobotModel(const std::string& urdf_xml_content,
@@ -68,6 +73,15 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
     joint_upper_limits_(i) = impl_->model.upperPositionLimit(impl_->q_index[i]);
   }
 
+  {
+    std::vector<char> is_arm(static_cast<size_t>(impl_->model.nq), 0);
+    for (int i = 0; i < kNumJoints; ++i) is_arm[static_cast<size_t>(impl_->q_index[static_cast<size_t>(i)])] = 1;
+    for (int idx = 0; idx < impl_->model.nq; ++idx) {
+      if (!is_arm[static_cast<size_t>(idx)]) impl_->passive_q_index.push_back(idx);
+    }
+    impl_->passive_q_value.assign(impl_->passive_q_index.size(), 0.0);
+  }
+
   jacobian_.setZero();
   gravity_.setZero();
   coriolis_.setZero();
@@ -75,6 +89,20 @@ RobotModel::RobotModel(const std::string& urdf_xml_content,
 }
 
 RobotModel::~RobotModel() = default;
+
+int RobotModel::numPassiveJoints() const { return static_cast<int>(impl_->passive_q_index.size()); }
+
+void RobotModel::setPassiveJointPositions(const std::vector<double>& values) {
+  if (values.size() == 1) {
+    impl_->passive_q_value.assign(impl_->passive_q_index.size(), values[0]);
+  } else if (values.size() == impl_->passive_q_index.size()) {
+    impl_->passive_q_value = values;
+  } else {
+    throw std::invalid_argument("RobotModel::setPassiveJointPositions: expected 1 or " +
+                                std::to_string(impl_->passive_q_index.size()) + " values, got " +
+                                std::to_string(values.size()));
+  }
+}
 
 RobotModel::JointVector RobotModel::readyPose() {
   JointVector q;
@@ -86,6 +114,9 @@ RobotModel::JointVector RobotModel::readyPose() {
 void RobotModel::update(const JointVector& q, const JointVector& dq) {
   // 1. Pack the 7 actuated joint values into Pinocchio's full coordinate vectors
   Eigen::VectorXd q_full = Eigen::VectorXd::Zero(impl_->model.nq);
+  for (size_t k = 0; k < impl_->passive_q_index.size(); ++k) {
+    q_full(impl_->passive_q_index[k]) = impl_->passive_q_value[k];
+  }
   Eigen::VectorXd v_full = Eigen::VectorXd::Zero(impl_->model.nv);
   for (int i = 0; i < kNumJoints; ++i) {
     q_full(impl_->q_index[static_cast<size_t>(i)]) = q(i);

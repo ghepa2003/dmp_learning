@@ -41,6 +41,9 @@ Convenzioni delle colonne (unita' tra parentesi):
   min_joint_margin_deg / _joint / _t_rel_s: margine di giunto minimo misurato (deg), min sui 7 giunti di
   min(q - inf, sup - q) con limiti del URDF, nella finestra [TRIGGER, AT_END + follow_s]; giunto (1..7) e
   istante rel AT_END (s). NaN se il bag finisce prima di AT_END + follow_s. Criterio 11 (19/10/2026),
+  success = AND dei criteri 1-10 (esito principale, 02/11/2026); criterion_11_ok = criterio 11 (SEPARATE_CRITERIA,
+  riportato a parte); success_1_11 = AND di tutti e 11 (l'esito unico delle analisi precedenti); le soglie
+  restano quelle di tools/s1_success.yaml,
   start_goal_deg (deg) = angolo start-goal del ramo scelto dalla riga "selected" del planner.log
   (start_goal_deg[A|B] secondo wrist_flip; vuoto se il log o i campi mancano); sopra ROT_VERIFIED_MAX_DEG
   il report.txt stampa un AVVISO (il successo non cambia),
@@ -114,6 +117,8 @@ CSV_COLUMNS = [
     "omega_deg_s", "center_xyz", "arm",
     # criterio 11 (19/10/2026) e rotazione start-goal del ramo scelto
     "min_joint_margin_deg", "min_joint_margin_joint", "min_joint_margin_t_rel_s", "start_goal_deg",
+    # 02/11/2026: "success" = criteri 1-10; criterio 11 a parte; success_1_11 = tutti e 11 (esito unico precedente)
+    "criterion_11_ok", "success_1_11",
 ]
 
 TIMESERIES_COLUMNS = ["t_rel", "f1_mm", "f2_mm", "yaw_deg", "yaw_rate_degps",
@@ -297,6 +302,38 @@ def min_joint_margin(js_t, js_q, t_trig, t_end, follow_s, lower, upper, step: fl
 
 _RE_SELECTED = re.compile(r"grasp_planner_node: selected\b.*")
 
+# Riga del nodo "grasp_planner_node: s1 timing: total_s=.. scan_ms=.. ... finalists=<n>" (grasp_planner_node.cpp, accanto a "s1 status=").
+# Ogni stadio e' la SOMMA dei tempi di quello stadio sui finalisti esaminati (il flusso pigro intercala gli stadi); wall-clock.
+_RE_TIMING = re.compile(r"grasp_planner_node: s1 timing:(.*)")
+TIMING_KEYS = ("scan_ms", "rollout_ms", "clearance_ms", "hold_end_ms", "dynamic_ms", "posthoc_ms", "other_ms")
+
+
+def parse_selection_timing(path) -> dict:
+    """Campi di tempo della (ultima) riga "s1 timing:" del planner.log: TIMING_KEYS (ms) e finalists (int). Tutti None se il
+    file o la riga mancano (log vecchi) o un campo e' assente/illeggibile."""
+    out = {k: None for k in TIMING_KEYS}
+    out["finalists"] = None
+    try:
+        text = Path(path).read_text(errors="replace")
+    except (OSError, TypeError):
+        return out
+    body = None
+    for m in _RE_TIMING.finditer(text):
+        body = m.group(1)
+    if body is None:
+        return out
+    kv = dict(re.findall(r"(\w+)=(\S+)", body))
+    for k in TIMING_KEYS:
+        try:
+            out[k] = float(kv[k])
+        except (KeyError, ValueError):
+            pass
+    try:
+        out["finalists"] = int(kv["finalists"])
+    except (KeyError, ValueError):
+        pass
+    return out
+
 
 def parse_selected_start_goal(path) -> float | None:
     """start_goal_deg del ramo scelto dalla (ultima) riga "selected" del planner.log: [B] se wrist_flip=1,
@@ -359,6 +396,22 @@ def evaluate_criteria(values: dict, criteria: dict):
             txt = " e ".join(parts)
         res[name] = {"value": v, "rule": txt, "ok": bool(ok)}
     return res, all(r["ok"] for r in res.values())
+
+
+# Criteri riportati a parte: NON entrano nell'esito principale "success" (decisione di Lorenzo, 02/11/2026:
+# successo = criteri 1-10; criterio 11 = margine di giunto misurato >= soglia, riportato separatamente).
+# La soglia resta in tools/s1_success.yaml e non cambia.
+SEPARATE_CRITERIA = ("min_joint_margin_deg",)
+
+
+def split_success(crit: dict):
+    """crit: primo valore di evaluate_criteria. Ritorna (success_1_10, criterion_11_ok, success_1_11):
+    success_1_10 = AND dei criteri non in SEPARATE_CRITERIA; criterion_11_ok = AND dei criteri in SEPARATE_CRITERIA
+    (None se nessuno e' presente); success_1_11 = AND di tutti (come il vecchio esito unico)."""
+    main = [r["ok"] for n, r in crit.items() if n not in SEPARATE_CRITERIA]
+    sep = [r["ok"] for n, r in crit.items() if n in SEPARATE_CRITERIA]
+    success_1_10 = all(main)
+    return success_1_10, (all(sep) if sep else None), success_1_10 and all(sep)
 
 
 # ------------------------------------------------------------------ lettura log / bag
@@ -705,6 +758,7 @@ def analyze(bag_dir, executor_log, meta: dict | None = None, criteria: dict | No
     if planner_log is None:
         planner_log = Path(executor_log).parent / "planner.log"
     start_goal_deg = parse_selected_start_goal(planner_log)
+    selection_timing = parse_selection_timing(planner_log)   # None se il planner.log non ha la riga "s1 timing:" (log vecchi)
     crit_values = {
         "min_joint_margin_deg": mgn["deg"],
         "gap_end_mean_last10s": gap_end,
@@ -718,8 +772,10 @@ def analyze(bag_dir, executor_log, meta: dict | None = None, criteria: dict | No
         "pad_straddle_15s": pads["15"]["straddle"],
         "cube_disp_pre_end_mm": disp_pre_end,
     }
-    crit, success = evaluate_criteria(crit_values, criteria)
-    success = apply_interrupt(success, meta)
+    crit, _success_all = evaluate_criteria(crit_values, criteria)
+    success, criterion_11_ok, success_1_11 = split_success(crit)
+    success = apply_interrupt(success, meta)           # esito principale: criteri 1-10
+    success_1_11 = apply_interrupt(success_1_11, meta)  # confronto con le analisi precedenti (11 criteri)
 
     res = {
         "meta": meta,
@@ -730,6 +786,7 @@ def analyze(bag_dir, executor_log, meta: dict | None = None, criteria: dict | No
             "min_joint_margin_deg": math.degrees(gc.min_joint_margin_rad),
             "wrist_flip": bool(gc.wrist_flip), "provisional_delay_s": gc.provisional_delay_s,
             "start_goal_deg": start_goal_deg,
+            **selection_timing,
         },
         "launch": {
             "snapshot_theta_deg": math.degrees(gc.snapshot_theta_rad), "snapshot_t_s": gc.snapshot_t_s,
@@ -767,6 +824,8 @@ def analyze(bag_dir, executor_log, meta: dict | None = None, criteria: dict | No
         "window_short": bool(window_short), "bag_end_rel_s": t_bag_end - t_end,
         "end_window_short": bool(end_short), "min_window_after_at_end_s": float(min_window_s),
         "success": bool(success),
+        "criterion_11_ok": None if criterion_11_ok is None else bool(criterion_11_ok),
+        "success_1_11": bool(success_1_11),
         "timeseries": timeseries,
     }
     res["row"] = csv_row(res)
@@ -817,6 +876,8 @@ def csv_row(res: dict) -> dict:
         "min_joint_margin_joint": g.get("min_joint_margin_joint"),
         "min_joint_margin_t_rel_s": g.get("min_joint_margin_t_rel_s"),
         "start_goal_deg": s.get("start_goal_deg"),
+        "criterion_11_ok": None if res.get("criterion_11_ok") is None else int(res["criterion_11_ok"]),
+        "success_1_11": None if res.get("success_1_11") is None else int(res["success_1_11"]),
     }
 
 
@@ -923,7 +984,11 @@ def render_txt(res: dict) -> str:
         L.append(f"AVVISO: {w}")
     if interrupt_line(m):
         L.append(interrupt_line(m))
-    L.append(f"SUCCESSO: {'SI' if res['success'] else 'NO'}")
+    # una sola riga (MAX_TXT_LINES): esito principale = criteri 1-10, criterio 11 a parte, esito 1-11 per confronto
+    c11, s111 = res.get("criterion_11_ok"), res.get("success_1_11")
+    L.append(f"SUCCESSO (criteri 1-10): {'SI' if res['success'] else 'NO'} | criterio 11 (a parte): "
+             f"{'n/d' if c11 is None else ('OK' if c11 else 'KO')} | SUCCESSO 1-11: "
+             f"{'n/d' if s111 is None else ('SI' if s111 else 'NO')}")
     if len(L) > MAX_TXT_LINES:
         raise ReportError(f"report di {len(L)} righe > {MAX_TXT_LINES}")
     return "\n".join(L) + "\n"

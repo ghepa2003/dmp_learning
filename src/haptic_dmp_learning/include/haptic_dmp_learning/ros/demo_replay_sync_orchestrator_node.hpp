@@ -118,6 +118,8 @@ class DemoReplaySyncOrchestratorNode : public rclcpp::Node {
   double tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_;
   double tsx_, tsy_, tsz_, tmass_;  // free_target_object box size + mass
   double target_yaw_;               // forwarded to free_target_object (yaw) [rad]
+  double target_roll_ = 0.0;        // forwarded (roll) only when != 0 [rad]
+  double target_pitch_ = 0.0;       // forwarded (pitch) only when != 0 [rad]
   std::string demo_csv_path_;       // forwarded to demo_replay_sync.launch.py when non-empty
   bool target_with_collar_;         // forwarded to free_target_object (with_collar)
   bool target_collar_collision_;    // forwarded to free_target_object (collar_collision)

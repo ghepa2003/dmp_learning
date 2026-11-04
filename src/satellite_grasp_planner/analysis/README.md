@@ -96,6 +96,20 @@ The scenario (params path, grasp_radius_m, depth, omega, center, snapshot, q_sta
 
 psi: roll about the local z of the TCP = approach axis z_tcp = -R(theta) n_body; TCP position unchanged (checked, printed).
 
+L2 dynamic follow (`--dynamic-follow 1`, else `s1.use_dynamic_follow` of `--params`; default off, then nothing below applies and the CSV is the one described here):
+the selector runs with `use_dynamic_follow`; `s1.rollout_q_ref`, `s1.finalists_n`, `s1.branch_rule`, `s1.margin_delta_deg`, `s1.margin_follow_s` and the
+`s1.follow_*` are read from `--params` (uncommented keys only), the URDF `<dynamics>` from `--urdf`. The planned q_end (dq = 0) and the L2 states are NOT
+measured values. The CSV gets 27 trailing columns `dyn_*` (approach / hold / total margin, discard reason, winner flag, q_end and q at +1.5 s / +3.0 s in
+degrees) filled only on the psi = 0 coarse row of each evaluated finalist; selection-level values (`dynamic_evals_done`, `rollouts_done`, `discarded`,
+`selection_ms`, per-finalist discard reason) are appended to `<out>.meta` and printed on stderr.
+
+Planner configuration and per-finalist report (`--node-config`, `--all-candidates`):
+- `--node-config` reads from `--params` the `s1.*` keys of grasp_planner_node (use_clearance, min_clearance_mm, clearance_dt_s, gripper_open_m, kappa_w, kappa_t, tau_j_mm, use_margin, min_margin_deg, use_hold_end, hold_follow_s, finalists_n, ik.*, follow_*, ...), `min_delay_s`, `cube_geometry.grasp_depth_m` and `start_joints_override_rad` (CLI options win; start from `ready` if the YAML has none), builds the fer_hand clearance model as the node does and runs `validateS3Params`. Without it the tool behaves as before. `s1.rollout_q_ref` is mandatory.
+- `--axis x,y,z`: satellite axis (normalized; `cube_geometry.face_normal_body` of the YAML must be perpendicular to it, CubeSatelliteModel throws otherwise). Default 0,0,1. (ω and centre: `--omega-deg-s`, `--center`; there is no loop over several (ω, centre): one run = one scenario.)
+- `--force-k K --force-theta-deg T [--force-flip -1|0|1]`: the selection evaluates only that candidate (S3Params::force with force_ignore_constraints; violations printed on stderr).
+- `--all-candidates` (implies `--node-config`; the landscape sweep is skipped, `--out` is the finalist CSV): first the production selection (lazy), then each of its finalists is re-evaluated alone with `force`, which runs the non-lazy branch of selectGraspS3: V1 rollout, V1', L2, V2 clearance and the velocity check are computed and recorded, none discards. V2, V1' and the velocity check are NOT computed for a finalist whose V1 rollout fails (empty cells). Columns: scenario, rank, k, branch, theta_deg, J_s, d_mm, w_static, w_rollout, w_end, w_eff, v1_ok, start_goal_deg, clearance_mm, clearance_pair, clearance_t_rel_s, min_clearance_mm, v2_ok, use_hold_end, v1p_ok, vel_dv_m_s, vel_ok (empty unless posthoc_velocity_check), l2_approach_deg, l2_hold_deg, l2_total_deg, margin_delta_deg, dyn_vs_rollout_qend_deg, dyn_initial_rot_err_deg, l2_diverged, lazy_reason (the discard the lazy flow would give, in its order), clearance_ms, l2_ms, call_ms, repro_d_mm_diff, repro_w_static_diff (re-evaluation vs scan), error. Per-stage times exist only for V2 and L2; V1 and V1' are not timed by the selector. `--scenario-tag` sets the `scenario` column. Pairs: `analysis/pair_finder.py`.
+- Default (lazy) run: the winner, the counters (rolled_out, V1, V2, V1', velocity, L2 approach / hold / divergence, stage times) on stderr and in `<out>.meta` (`counter_*`; filled when `use_dynamic_follow` is on).
+
 CSV (one row per k, theta, psi; k = 0..3 means 0/90/180/270 deg):
 `k, theta_deg, psi_deg, accepted` (a-priori constraints pass: mask & 15 == 0), `reject_first` (first set bit in the order below, `none`),
 `reject_mask`, `ik_ok_A` / `ik_ok_B` (nominal / nominal*Rz(pi) converged), `branch_selected` (0 nominal, 1 flipped), `d_pos_mm`, `t_wait_s`

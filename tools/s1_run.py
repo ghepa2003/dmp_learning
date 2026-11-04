@@ -9,7 +9,11 @@ executor e planner). Da lanciare nel container con ROS (serve rclpy per /clock e
 
 Esce con 0 se il run e' completo e il report e' stato scritto (il successo della presa e' in
 report.json["success"], non nel codice di uscita); !=0 con UNA riga "S1_RUN FAIL: <motivo>" su stderr.
-  codice 1: run fallito; 3: run/report ok ma restano processi (il run successivo NON e' sicuro).
+  codice 1: run fallito; 3: run/report ok ma restano processi (il run successivo NON e' sicuro);
+  130: interrotto; 4: rifiuto del selettore (il planner ha pubblicato un GraspCommand con status != SELECTED:
+  nessun candidato ammissibile). Il rifiuto e' un esito corretto, non un guasto: una riga
+  "S1_RUN RIFIUTO_SELETTORE: <status>" su stderr, run_meta.json con outcome="RIFIUTO_SELETTORE", nessun report.
+  (2 e' il codice di argparse per argomenti errati.)
 
 --stop-cube: dopo "follow: ended" nel log dell'executor pubblica 3 volte uno Twist nullo sul topic
 cmd_vel del cubo (VelocityControl, trovato con `ign topic -l`, nessun bridge) e 1 s simulato dopo legge
@@ -64,7 +68,9 @@ OMEGA_DEG_S_DEFAULT = -2.0               # default di --omega-deg-s
 OMEGA_PARAM = "satellite_rotation_angular_velocity_deg_s"
 OMEGA_TOL_RAD_S = 0.0017                 # omega_consistency_tol_deg_per_s = 0.1 deg/s (YAML) in rad/s
 THETA_STAR_REF_DEG = -163.5              # --theta-star-ref-deg (formula di --spawn-yaw-deg auto)
-T_TOTAL_S = 45.2                         # --t-total-s: tau 24.47 + attesa 10.9 + 9.85 tra spawn e pubblicazione
+# T_total (spawn -> contatto) per demo: T_total(demo) = tau_demo + (T_TOTAL_S - TAU_D1_S). Per D1 (tau = TAU_D1_S) vale T_TOTAL_S.
+TAU_D1_S = 24.474                        # tau di D1 (runs/20261015_095418_fit_demo_20261014T150851, weights_demo_params.yaml:5 demo.tau_s)
+T_TOTAL_S = 45.2                         # T_total di D1 (tau 24.474 + attesa 10.9 + 9.85 tra spawn e pubblicazione); default di --t-total-s
 # --arm: braccio di selezione -> --planner-param (stesse chiavi del planner, vedi docs/S3_SPEC.md).
 # Il planner ha un solo selettore (J_static / J): non esiste piu' s1.mode (un -p su un parametro non dichiarato verrebbe
 # ignorato in silenzio) ne' l'arm "legacy" (rimosso). d_only = senza termine di manipolabilita' (J = d_mm).
@@ -72,6 +78,10 @@ ARMS = {
     "d_only": [("s1.use_w", "false"), ("s1.branch_rule", "rotation")],
     "v2": [("s1.branch_rule", "rotation")],
 }
+# --arm A|B: bracci della campagna di validazione. Le chiavi s1.* sono quelle di config/campaign_{A,B}.yaml (UNA sola fonte,
+# riga per riga, letta all'uso); i due file differiscono solo per s1.use_dynamic_follow.
+CAMPAIGN_ARMS = ("A", "B")
+CAMPAIGN_CONFIG_DIR = WS_DIR / "src/satellite_grasp_planner/config"
 START_JOINTS = "[-0.000009,-0.786572,0.000002,-2.378914,-0.000006,3.141609,0.785398]"
 RIM_X_C_MM = 155.1                       # x_c atteso del goal = RIM_X_C_MM - depth[mm]
 GATE_TOL_MM = 0.5
@@ -103,6 +113,37 @@ LEFTOVER_PATTERNS = [
 
 class RunError(RuntimeError):
     pass
+
+
+# GraspCommand::status (src/satellite_grasp_msgs/msg/GraspCommand.msg:10-13), copiati qui perche' il modulo deve
+# restare importabile senza ROS (test/s1_run_selector_refusal)
+GRASP_STATUS_SELECTED = 1
+GRASP_STATUS_NAMES = {0: "STATUS_UNSET", 1: "STATUS_SELECTED", 2: "STATUS_NO_FEASIBLE_CANDIDATE",
+                      3: "STATUS_POSTHOC_FAILED"}
+EXIT_SELECTOR_REFUSAL = 4   # 0 ok, 1 fallito, 2 argparse, 3 residui, 130 interrotto: 4 era libero
+OUTCOME_SELECTOR_REFUSAL = "RIFIUTO_SELETTORE"
+
+
+class SelectorRefusal(RunError):
+    """Il planner ha pubblicato un GraspCommand con status != SELECTED (nessun vincitore). Non e' un guasto di avvio."""
+
+
+def planner_refusal_note(planner_text: str) -> str:
+    """Testo dopo ' note: ' nell'ultima riga 'grasp_planner_node: s1 status=' del log del planner (grasp_planner_node.cpp:~385);
+    '' se la riga o la nota mancano."""
+    note = ""
+    for line in planner_text.splitlines():
+        if "grasp_planner_node: s1 status=" in line:
+            note = line.partition(" note: ")[2].strip()
+    return note
+
+
+def selector_refusal_meta(status: int, selection_elapsed_s, evaluations, planner_text: str) -> dict:
+    """Chiavi aggiunte a run_meta.json per un rifiuto del selettore."""
+    return {"outcome": OUTCOME_SELECTOR_REFUSAL, "selector_status": int(status),
+            "selector_status_name": GRASP_STATUS_NAMES.get(int(status), "STATUS_<unknown>"),
+            "selection_elapsed_s": selection_elapsed_s, "selector_evaluations": evaluations,
+            "selector_note": planner_refusal_note(planner_text)}
 
 
 def log(msg):
@@ -159,10 +200,30 @@ def wrap_deg_half_open(a: float) -> float:
 
 def auto_spawn_yaw_deg(omega_deg_s: float, theta_star_ref_deg: float = THETA_STAR_REF_DEG,
                        t_total_s: float = T_TOTAL_S) -> float:
-    """yaw0 = theta_star_ref - omega*T_total, in (-180, 180]. Per -2 deg/s: ~ -73.1 deg.
-    Formula derivata da UN solo punto (tau 24.47 + attesa 10.9 + 9.85 tra spawn e pubblicazione):
-    verificare wait_s_actual a ogni run (il report avvisa se esce da [5, 5 + 360/|omega|] s)."""
+    """yaw0 = theta_star_ref - omega*T_total, in (-180, 180]. Per -2 deg/s e T_total di D1: ~ -73.1 deg.
+    La parte oltre tau (attesa 10.9 + 9.85 tra spawn e pubblicazione) e' derivata da UN solo punto (D1) e verificata
+    solo per omega da -1 a -3 deg/s: verificare wait_s_actual a ogni run (il report avvisa se esce da [5, 5 + 360/|omega|] s)."""
     return wrap_deg_half_open(theta_star_ref_deg - omega_deg_s * t_total_s)
+
+
+def t_total_for_tau(tau_s: float) -> float:
+    """T_total della demo: tau_demo + (T_TOTAL_S - TAU_D1_S). Per tau = TAU_D1_S ritorna esattamente T_TOTAL_S."""
+    return T_TOTAL_S + (tau_s - TAU_D1_S)
+
+
+def read_demo_tau_s(weights_dir) -> float:
+    """tau [s] della demo: chiave demo.tau_s di <weights_dir>/weights_demo_params.yaml (la stessa fonte del 24.474 di D1)."""
+    f = Path(weights_dir) / "weights_demo_params.yaml"
+    if not f.is_file():
+        raise RunError(f"file mancante: {f} (serve per tau della demo, --t-total-s non passato)")
+    m = re.search(r"^[ \t]+tau_s:[ \t]*([^\s#]+)", f.read_text(), re.MULTILINE)
+    try:
+        tau = float(m.group(1)) if m else float("nan")
+    except ValueError:
+        tau = float("nan")
+    if not (math.isfinite(tau) and tau > 0.0):
+        raise RunError(f"demo.tau_s assente o non valido in {f}")
+    return tau
 
 
 def parse_spawn_yaw(text: str):
@@ -384,9 +445,29 @@ def axis_rate(q_prev, q_curr, dt, axis=None):
     return float(rotvec @ (a / na)) / dt
 
 
+def campaign_arm_planner_params(arm: str, config_dir: Path = None) -> list:
+    """Coppie (chiave, valore) s1.* di config/campaign_<arm>.yaml, nell'ordine del file. Solo le righe `s1.*: valore` del blocco
+    grasp_planner_node (commento dopo '#' scartato, spazi interni tolti: -p vuole [a,b,c] senza spazi)."""
+    path = (config_dir or CAMPAIGN_CONFIG_DIR) / f"campaign_{arm}.yaml"
+    if not path.is_file():
+        raise RunError(f"--arm {arm}: file di configurazione mancante: {path}")
+    out = []
+    for line in path.read_text().splitlines():
+        body = line.split("#", 1)[0]
+        key, sep, val = body.partition(":")
+        key, val = key.strip(), "".join(val.split())
+        if sep and key.startswith("s1.") and line.startswith("    ") and val:
+            out.append((key, val))
+    if not out:
+        raise RunError(f"--arm {arm}: nessuna chiave s1.* in {path}")
+    return out
+
+
 def arm_planner_params(arm) -> list:
     if arm is None:
         return []
+    if arm in CAMPAIGN_ARMS:
+        return campaign_arm_planner_params(arm)
     if arm == "legacy":
         raise RunError(f"--arm 'legacy' rimosso: il planner ha un solo selettore (ammessi: {', '.join(ARMS)})")
     if arm not in ARMS:
@@ -980,6 +1061,15 @@ def run_experiment(a, paths, on_bag_saved):
                                "senza AT_END")
             if time.time() - monitor.wall_last_advance > CLOCK_STALL_WALL_S:
                 raise RunError(f"/clock fermo da {CLOCK_STALL_WALL_S:.0f} s reali (simulazione bloccata)")
+            # prima del controllo sull'executor: dopo un rifiuto l'executor lancia e puo' terminare
+            gc = monitor.grasp_cmd
+            if gc is not None and gc.status != GRASP_STATUS_SELECTED:
+                meta.update(selector_refusal_meta(gc.status, gc.selection_elapsed_s, int(gc.evaluations),
+                                                  procs["planner"].text()))
+                save_meta()
+                raise SelectorRefusal(f"{meta['selector_status_name']} (status={meta['selector_status']}), "
+                                      f"selection_elapsed_s={gc.selection_elapsed_s:.3f}"
+                                      + (f", nota: {meta['selector_note']}" if meta["selector_note"] else ""))
             txt = procs["executor"].text()
             if procs["executor"].poll() is not None:
                 raise RunError(f"executor terminato (codice {procs['executor'].poll()}) prima di AT_END")
@@ -1096,16 +1186,18 @@ def make_parser():
     ap.add_argument("--spawn-yaw-deg", type=parse_spawn_yaw, default=180.0, metavar="DEG|auto",
                     help="yaw iniziale del cubo [deg] (180 = run_final2; ~-73 riduce l'attesa a ~15 s,\n"
                          "vedi la derivazione nel commento di build_commands). 'auto': yaw0 =\n"
-                         "theta_star_ref - omega*T_total in (-180, 180] (--theta-star-ref-deg, --t-total-s);\n"
-                         "formula da UN solo punto: controllare wait_s_actual a ogni run")
+                         "theta_star_ref - omega*T_total in (-180, 180] (--theta-star-ref-deg, --t-total-s; T_total\n"
+                         "per demo = tau_demo + 20.726 s); parte oltre tau da UN solo punto (D1): controllare wait_s_actual")
     ap.add_argument("--omega-deg-s", type=float, default=OMEGA_DEG_S_DEFAULT,
                     help="velocita' angolare del cubo [deg/s, con segno] (-2). Impostata nello stesso valore nel wz\n"
                          f"del launch del cubo (rad/s) e nel parametro {OMEGA_PARAM}\n"
                          "di executor e planner")
     ap.add_argument("--theta-star-ref-deg", type=float, default=THETA_STAR_REF_DEG,
                     help="theta* di riferimento per --spawn-yaw-deg auto [deg] (-163.5)")
-    ap.add_argument("--t-total-s", type=float, default=T_TOTAL_S,
-                    help="tempo spawn->contatto per --spawn-yaw-deg auto [s] (45.2)")
+    ap.add_argument("--t-total-s", type=float, default=None,
+                    help="tempo spawn->contatto per --spawn-yaw-deg auto [s]. Se omesso: tau della demo (demo.tau_s di\n"
+                         f"weights_demo_params.yaml) + {T_TOTAL_S - TAU_D1_S:.3f} s, cioe' {T_TOTAL_S} per D1 (tau {TAU_D1_S}).\n"
+                         "Se passato ha la priorita'")
     ap.add_argument("--center-xyz", type=parse_center_xyz, default=SAT_CENTER, metavar="X,Y,Z",
                     help="centro di rotazione / spawn del cubo [m] (0.70,0.0,0.77); stesso valore in spawn, executor,\n"
                          "planner (satellite_rotation_center, cube_geometry.center_world) e gate sul goal")
@@ -1117,9 +1209,10 @@ def make_parser():
     ap.add_argument("--axis-lean-deg", type=float, default=0.0, metavar="PHI",
                     help="azimut della proiezione orizzontale dell'asse [deg], in [0, 360) (0); phi = beta - 90\n"
                          "rispetto al beta dei test G22 (asse di inclinazione (cos beta, sin beta, 0))")
-    ap.add_argument("--arm", choices=sorted(ARMS), default=None,
+    ap.add_argument("--arm", choices=sorted(ARMS) + list(CAMPAIGN_ARMS), default=None,
                     help="braccio di selezione, espanso in --planner-param: "
-                         + "; ".join(f"{k}: " + " ".join(f"{a}={b}" for a, b in v) for k, v in ARMS.items()))
+                         + "; ".join(f"{k}: " + " ".join(f"{a}={b}" for a, b in v) for k, v in ARMS.items())
+                         + "; A, B: tutte le chiavi s1.* di config/campaign_A.yaml / campaign_B.yaml (B = A + s1.use_dynamic_follow true)")
     ap.add_argument("--gui", action=argparse.BooleanOptionalAction, default=False,
                     help="apre `ign gazebo -g` su DISPLAY=:0 (default: no, batch)")
     ap.add_argument("--keep-alive", action=argparse.BooleanOptionalAction, default=False,
@@ -1159,6 +1252,13 @@ def main(argv=None) -> int:
             raise RunError("--omega-deg-s deve essere finito e != 0")
         validate_tilt(a.axis_tilt_deg, a.axis_lean_deg)
         a.spawn_yaw_mode = "auto" if a.spawn_yaw_deg == "auto" else "fixed"
+        a.t_total_source = "cli" if a.t_total_s is not None else "default"
+        if a.t_total_s is None:
+            if a.spawn_yaw_deg == "auto":
+                a.t_total_s = t_total_for_tau(read_demo_tau_s(Path(a.weights_dir).resolve()))
+                a.t_total_source = "tau"
+            else:
+                a.t_total_s = T_TOTAL_S   # yaw fisso: non usato, registrato nel run_meta come prima
         if a.spawn_yaw_deg == "auto":
             a.spawn_yaw_deg = auto_spawn_yaw_deg(a.omega_deg_s, a.theta_star_ref_deg, a.t_total_s)
             log(f"spawn yaw auto = {a.theta_star_ref_deg:g} - ({a.omega_deg_s:g})*{a.t_total_s:g} "
@@ -1187,7 +1287,7 @@ def main(argv=None) -> int:
         meta = {"tag": a.tag, "depth": a.depth, "kt": a.kt, "follow_s": a.follow_s, "hold_s": a.hold_s,
                 "squeeze": a.squeeze, "spawn_yaw_deg": a.spawn_yaw_deg, "weights_dir": str(weights),
                 "spawn_yaw_mode": a.spawn_yaw_mode, "theta_star_ref_deg": a.theta_star_ref_deg,
-                "t_total_s": a.t_total_s, "omega_deg_s": a.omega_deg_s, "center_xyz": list(a.center_xyz),
+                "t_total_s": a.t_total_s, "t_total_source": a.t_total_source, "omega_deg_s": a.omega_deg_s, "center_xyz": list(a.center_xyz),
                 "arm": a.arm,
                 "extra_exec_param": a.extra_exec_param, "sim_timeout": a.sim_timeout,
                 "planner_param": planner_param_dict(a.planner_param),
@@ -1209,6 +1309,10 @@ def main(argv=None) -> int:
             log(f"report: {outdir / 'report.txt'}  success={res['success']}")
 
         run_experiment(a, paths, report)
+    except SelectorRefusal as e:
+        # run_experiment ha gia' ripulito e scritto run_meta.json (outcome=RIFIUTO_SELETTORE); nessun report
+        rc = EXIT_SELECTOR_REFUSAL
+        print(f"S1_RUN {OUTCOME_SELECTOR_REFUSAL}: {str(e).splitlines()[0]}", file=sys.stderr)
     except RunError as e:
         # run_experiment ha gia' ripulito; "processi residui dopo il run" => codice 3
         msg = str(e)

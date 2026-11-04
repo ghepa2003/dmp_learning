@@ -4,6 +4,7 @@
 #include "haptic_dmp_learning/core/anchored_target.hpp"
 #include "haptic_dmp_learning/core/button_sequencer.hpp"
 #include "haptic_dmp_learning/core/gripper_ramp.hpp"
+#include "haptic_dmp_learning/core/target_spawn_args.hpp"
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -108,6 +109,15 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
   tsz_ = this->declare_parameter<double>("target_size_z", 0.150);
   tmass_ = this->declare_parameter<double>("target_mass", 4.412);
   target_yaw_ = this->declare_parameter<double>("target_yaw", 0.0);
+  // Spawn roll/pitch [rad], extrinsic R = Rz(yaw) Ry(pitch) Rx(roll) (ros_gz_sim create -R -P -Y).
+  // Forwarded to free_target_object.launch.py only when non-zero; 0.0 keeps the launch command unchanged.
+  target_roll_ = this->declare_parameter<double>("target_roll_rad", 0.0);
+  target_pitch_ = this->declare_parameter<double>("target_pitch_rad", 0.0);
+  if (!core::target_spawn::rollPitchValid(target_roll_, target_pitch_)) {
+    throw std::runtime_error(
+        "demo_replay_sync_orchestrator: 'target_roll_rad' / 'target_pitch_rad' must be finite "
+        "and |target_pitch_rad| < pi/2");
+  }
   target_with_collar_ = this->declare_parameter<bool>("target_with_collar", true);
   target_collar_collision_ = this->declare_parameter<bool>("target_collar_collision", true);
   // Empty => demo_replay_sync.launch.py keeps the demo_csv_path of params.yaml.
@@ -255,6 +265,7 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
               "  sync_delay_sec       = %.2f (anchored to target odometry sim-time t0)\n"
               "  target               = %s @ (%.3f, %.3f, %.3f)  v=(%.3f, %.3f, %.3f)  w=(%.3f, %.3f, %.3f)\n"
               "  target box size      = (%.3f, %.3f, %.3f) m   mass = %.3f kg\n"
+              "  target roll/pitch/yaw = (%.6f, %.6f, %.6f) rad\n"
               "  clock_wait_timeout   = %.1f s (wall clock)\n"
               "  buttons: %s -> %s\n"
               "  button_scheme        = %s (button_index=%d, debounce_s=%.2f)",
@@ -264,6 +275,7 @@ DemoReplaySyncOrchestratorNode::DemoReplaySyncOrchestratorNode()
               sync_delay_sec_, target_name_.c_str(),
               tx_, ty_, tz_, tvx_, tvy_, tvz_, twx_, twy_, twz_,
               tsx_, tsy_, tsz_, tmass_,
+              target_roll_, target_pitch_, target_yaw_,
               clock_wait_timeout_sec_,
               buttons_topic_.c_str(), buttons_synced_topic_.c_str(),
               single_button_ ? "single_button" : "legacy", button_index_,
@@ -480,17 +492,19 @@ void DemoReplaySyncOrchestratorNode::tick() {
       break;
 
     case Phase::kSpawnTarget: {
-      std::vector<std::string> argv = {
-          "ros2", "launch", "free_target_object", "free_target_object.launch.py",
-          "name:=" + target_name_,
-          numArg("x", tx_), numArg("y", ty_), numArg("z", tz_),
-          numArg("vx", tvx_), numArg("vy", tvy_), numArg("vz", tvz_),
-          numArg("wx", twx_), numArg("wy", twy_), numArg("wz", twz_),
-          numArg("size_x", tsx_), numArg("size_y", tsy_), numArg("size_z", tsz_),
-          numArg("mass", tmass_),
-          std::string("with_collar:=") + (target_with_collar_ ? "true" : "false"),
-          std::string("collar_collision:=") + (target_collar_collision_ ? "true" : "false"),
-          numArg("yaw", target_yaw_)};
+      core::target_spawn::TargetSpawnParams sp;
+      sp.name = target_name_;
+      sp.x = tx_; sp.y = ty_; sp.z = tz_;
+      sp.vx = tvx_; sp.vy = tvy_; sp.vz = tvz_;
+      sp.wx = twx_; sp.wy = twy_; sp.wz = twz_;
+      sp.size_x = tsx_; sp.size_y = tsy_; sp.size_z = tsz_;
+      sp.mass = tmass_;
+      sp.with_collar = target_with_collar_;
+      sp.collar_collision = target_collar_collision_;
+      sp.roll = target_roll_;
+      sp.pitch = target_pitch_;
+      sp.yaw = target_yaw_;
+      const std::vector<std::string> argv = core::target_spawn::buildSpawnArgs(sp);
       launchChild(argv, "free_target_object");
       odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
           "/" + target_name_ + "/odometry", rclcpp::QoS(10),

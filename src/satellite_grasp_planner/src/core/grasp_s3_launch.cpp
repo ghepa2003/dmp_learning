@@ -12,7 +12,8 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s, S3Result* s3_result_out,
                                        std::vector<S3EvalRecord>* eval_log,
-                                       const ApproachClearanceModel* clearance_model) {
+                                       const ApproachClearanceModel* clearance_model,
+                                       const JointDynamics* joint_dynamics) {
   if (!std::isfinite(min_delay_s) || min_delay_s < 0.0) {
     throw std::invalid_argument("planGraspAndLaunchS1: min_delay_s must be finite and >= 0.");
   }
@@ -55,6 +56,12 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
     }
     ctx.clearance_eval = makeClearanceEvaluator(*clearance_model, ClearanceParams{s3.clearance_dt_s, s3.gripper_open_m});
   }
+  if (s3.use_dynamic_follow) {
+    if (!joint_dynamics) {
+      throw std::invalid_argument("planGraspAndLaunchS1: s1.use_dynamic_follow=true needs joint_dynamics.");
+    }
+    ctx.joint_dynamics = joint_dynamics;
+  }
 
   const S3Result r = selectGraspS3(model, robot, in.q0, demo, in.delta_g_demo, ctx, s3);
   const double elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
@@ -63,6 +70,15 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
   GraspLaunchResult out;
   out.evaluations = r.evaluations;
   out.elapsed_s = elapsed_s;
+  out.stage_ms.scan = r.scan_ms;
+  out.stage_ms.clearance = r.clearance_stage_ms;
+  out.stage_ms.dynamic = r.dynamic_stage_ms;
+  out.stage_ms.posthoc = r.posthoc_ms;
+  out.stage_ms.finalists = static_cast<int>(r.v2_finalists.size());
+  for (const S3FinalistRecord& f : r.v2_finalists) {
+    out.stage_ms.rollout += f.rollout_ms;
+    out.stage_ms.hold_end += f.hold_end_ms;
+  }
 
   if (r.status != S3Result::kSelected) {
     out.status = r.status == S3Result::kPosthocFailed ? GraspLaunchResult::Status::kPosthocFailed
@@ -90,6 +106,15 @@ GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const Satellit
   out.w_hat = c.eval.w_hat;
   out.min_joint_margin_rad = c.eval.margins.min_margin_rad;
   out.posthoc_dv_m_s = s3.posthoc_velocity_check ? r.posthoc_dv_m_s : std::numeric_limits<double>::quiet_NaN();
+  if (r.hold_end_done) {
+    out.hold_end_done = true;
+    out.end_ok = r.end_ok;
+    out.q_hold_end = r.q_hold_end;
+    out.hold_position = r.hold_pose.position;
+    out.hold_orientation = r.hold_pose.orientation;
+    out.w_end = r.w_end;
+    out.w_eff = r.w_eff;
+  }
   return out;
 }
 

@@ -43,13 +43,18 @@ namespace core {
  * clearance_model: required (non-null, outliving the call) iff s3.use_clearance; its evaluator is built here from
  * s3.clearance_dt_s and s3.gripper_open_m and passed in S3Context::clearance_eval. Ignored if use_clearance is off.
  * @throws std::invalid_argument if s3.use_clearance and clearance_model is null.
+ *
+ * joint_dynamics: URDF <dynamics> (damping, friction) per joint, required (non-null, outliving the call) iff s3.use_dynamic_follow;
+ * forwarded to S3Context::joint_dynamics. Ignored if use_dynamic_follow is off.
+ * @throws std::invalid_argument if s3.use_dynamic_follow and joint_dynamics is null.
  */
 GraspLaunchResult planGraspAndLaunchS1(const SelectionInputs& in, const SatelliteSnapshot& snapshot_at_acquisition,
                                        double min_delay_s, const S3Params& s3,
                                        std::optional<double> t_now_override_s = std::nullopt,
                                        S3Result* s3_result_out = nullptr,
                                        std::vector<S3EvalRecord>* eval_log = nullptr,
-                                       const ApproachClearanceModel* clearance_model = nullptr);
+                                       const ApproachClearanceModel* clearance_model = nullptr,
+                                       const JointDynamics* joint_dynamics = nullptr);
 
 }  // namespace core
 }  // namespace satellite_grasp_planner

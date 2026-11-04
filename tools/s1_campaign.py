@@ -6,7 +6,7 @@ riga del report al CSV dei risultati e continua se un run fallisce.
 Griglia da CLI e/o da yaml (la CLI ha la precedenza); chiavi: depth, kt, spawn_yaw, follow_s,
 hold_s, squeeze, stop_cube (bool; richiede follow_s > 0) (squeeze: "default" o null = parametro non passato),
 omega_deg_s (deg/s con segno; spawn_yaw di default "auto" se omega non e' solo -2), center_xyz ("X,Y,Z" o
-[X,Y,Z]; default 0.70,0.0,0.77), arm (d_only | v2; default: non passato). spawn_yaw accetta anche
+[X,Y,Z]; default 0.70,0.0,0.77), arm (d_only | v2 | A | B; default: non passato). spawn_yaw accetta anche
 "auto" (yaw0 = theta_star_ref - omega*T_total, vedi s1_run.auto_spawn_yaw_deg). Esempio:
 
     python3 tools/s1_campaign.py --weights-dir runs/<run> --outroot s1_runs/camp1 \\
@@ -75,8 +75,8 @@ def _center(v):
 def _arm(v):
     if v is None or str(v).lower() in ("none", "null", "default"):
         return None
-    if v not in s1_run.ARMS:
-        raise SystemExit(f"arm: valore non valido {v!r} (ammessi: {', '.join(s1_run.ARMS)})")
+    if v not in s1_run.ARMS and v not in s1_run.CAMPAIGN_ARMS:
+        raise SystemExit(f"arm: valore non valido {v!r} (ammessi: {', '.join(list(s1_run.ARMS) + list(s1_run.CAMPAIGN_ARMS))})")
     return v
 
 

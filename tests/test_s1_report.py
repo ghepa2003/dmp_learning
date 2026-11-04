@@ -31,7 +31,8 @@ def test_csv_columns_fixed():
         "f_sum_plateau_10_20s", "tcp_cube_var_close_3_15s",
         "window_end_rel_s", "gap_end_mean_last10s", "pad_straddle_end", "slip_tang_axial_3_end",
         "omega_deg_s", "center_xyz", "arm",
-        "min_joint_margin_deg", "min_joint_margin_joint", "min_joint_margin_t_rel_s", "start_goal_deg"]
+        "min_joint_margin_deg", "min_joint_margin_joint", "min_joint_margin_t_rel_s", "start_goal_deg",
+        "criterion_11_ok", "success_1_11"]   # 02/11/2026: due colonne in coda (contratto aggiornato)
 
 
 def test_wait_range_and_warning():
@@ -372,3 +373,125 @@ def test_csv_row_new_columns():
     assert row["start_goal_deg"] is None and s1_report._fmt_cell(row["start_goal_deg"]) == ""
     sel["start_goal_deg"] = 61.5
     assert s1_report.csv_row(res)["start_goal_deg"] == 61.5
+
+
+# ----------------------------------------------------------------- 02/11/2026: successo = criteri 1-10, criterio 11 a parte
+
+def _split(**kw):
+    crit, all_ok = s1_report.evaluate_criteria(_values(**kw), s1_report.load_criteria())
+    return crit, all_ok, s1_report.split_success(crit)
+
+
+def test_split_success_all_pass():
+    _, _, (s10, c11, s111) = _split()
+    assert (s10, c11, s111) == (True, True, True)
+
+
+def test_split_success_criterion_11_fails_only():
+    """criteri 1-10 ok, criterio 11 KO: success vero, criterion_11_ok falso, success_1_11 falso."""
+    crit, all_ok, (s10, c11, s111) = _split(min_joint_margin_deg=3.08)
+    assert s10 is True and c11 is False and s111 is False
+    assert all_ok is False                      # evaluate_criteria resta l'AND di tutti (= success_1_11)
+    assert crit["min_joint_margin_deg"]["ok"] is False and crit["min_joint_margin_deg"]["rule"] == ">= 10"
+    assert s111 == all_ok
+
+
+def test_split_success_criterion_11_nan_is_not_ok_but_main_success_stays():
+    _, _, (s10, c11, s111) = _split(min_joint_margin_deg=float("nan"))
+    assert (s10, c11, s111) == (True, False, False)
+
+
+def test_split_success_a_criterion_1_10_fails():
+    _, _, (s10, c11, s111) = _split(slip_tang_axial_3_15s=0.6)
+    assert (s10, c11, s111) == (False, True, False)
+    _, _, (s10, c11, s111) = _split(slip_tang_axial_3_15s=0.6, min_joint_margin_deg=0.0)
+    assert (s10, c11, s111) == (False, False, False)
+
+
+def test_slip_threshold_still_0_5_and_threshold_11_unchanged():
+    c = s1_report.load_criteria()
+    assert c["slip_tang_axial_3_15s"] == {"max": 0.5} and c["min_joint_margin_deg"] == {"min": 10}
+    assert s1_report.SEPARATE_CRITERIA == ("min_joint_margin_deg",)
+
+
+def test_split_success_without_criterion_11_in_yaml():
+    crit = {"a": {"value": 1, "rule": "", "ok": True}}
+    assert s1_report.split_success(crit) == (True, None, True)
+
+
+def test_csv_row_has_separate_criterion_11_columns():
+    g = {k: 0.0 for k in ("tcp_cube_var_3_8s_mm", "tcp_cube_var_3_15s_mm", "yaw_slope_6_12s_deg_s",
+                          "max_err_tgt_0_15s_mm", "cube_disp_max_mm", "tilt_max_deg", "sin_q6_min",
+                          "tcp_cube_var_close_3_8s_mm", "tcp_cube_var_tang_3_8s_mm", "tcp_cube_var_axial_3_8s_mm",
+                          "f1_f2_plateau_min_10_20s_mm", "wz_cube_mean_4_8s_degps", "tcp_cube_var_tang_3_15s_mm",
+                          "tcp_cube_var_axial_3_15s_mm", "f_sum_plateau_10_20s_mm", "tcp_cube_var_close_3_15s_mm",
+                          "window_end_rel_s", "gap_end_mean_last10s_mm", "slip_tang_axial_3_end_mm")}
+    g["pad_straddle_end"] = True
+    f = {"sum": 0.0, "min": 0.0}
+    g["fingers_mm"] = {k: f for k in ("2", "5", "15")}
+    g["pads"] = {k: {"straddle": True} for k in ("2", "5", "15")}
+    sel = {"k": 0, "theta_star_deg": 0.0, "d_pos_mm": 0.0, "cost": 0.0, "provisional_delay_s": 0.0}
+    la = {"yaw_trig_err_deg": 0.0, "yaw_end_err_deg": 0.0, "wait_actual_s": 10.0, "omega_deg_s": -2.0}
+    res = {"meta": {"tag": "t"}, "selection": sel, "launch": la, "grasp": g, "success": True,
+           "criterion_11_ok": False, "success_1_11": False}
+    row = s1_report.csv_row(res)
+    assert (row["success"], row["criterion_11_ok"], row["success_1_11"]) == (1, 0, 0)
+    assert list(row)[-2:] == ["criterion_11_ok", "success_1_11"]
+    res2 = dict(res, criterion_11_ok=None)
+    del res2["success_1_11"]
+    row2 = s1_report.csv_row(res2)
+    assert row2["criterion_11_ok"] is None and row2["success_1_11"] is None
+
+
+def test_interrupted_run_is_neither_success():
+    assert s1_report.apply_interrupt(True, {"interrupted": True}) is False
+
+
+# ----------------------------------------------------------------- tempi per stadio: riga "s1 timing:" del planner.log
+
+TIMING_LINE = ("[grasp_planner_node-1] [INFO] [100.0]: grasp_planner_node: s1 timing: total_s=1.250000 scan_ms=410.000 "
+               "rollout_ms=300.500 clearance_ms=120.250 hold_end_ms=15.125 dynamic_ms={dyn} posthoc_ms=0.000 other_ms={other} finalists=12\n")
+
+
+def test_parse_selection_timing_with_and_without_l2(tmp_path):
+    f = tmp_path / "planner.log"
+    f.write_text("altro\n" + TIMING_LINE.format(dyn="0.000", other="404.125"))
+    t = s1_report.parse_selection_timing(f)
+    assert t == {"scan_ms": 410.0, "rollout_ms": 300.5, "clearance_ms": 120.25, "hold_end_ms": 15.125,
+                 "dynamic_ms": 0.0, "posthoc_ms": 0.0, "other_ms": 404.125, "finalists": 12}
+    f.write_text(TIMING_LINE.format(dyn="350.000", other="54.125"))
+    t = s1_report.parse_selection_timing(f)
+    assert t["dynamic_ms"] == 350.0 and t["other_ms"] == 54.125
+
+
+def test_parse_selection_timing_negative_other_is_kept_and_last_line_wins(tmp_path):
+    f = tmp_path / "planner.log"
+    f.write_text(TIMING_LINE.format(dyn="0.000", other="1.0") + TIMING_LINE.format(dyn="0.000", other="-0.012"))
+    assert s1_report.parse_selection_timing(f)["other_ms"] == -0.012
+
+
+def test_parse_selection_timing_after_a_refusal(tmp_path):
+    """La riga e' stampata anche per status 2 / 3: un rifiuto la ha come una selezione riuscita."""
+    f = tmp_path / "planner.log"
+    f.write_text("grasp_planner_node: s1 status=2 evaluations=480 rollouts=12 note: v2 clearance: no finalist\n"
+                 + TIMING_LINE.format(dyn="0.000", other="3.0"))
+    t = s1_report.parse_selection_timing(f)
+    assert t["scan_ms"] == 410.0 and t["finalists"] == 12
+
+
+def test_parse_selection_timing_missing_line_file_or_field(tmp_path):
+    none = {k: None for k in s1_report.TIMING_KEYS}
+    none["finalists"] = None
+    f = tmp_path / "planner.log"
+    f.write_text("log vecchio senza la riga\n")
+    assert s1_report.parse_selection_timing(f) == none
+    assert s1_report.parse_selection_timing(tmp_path / "manca.log") == none
+    assert s1_report.parse_selection_timing(None) == none
+    f.write_text("grasp_planner_node: s1 timing: total_s=1.0 scan_ms=5.0 rollout_ms=abc finalists=x\n")
+    t = s1_report.parse_selection_timing(f)
+    assert t["scan_ms"] == 5.0 and t["rollout_ms"] is None and t["posthoc_ms"] is None and t["finalists"] is None
+
+
+def test_csv_columns_unchanged_by_timing():
+    """I tempi vanno in report.json["selection"], non in CSV_COLUMNS di s1_report."""
+    assert not any(k in s1_report.CSV_COLUMNS for k in s1_report.TIMING_KEYS)

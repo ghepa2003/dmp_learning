@@ -274,6 +274,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_button_sequencer test/test_button_sequencer.cpp)
   target_link_libraries(test_button_sequencer ${PROJECT_NAME}_core)
 
+  # free_target_object spawn argument vector of the orchestrator (header-only, no ROS).
+  ament_add_gtest(test_target_spawn_args test/test_target_spawn_args.cpp)
+  target_link_libraries(test_target_spawn_args ${PROJECT_NAME}_core)
+
   ament_add_gtest(test_velocity_feedforward test/test_velocity_feedforward.cpp)
   target_link_libraries(test_velocity_feedforward ${PROJECT_NAME}_core)
 

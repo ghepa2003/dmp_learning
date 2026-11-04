@@ -95,6 +95,56 @@ grasp_planner_node:
     # s1.min_margin_deg: 24.0          # gradi, finito e >= 0; margine di giunto minimo previsto su [start, AT_END + margin_follow_s] | ASSUNTO: intervallo osservato in G16 20.84-28.63 (falliti 13.26, 17.67, 20.84; riusciti 28.63, 35.00), NON ottimizzato | _data/diag_audit/_diag_1019/g16/g16_results.csv, step0c_margins.cpp
     # s1.margin_follow_s: 3.0          # s, finito e >= 0; durata del follow simulato dopo AT_END | DERIVATO: post_grasp_follow_s dell'executor (default 3.0) = follow dei run G16 | prodmp_gazebo_executor_node.cpp:142
     # s1.margin_follow_dt_s: 0.01      # s, finito e > 0; passo di integrazione del follow | DERIVATO: step0c_margins.cpp (valori G16/criterio 11); run_rollout_follow_all.cpp usa 0.1 | _data/diag_audit/_diag_1019/step0c_margins.cpp
+    # --- L2 forward dynamics (core/dynamic_follow.hpp), STADIO 2b: collegata al selettore dietro s1.use_dynamic_follow ---
+    # s1.use_dynamic_follow: false     # default off | SOSTITUISCE s1.use_margin (i due insieme = errore all'avvio); flusso lazy come use_margin, ordine rollout -> clearance -> L2 -> velocita'; UNA simulazione L2 continua da q_start (dq0=0 ASSUNTO) per approccio + tenuta [AT_END, AT_END+margin_follow_s]; ammissibile se min(margine L2 approccio, margine L2 tenuta) >= margin_delta_deg e L2 non diverge
+    # s1.margin_delta_deg: 5.0        # gradi, finito e >= 0 (validateS3Params); margine totale minimo = min(approccio, L2 su [0, margin_follow_s]) | default di codice 5.0, ASSUNTO; la configurazione finale L2 (blocco sotto) usa 0.0 = limite fisico del giunto
+    # s1.follow_translational_stiffness: 2000.0  # N/m  | valore dei 36 run di validazione (runs_inertial.csv), NON i 200 di franka_gazebo_controllers.yaml
+    # s1.follow_rotational_stiffness: 150.0      # Nm/rad | idem
+    # s1.follow_translational_damping: 10.0      # Ns/m   | idem
+    # s1.follow_rotational_damping: 1.0          # Nms/rad | idem
+    # s1.follow_nullspace_stiffness: 0.2         # = franka_gazebo_controllers.yaml:125
+    # s1.follow_joint1_nullspace_stiffness: 100.0  # = franka_gazebo_controllers.yaml:126
+    # s1.follow_nullspace_pinv_damping: 0.02     # = franka_gazebo_controllers.yaml:128
+    # s1.follow_delta_tau_max: 1.0               # Nm PER PASSO di integrazione (= per ciclo modellato) | franka_gazebo_controllers.yaml:127 (valore per un ciclo di 1 ms). ATTENZIONE: con follow_dt_s = 0.00025 il limite per secondo diventa 4 volte piu' alto (4000 Nm/s invece di 1000); per tenere 1000 Nm/s servirebbe 0.25. Non e' cambiato qui: va deciso in base a cio' che e' stato validato in out13
+    # s1.follow_compensate_gravity: true         # set A della validazione; il YAML del controllore ha false (da chiarire)
+    # s1.follow_plant_gravity_z: -9.80665        # m/s^2 | set A della validazione, non ricavabile dai sorgenti
+    # s1.follow_friction_eps: 0.1                # rad/s, > 0 | primario della validazione; <= 0.01 instabile con RK4 a 1 ms
+    # s1.follow_dt_s: 0.0005                     # s, > 0 | default del selettore (struct DynamicFollowParams: 0.001); out17: stabile in 46 simulazioni su 46 a 0.5 e 1 ms, 0.00025 selezionabile | STABILITA' OSSERVATA (out13): a 1 ms 20 finalisti su 40 danno margini non fisici, a 0.5 e 0.25 ms no (out13: |margine(0.25) - margine(0.1)| <= 0.12 gradi). Cambiare dt cambia anche il periodo del controllore modellato e il limite di slew per secondo, non solo la precisione. Default di codice (struct) = 0.001, necessario alla parita' con il Python
+    # s1.follow_abort_on_divergence: true
+    # s1.follow_divergence_rad: 6.283185307179586  # rad, > 0 | un passo diverge se q e' non finita o un giunto dista piu' di questo da q_end; default 2 pi
+    # s1.follow_finger_pos_m: 0.06               # m, [0, 0.08] | dita aperte (misurate a AT_END: 0.058-0.064)
+    # s1.follow_dq0_zero: true                   # dq iniziale = 0 (q_end pianificata non ha velocita')
+    # s1.follow_apply_urdf_damping: true         # smorzamento viscoso per giunto dai tag <dynamics> dell'URDF (urdf_path) | default di codice; usato dalla validazione
+    # s1.follow_apply_urdf_friction: true        # attrito di Coulomb per giunto dai tag <dynamics> dell'URDF, tanh(v/follow_friction_eps) | default di codice
+    # --- Stadio V1' (decisione 28/10): IK posa alla presa E posa a fine tenuta dentro i limiti ---
+    # s1.use_hold_end: false            # default off | sia posa presa che posa fine tenuta (+hold_follow_s) raggiungibili con IK entro i limiti; finalisti con end_ok=false scartati (hold_end_infeasible); per gli ammissibili J usa w_eff=min(w_rollout, w_end); combinabile con use_margin e con use_dynamic_follow (con L2 l'ordine e' rollout, clearance, V1', velocita', L2; hold_follow_s deve coincidere con margin_follow_s); NOTA: clearance e r_trust NON sono verificati a fine tenuta
+    # s1.hold_follow_s: 3.0             # s, finito e > 0; durata della tenuta | DEVE coincidere con post_grasp_follow_s dell'executor (prodmp_gazebo_executor_node.cpp:142); il planner avverte nel log all'avvio se non verificabile
+
+    # ===== configurazione finale L2 (commentata: per attivarla, decommentare qui sotto e lasciare s1.use_margin a false) =====
+    # s1.use_dynamic_follow: true             # SOSTITUISCE s1.use_margin; con s1.use_margin=true il nodo non parte (validateS3Params); s1.use_hold_end=true e' ammesso
+    # s1.use_margin: false
+    # s1.use_hold_end: false                  # true: V1' prima di L2 (hold_follow_s = margin_follow_s)
+    # s1.hold_follow_s: 3.0                   # DEVE coincidere con s1.margin_follow_s (qui 3.0) e con post_grasp_follow_s dell'executor
+    # s1.margin_delta_deg: 0.0                # soglia = limite fisico del giunto (margine >= 0); l'errore di previsione e' riportato a parte (s3_landscape --meas-margins)
+    # s1.margin_follow_s: 3.0                 # durata della tenuta L2
+    # s1.follow_dt_s: 0.0005                  # dt di L2
+    # s1.follow_divergence_rad: 6.283185307179586   # 2 pi
+    # s1.follow_finger_pos_m: 0.06
+    # s1.follow_translational_stiffness: 2000.0
+    # s1.follow_rotational_stiffness: 150.0
+    # s1.follow_translational_damping: 10.0
+    # s1.follow_rotational_damping: 1.0
+    # s1.follow_nullspace_stiffness: 0.2
+    # s1.follow_joint1_nullspace_stiffness: 100.0
+    # s1.follow_nullspace_pinv_damping: 0.02
+    # s1.follow_delta_tau_max: 1.0            # slew [Nm] per passo
+    # s1.follow_compensate_gravity: true
+    # s1.follow_plant_gravity_z: -9.80665
+    # s1.follow_friction_eps: 0.1
+    # s1.follow_apply_urdf_damping: true
+    # s1.follow_apply_urdf_friction: true
+    # s1.follow_abort_on_divergence: true
+    # s1.follow_dq0_zero: true
 
 # Shown only to document the shared-YAML idea (D3): this node's satellite_rotation_* / satellite_q_ref
 # / satellite_odom_topic parameters above are meant to be read by prodmp_gazebo_executor_node too, via

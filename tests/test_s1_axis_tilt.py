@@ -386,4 +386,22 @@ def test_report_alpha0_identical_on_existing_runs(name):
     meta = json.loads((d / "run_meta.json").read_text())
     assert "axis" not in meta   # run storici: asse z / q_ref identita'
     res = s1_report.analyze(d / "bag", d / "executor.log", meta, planner_log=d / "planner.log")
-    assert s1_report.render_txt(res) == (d / "report.txt").read_text()
+    new, old = s1_report.render_txt(res).splitlines(), (d / "report.txt").read_text().splitlines()
+
+    # dal 02/11/2026 il footer del successo e' cambiato (success = criteri 1-10, criterio 11 a parte): i report salvati
+    # hanno la vecchia riga unica "SUCCESSO: SI|NO" (11 criteri). Tutte le altre righe devono restare identiche.
+    def footer(lines):
+        return [ln for ln in lines if ln.startswith("SUCCESSO")]
+
+    def body(lines):
+        return [ln for ln in lines if not ln.startswith("SUCCESSO")]
+
+    assert body(new) == body(old)
+    assert new[-1].startswith("SUCCESSO") and old[-1].startswith("SUCCESSO")   # il footer e' l'ultima riga in entrambi
+    (new_f,), (old_f,) = footer(new), footer(old)
+    assert old_f in ("SUCCESSO: SI", "SUCCESSO: NO")
+    # relazione col vecchio esito (a 11 criteri): coincide con "SUCCESSO 1-11"; "criteri 1-10" puo' solo essere piu' largo
+    if old_f == "SUCCESSO: SI":
+        assert "SUCCESSO (criteri 1-10): SI" in new_f and "SUCCESSO 1-11: SI" in new_f
+    else:
+        assert "SUCCESSO 1-11: NO" in new_f

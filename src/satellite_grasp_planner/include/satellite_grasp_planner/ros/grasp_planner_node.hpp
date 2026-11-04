@@ -82,6 +82,8 @@ class GraspPlannerNode : public rclcpp::Node {
   core::S3Params s3_params_;  ///< s1.* parameters, see grasp_planner_example.yaml
   /// Set iff s1.use_clearance (hand convex hull computed once at startup); null otherwise.
   std::shared_ptr<core::ApproachClearanceModel> clearance_model_;
+  /// URDF <dynamics> of the 7 arm joints for the L2 follow; loaded at startup iff s1.use_dynamic_follow.
+  std::shared_ptr<core::JointDynamics> joint_dynamics_;
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<satellite_grasp_msgs::msg::GraspCommand>::SharedPtr pub_;

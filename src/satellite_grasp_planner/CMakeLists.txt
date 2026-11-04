@@ -31,6 +31,7 @@ include_directories(include)
 # simulation, see core/joint_path_simulator.hpp).
 add_library(${PROJECT_NAME}_core
   src/core/approach_clearance.cpp
+  src/core/dynamic_follow.cpp
   src/core/follow_margin.cpp
   src/core/joint_path_simulator.cpp
   src/core/kinematic_feasibility.cpp
@@ -183,6 +184,8 @@ if(BUILD_ANALYSIS_TOOLS)
   add_planner_analysis(s3_landscape INCLUDE_DIRS analysis)
   add_planner_analysis(s3_clearance)
   add_planner_analysis(s3_followmargin_check)
+  add_planner_analysis(dynamic_follow_parity)
+  add_planner_analysis(hold_end_check)
 endif()
 
 if(BUILD_TESTING)
@@ -194,6 +197,7 @@ if(BUILD_TESTING)
   add_planner_gtest(test_joint_path_simulator)
   add_planner_gtest(test_kinematic_feasibility)
   add_planner_gtest(test_follow_margin)
+  add_planner_gtest(test_dynamic_follow)
   add_planner_gtest(test_selection_inputs)
   add_planner_gtest(test_start_state)
   add_planner_gtest(test_launch_delay)
