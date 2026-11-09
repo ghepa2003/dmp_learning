@@ -62,7 +62,9 @@ struct ReplayConfig {
 
 struct GainsConfig {
   double translational_stiffness;
-  double rotational_stiffness;
+  double rotational_stiffness;  ///< scalar Kr; if rotational_stiffness_per_axis it is only min(xyz), not used by the controller
+  bool rotational_stiffness_per_axis = false;  ///< true if gains.rotational_stiffness_xyz was given
+  Array3 rotational_stiffness_xyz = {0.0, 0.0, 0.0};  ///< [Krx Kry Krz], base frame (valid only if per_axis)
   double translational_damping;
   double rotational_damping;
   double nullspace_stiffness;
@@ -81,6 +83,7 @@ struct DampingConfig {
   double zeta_rot;                ///< target damping ratio of the 3 rotational axes
   double max_damping_per_sample;  ///< cap_a: a_i = D_i*dt/Lambda_min_i never exceeds this
   double max_q_drift_rad;         ///< abort if q at activation differs from the q used for the design
+  std::vector<double> rotational_d_max_xyz;  ///< empty (off), or 3 values [Dx Dy Dz] (base frame): after the design D_i = min(D_i, d_max_i) on rx, ry, rz (also D_stop). Ignored if override_d is set.
   std::vector<double> override_d; ///< empty, or 6 values [Dx Dy Dz Drx Dry Drz]: bypass the design
 };
 

@@ -161,7 +161,9 @@ int main(int argc, char** argv) {
       Array6 lam = {9.0, 3.0, 4.0, 0.04, 0.14, 0.05};
       const DampingDesign d = designDamping(cfg.gains, cfg.damping, scale, dt, lam, lam, lam, false);
       for (std::size_t i = 0; i < 6; ++i) {
-        const double k = i < 3 ? cfg.gains.translational_stiffness : cfg.gains.rotational_stiffness;
+        const double k = i < 3 ? cfg.gains.translational_stiffness
+                               : (cfg.gains.rotational_stiffness_per_axis ? cfg.gains.rotational_stiffness_xyz[i - 3]
+                                                                          : cfg.gains.rotational_stiffness);
         const double z = i < 3 ? cfg.damping.zeta_trans : cfg.damping.zeta_rot;
         CHECK(!d.capped[i], "axis %zu should not be capped", i);
         CHECK(std::fabs(d.d[i] - 2.0 * z * std::sqrt(k * lam[i])) < 1e-12, "axis %zu: D = 2 zeta sqrt(K Lambda)", i);
@@ -232,6 +234,82 @@ int main(int argc, char** argv) {
         threw = true;
       }
       CHECK(threw, "Lambda = 0 must throw");
+    }
+
+    std::printf("[per-axis rotational stiffness: Kr = [150,150,10] with the repo Lambda; scalar regression]\n");
+    {
+      const Array6 lam = {9.0, 3.0, 4.0, 0.0381, 0.1427, 0.0002};
+      GainsConfig gx = cfg.gains;
+      gx.rotational_stiffness_per_axis = true;
+      gx.rotational_stiffness_xyz = {150.0, 150.0, 10.0};
+      const DampingDesign d = designDamping(gx, cfg.damping, scale, dt, lam, lam, lam, false);
+      const double kr[3] = {150.0, 150.0, 10.0};
+      for (std::size_t i = 3; i < 6; ++i) {
+        const double k = kr[i - 3];
+        CHECK(d.k[i] == k, "axis %zu uses its own K (%.1f)", i, d.k[i]);
+        const double d_zeta = 2.0 * cfg.damping.zeta_rot * std::sqrt(k * lam[i]);
+        const double d_cap = cap * lam[i] / dt;
+        CHECK(d.d[i] == std::min(d_zeta, d_cap), "axis %zu: D = min(zeta law, cap)", i);
+        CHECK(d.b[i] == k * dt * dt / lam[i], "axis %zu: b = K dt^2/Lambda", i);
+        CHECK(d.a[i] == d.d[i] * dt / lam[i], "axis %zu: a", i);
+        CHECK(d.g1[i] == gainMargin(d.a[i], d.b[i], 1) && d.g2[i] == gainMargin(d.a[i], d.b[i], 2), "axis %zu: g*", i);
+      }
+      CHECK(d.k[0] == cfg.gains.translational_stiffness, "translation unchanged");
+      CHECK(d.k[3] != d.k[5], "rx and rz have different K");
+
+      // regression: scalar config == xyz = [Kr,Kr,Kr] == formula of the previous version (bit-exact)
+      const DampingDesign ds = designDamping(cfg.gains, cfg.damping, scale, dt, lam, lam, lam, false);
+      GainsConfig g3 = cfg.gains;
+      g3.rotational_stiffness_per_axis = true;
+      g3.rotational_stiffness_xyz = {cfg.gains.rotational_stiffness, cfg.gains.rotational_stiffness, cfg.gains.rotational_stiffness};
+      const DampingDesign d3 = designDamping(g3, cfg.damping, scale, dt, lam, lam, lam, false);
+      for (std::size_t i = 0; i < 6; ++i) {
+        const double k = i < 3 ? cfg.gains.translational_stiffness : cfg.gains.rotational_stiffness;  // previous version
+        const double z = i < 3 ? cfg.damping.zeta_trans : cfg.damping.zeta_rot;
+        const double dref = std::min(2.0 * z * std::sqrt(k * lam[i]), cap * lam[i] / dt);
+        CHECK(ds.k[i] == k && ds.d[i] == dref, "scalar: K and D as before (axis %zu)", i);
+        CHECK(ds.d[i] == d3.d[i] && ds.k[i] == d3.k[i] && ds.a[i] == d3.a[i] && ds.b[i] == d3.b[i] &&
+                  ds.rho[i] == d3.rho[i] && ds.g1[i] == d3.g1[i] && ds.g2[i] == d3.g2[i] && ds.d_stop[i] == d3.d_stop[i],
+              "scalar vs xyz=[Kr,Kr,Kr]: identical design (axis %zu)", i);
+        CHECK(ds.g1[i] == gainMargin(ds.a[i], ds.b[i], 1), "scalar: g* (axis %zu)", i);
+      }
+    }
+
+    std::printf("[damping.rotational_d_max_xyz: D_i = min(D_i, d_max_i) on rx, ry, rz; absent/huge = unchanged]\n");
+    {
+      const Array6 lam = {9.0, 3.0, 4.0, 0.0381, 0.1427, 0.0002};
+      GainsConfig gx = cfg.gains;
+      gx.rotational_stiffness_per_axis = true;
+      gx.rotational_stiffness_xyz = {150.0, 150.0, 10.0};
+      DampingConfig none = cfg.damping;
+      none.rotational_d_max_xyz.clear();
+      const DampingDesign d0 = designDamping(gx, none, scale, dt, lam, lam, lam, false);
+      DampingConfig big = cfg.damping;
+      big.rotational_d_max_xyz = {1e9, 1e9, 1e9};
+      const DampingDesign db = designDamping(gx, big, scale, dt, lam, lam, lam, false);
+      DampingConfig lim = cfg.damping;
+      lim.rotational_d_max_xyz = {1.0, 0.5, 1.0};  // rz limit above its own D: no effect there
+      const DampingDesign dl = designDamping(gx, lim, scale, dt, lam, lam, lam, false);
+      for (std::size_t i = 0; i < 6; ++i) {
+        CHECK(d0.d[i] == db.d[i] && d0.d_stop[i] == db.d_stop[i] && d0.a[i] == db.a[i] && d0.b[i] == db.b[i] &&
+                  d0.rho[i] == db.rho[i] && d0.g1[i] == db.g1[i] && d0.g2[i] == db.g2[i] && d0.zeta[i] == db.zeta[i],
+              "huge d_max == no key, bit-exact (axis %zu)", i);
+        if (i < 3) CHECK(dl.d[i] == d0.d[i], "translation untouched (axis %zu)", i);
+      }
+      const double lim_v[3] = {1.0, 0.5, 1.0};
+      for (std::size_t i = 3; i < 6; ++i) {
+        const double want = std::min(d0.d[i], lim_v[i - 3]);
+        CHECK(dl.d[i] == want, "axis %zu: D = min(D, d_max) = %.4f (got %.4f)", i, want, dl.d[i]);
+        CHECK(dl.d_stop[i] <= lim_v[i - 3] && dl.d_stop[i] <= d0.d_stop[i], "axis %zu: D_stop bounded", i);
+        CHECK(dl.a[i] == dl.d[i] * dt / dl.lambda_min[i] && dl.b[i] == d0.b[i], "axis %zu: a recomputed from the clamped D, b unchanged", i);
+        CHECK(dl.g1[i] == gainMargin(dl.a[i], dl.b[i], 1), "axis %zu: g* recomputed", i);
+        CHECK(std::fabs(dl.zeta[i] - dl.d[i] / (2.0 * std::sqrt(dl.k[i] * lam[i]))) < 1e-15, "axis %zu: zeta of the clamped D", i);
+      }
+      CHECK(dl.d[3] == 1.0 && dl.d[4] == 0.5 && dl.d[5] == d0.d[5], "rx, ry clamped, rz untouched");
+      DampingConfig ov = lim;
+      ov.override_d = {20.0, 20.0, 20.0, 8.8, 8.8, 8.8};
+      const DampingDesign o = designDamping(gx, ov, scale, dt, lam, lam, lam, false);
+      CHECK(o.d[3] == 8.8 && o.d[4] == 8.8, "override_d wins over rotational_d_max_xyz");
     }
   } catch (const std::exception& e) {
     std::printf("EXCEPTION: %s\n", e.what());

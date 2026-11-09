@@ -151,7 +151,20 @@ Config loadConfig(const std::string& yaml_path) {
     const Node s = section(root, "gains");
     GainsConfig& g = c.gains;
     g.translational_stiffness = req<double>(s, "gains", "translational_stiffness");
-    g.rotational_stiffness = req<double>(s, "gains", "rotational_stiffness");
+    const bool has_scalar_kr = s["rotational_stiffness"].IsDefined();
+    const bool has_xyz_kr = s["rotational_stiffness_xyz"].IsDefined();
+    if (has_scalar_kr && has_xyz_kr) {
+      throw std::runtime_error(
+          "config: gains.rotational_stiffness and gains.rotational_stiffness_xyz are both set: use only one");
+    }
+    if (has_xyz_kr) {
+      g.rotational_stiffness_per_axis = true;
+      g.rotational_stiffness_xyz = reqArray<3>(s, "gains", "rotational_stiffness_xyz");
+      for (double v : g.rotational_stiffness_xyz) requireFinitePositive(v, "gains.rotational_stiffness_xyz[*]");
+      g.rotational_stiffness = *std::min_element(g.rotational_stiffness_xyz.begin(), g.rotational_stiffness_xyz.end());
+    } else {
+      g.rotational_stiffness = req<double>(s, "gains", "rotational_stiffness");
+    }
     g.translational_damping = req<double>(s, "gains", "translational_damping");
     g.rotational_damping = req<double>(s, "gains", "rotational_damping");
     g.nullspace_stiffness = req<double>(s, "gains", "nullspace_stiffness");
@@ -181,6 +194,11 @@ Config loadConfig(const std::string& yaml_path) {
     d.max_damping_per_sample = req<double>(s, "damping", "max_damping_per_sample");
     d.max_q_drift_rad = req<double>(s, "damping", "max_q_drift_rad");
     d.override_d = opt<std::vector<double>>(s, "damping", "override_d", std::vector<double>());
+    d.rotational_d_max_xyz = opt<std::vector<double>>(s, "damping", "rotational_d_max_xyz", std::vector<double>());
+    if (!d.rotational_d_max_xyz.empty()) {
+      if (d.rotational_d_max_xyz.size() != 3) throw std::runtime_error("config: damping.rotational_d_max_xyz must be empty or have 3 values");
+      for (double v : d.rotational_d_max_xyz) requireFinitePositive(v, "damping.rotational_d_max_xyz[*]");
+    }
     requireFinitePositive(d.zeta_trans, "damping.zeta_trans");
     requireFinitePositive(d.zeta_rot, "damping.zeta_rot");
     requireFinitePositive(d.max_damping_per_sample, "damping.max_damping_per_sample");

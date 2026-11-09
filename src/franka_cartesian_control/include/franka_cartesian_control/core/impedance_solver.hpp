@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <limits>
 #include "franka_cartesian_control/core/robot_model.hpp"
 #include "franka_cartesian_control/core/cartesian_error.hpp"
 
@@ -52,6 +53,9 @@ class CartesianImpedanceSolver {
     // Task-space compliance gains (N/m and Nm/rad)
     double translational_stiffness = 2000.0;  ///< Cartesian linear stiffness (N/m)
     double rotational_stiffness = 150.0;      ///< Cartesian angular stiffness (Nm/rad)
+    /// Optional per-axis angular stiffness [Krx Kry Krz] (base frame). Used instead of
+    /// rotational_stiffness only if all three values are finite; NaN (default) = scalar behaviour.
+    Eigen::Vector3d rotational_stiffness_xyz = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
     double translational_damping = 89.0;      ///< Cartesian linear damping (Ns/m)
     double rotational_damping = 7.0;          ///< Cartesian angular damping (Nms/rad)
 

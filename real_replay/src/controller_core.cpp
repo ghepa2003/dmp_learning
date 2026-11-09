@@ -20,6 +20,10 @@ core::CartesianImpedanceSolver::Params makeParams(const GainsConfig& g) {
   core::CartesianImpedanceSolver::Params p;
   p.translational_stiffness = g.translational_stiffness;
   p.rotational_stiffness = g.rotational_stiffness;
+  if (g.rotational_stiffness_per_axis) {
+    p.rotational_stiffness_xyz = Eigen::Vector3d(g.rotational_stiffness_xyz[0], g.rotational_stiffness_xyz[1],
+                                                 g.rotational_stiffness_xyz[2]);
+  }
   // Damping is NOT done by the solver: it is added per axis by axisDampingTorque(). With
   // Dt = Dr = 0 the solver's own damping term vanishes. gains.translational/rotational_damping
   // are intentionally unused.
@@ -100,13 +104,20 @@ DampingDesign designDamping(const GainsConfig& gains, const DampingConfig& dampi
     }
     r.lambda_min[i] = mn;
     const bool trans = i < 3;
-    r.k[i] = trans ? gains.translational_stiffness : gains.rotational_stiffness;
+    r.k[i] = trans ? gains.translational_stiffness
+                   : (gains.rotational_stiffness_per_axis ? gains.rotational_stiffness_xyz[i - 3]
+                                                          : gains.rotational_stiffness);
     const double zeta_target = trans ? damping.zeta_trans : damping.zeta_rot;
     const double d_zeta = 2.0 * zeta_target * std::sqrt(r.k[i] * act);
     const double d_cap = damping.max_damping_per_sample * mn / dt;
     r.d[i] = std::min(d_zeta, d_cap);
     r.capped[i] = d_cap < d_zeta;
     r.d_stop[i] = std::min(stop_scale * r.d[i], d_cap);
+    if (!trans && !damping.rotational_d_max_xyz.empty()) {  // optional upper bound on the rotational D (not applied to override_d)
+      const double dmax = damping.rotational_d_max_xyz[i - 3];
+      r.d[i] = std::min(r.d[i], dmax);
+      r.d_stop[i] = std::min(r.d_stop[i], dmax);
+    }
   }
   if (!damping.override_d.empty()) {
     r.overridden = true;
@@ -295,6 +306,7 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
   core::CartesianImpedanceSolver::Params p = base_params_;
   p.translational_stiffness *= alpha;
   p.rotational_stiffness *= alpha;
+  p.rotational_stiffness_xyz *= alpha;  // NaN (scalar mode) stays NaN
   p.nullspace_stiffness *= alpha;
   solver_.setParams(p);
 

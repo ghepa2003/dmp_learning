@@ -12,7 +12,11 @@ CartesianImpedanceSolver::Matrix6d CartesianImpedanceSolver::stiffnessMatrix() c
   // Construct a 6x6 Cartesian stiffness matrix K = diag([K_trans * I_3, K_rot * I_3])
   Matrix6d K = Matrix6d::Zero();
   K.topLeftCorner(3, 3) = params_.translational_stiffness * Eigen::Matrix3d::Identity();
-  K.bottomRightCorner(3, 3) = params_.rotational_stiffness * Eigen::Matrix3d::Identity();
+  if (params_.rotational_stiffness_xyz.allFinite()) {
+    K.bottomRightCorner(3, 3) = params_.rotational_stiffness_xyz.asDiagonal();
+  } else {
+    K.bottomRightCorner(3, 3) = params_.rotational_stiffness * Eigen::Matrix3d::Identity();
+  }
   return K;
 }
 

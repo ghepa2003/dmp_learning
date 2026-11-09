@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -194,6 +195,91 @@ void testLoopBehaviour(const Config& base, const std::string& urdf) {
   }
 }
 
+
+void testSolverStiffness(const Config& cfg, const std::string& urdf) {
+  std::printf("[solver stiffness: field unset == diag(Kt I3, Kr I3); per-axis field; ramp through ReplayLoop]\n");
+  core::RobotModel model(urdf, cfg.robot.joint_names, cfg.robot.ee_frame);
+  std::mt19937 rng(321);
+  std::uniform_real_distribution<double> u(-1.0, 1.0);
+  const double Kt = cfg.gains.translational_stiffness, Kr = cfg.gains.rotational_stiffness;
+  bool exact_default = true, exact_xyz_same = true, exact_axis = true, exact_partial = true, exact_torque = true;
+  for (int n = 0; n < 200; ++n) {
+    const JointVec q = readyPlus(rng, 0.4);
+    const JointVec dq = JointVec::Zero();
+    model.update(q, dq);
+    core::CartesianError err;
+    err.linear = Eigen::Vector3d(0.05 * u(rng), 0.05 * u(rng), 0.05 * u(rng));
+    err.angular = Eigen::Vector3d(0.3 * u(rng), 0.3 * u(rng), 0.3 * u(rng));
+    const JointVec prev = JointVec::Zero();
+
+    core::CartesianImpedanceSolver::Params p = paramsFrom(cfg.gains, 0.0, 0.0);
+    core::CartesianImpedanceSolver s0(p);  // field unset (NaN)
+    const JointVec t0 = s0.computeTorque(model, err, q, dq, prev);
+    // dq = 0, Dt = Dr = 0: contact-wrench estimate = -(K e), exactly the diagonal law
+    const auto w0 = s0.lastEstimatedContactWrench();
+    for (int i = 0; i < 3; ++i) {
+      exact_default = exact_default && (w0(i) == -(Kt * err.linear(i))) && (w0(3 + i) == -(Kr * err.angular(i)));
+    }
+    core::CartesianImpedanceSolver::Params px = p;
+    px.rotational_stiffness_xyz = Eigen::Vector3d(Kr, Kr, Kr);
+    core::CartesianImpedanceSolver sx(px);
+    exact_xyz_same = exact_xyz_same && (sx.computeTorque(model, err, q, dq, prev) == t0);
+    core::CartesianImpedanceSolver::Params pn = p;  // one NaN -> scalar fallback
+    pn.rotational_stiffness_xyz = Eigen::Vector3d(150.0, std::numeric_limits<double>::quiet_NaN(), 10.0);
+    core::CartesianImpedanceSolver sn(pn);
+    exact_partial = exact_partial && (sn.computeTorque(model, err, q, dq, prev) == t0);
+    core::CartesianImpedanceSolver::Params pa = p;  // per axis
+    pa.rotational_stiffness_xyz = Eigen::Vector3d(150.0, 150.0, 10.0);
+    core::CartesianImpedanceSolver sa(pa);
+    const JointVec ta = sa.computeTorque(model, err, q, dq, prev);
+    const auto wa = sa.lastEstimatedContactWrench();
+    const double kk[3] = {150.0, 150.0, 10.0};
+    for (int i = 0; i < 3; ++i) exact_axis = exact_axis && (wa(3 + i) == -(kk[i] * err.angular(i)));
+    // torque = scalar torque + J^T [0; (K_i - Kr) e_i]  (nullspace/Coriolis parts are identical)
+    Eigen::Matrix<double, 6, 1> de = Eigen::Matrix<double, 6, 1>::Zero();
+    for (int i = 0; i < 3; ++i) de(3 + i) = (kk[i] - Kr) * err.angular(i);
+    const JointVec expect = t0 + model.jacobian().transpose() * de;
+    exact_torque = exact_torque && ((ta - expect).lpNorm<Eigen::Infinity>() < 1e-9);
+  }
+  CHECK(exact_default, "unset field: wrench estimate == -diag(Kt I3, Kr I3) e, bit-exact");
+  CHECK(exact_xyz_same, "xyz = [Kr,Kr,Kr]: torque bit-identical to the scalar solver");
+  CHECK(exact_partial, "one NaN in xyz: falls back to the scalar Kr, bit-identical");
+  CHECK(exact_axis, "xyz = [150,150,10]: wrench = -diag(150,150,10) e_rot, bit-exact");
+  CHECK(exact_torque, "xyz = [150,150,10]: torque = scalar torque + J^T [0;(K_i-Kr) e_i] (1e-9)");
+  std::printf("  200 random states: default exact=%d xyz_same exact=%d partial exact=%d axis exact=%d torque=%d\n",
+              exact_default, exact_xyz_same, exact_partial, exact_axis, exact_torque);
+
+  // ReplayLoop with the ramp active: scalar config vs xyz=[Kr,Kr,Kr] -> identical torque every cycle
+  Config a = relaxedConfig(cfg, {});
+  a.gains.gain_ramp_s = 1.0;
+  a.gains.gain_ramp_initial = 0.3;
+  Config b = a;
+  b.gains.rotational_stiffness_per_axis = true;
+  b.gains.rotational_stiffness_xyz = {Kr, Kr, Kr};
+  ReplayLoop la(a, urdf, std::make_unique<HoldSource>(30.0));
+  ReplayLoop lb(b, urdf, std::make_unique<HoldSource>(30.0));
+  la.setTrackingGuardEnabled(false);
+  lb.setTrackingGuardEnabled(false);
+  la.prepareDamping(a.dry_run.q, nullptr, nullptr);
+  lb.prepareDamping(b.dry_run.q, nullptr, nullptr);
+  LoopInput in;
+  in.q = a.dry_run.q;
+  in.period_s = 1e-3;
+  LoopOutput oa, ob;
+  bool same = true;
+  for (int k = 0; k < 300; ++k) {
+    for (std::size_t i = 0; i < 7; ++i) {
+      in.q[i] = a.dry_run.q[i] + 0.01 * std::sin(0.01 * k + static_cast<double>(i));
+      in.dq[i] = 0.1 * std::cos(0.02 * k + static_cast<double>(i));
+    }
+    la.step(in, oa);
+    lb.step(in, ob);
+    same = same && (oa.tau == ob.tau);
+  }
+  CHECK(same, "ReplayLoop with ramp: scalar and xyz=[Kr,Kr,Kr] give identical torques over 300 cycles");
+  std::printf("  ReplayLoop 300 cycles with ramp (alpha 0.3 -> 1): scalar == xyz[Kr,Kr,Kr] : %d\n", (int)same);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -216,6 +302,7 @@ int main(int argc, char** argv) {
     testHelperEquivalence(cfg, ss.str());
     testLoopEquivalence(cfg, ss.str());
     testLoopBehaviour(cfg, ss.str());
+    testSolverStiffness(cfg, ss.str());
   } catch (const std::exception& e) {
     std::printf("EXCEPTION: %s\n", e.what());
     return 2;
