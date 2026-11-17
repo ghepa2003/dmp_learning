@@ -126,6 +126,7 @@ struct EndEffectorConfig {
 struct PreflightConfig {
   bool abort_on_failure;
   double m_ee_max_kg;
+  bool fk_compare_o_t_ee = false;  ///< true: model FK of ee_frame vs O_T_EE (ee_frame = TCP); false: vs flange
   double m_load_max_kg;
   double fk_position_tol_m;
   double fk_rotation_tol_deg;

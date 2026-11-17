@@ -280,6 +280,7 @@ Config loadConfig(const std::string& yaml_path) {
     PreflightConfig& p = c.preflight;
     p.abort_on_failure = req<bool>(s, "preflight", "abort_on_failure");
     p.m_ee_max_kg = req<double>(s, "preflight", "m_ee_max_kg");
+    p.fk_compare_o_t_ee = opt<bool>(s, "preflight", "fk_compare_o_t_ee", false);
     p.m_load_max_kg = req<double>(s, "preflight", "m_load_max_kg");
     p.fk_position_tol_m = req<double>(s, "preflight", "fk_position_tol_m");
     p.fk_rotation_tol_deg = req<double>(s, "preflight", "fk_rotation_tol_deg");

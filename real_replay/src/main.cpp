@@ -420,7 +420,7 @@ void preflightRobot(franka::Robot& robot, const franka::RobotState& s, ReplayLoo
   m.update(toVec(s.q), JointVec::Zero());
   Eigen::Map<const Eigen::Matrix4d> O_T_EE(s.O_T_EE.data());
   Eigen::Map<const Eigen::Matrix4d> F_T_EE(s.F_T_EE.data());
-  const Eigen::Matrix4d O_T_F = O_T_EE * F_T_EE.inverse();
+  const Eigen::Matrix4d O_T_F = cfg.preflight.fk_compare_o_t_ee ? Eigen::Matrix4d(O_T_EE) : Eigen::Matrix4d(O_T_EE * F_T_EE.inverse());
   const Eigen::Vector3d p_state = O_T_F.block<3, 1>(0, 3);
   const Eigen::Matrix3d R_state = O_T_F.block<3, 3>(0, 0);
   const double dp = (p_state - m.eePosition()).norm();
