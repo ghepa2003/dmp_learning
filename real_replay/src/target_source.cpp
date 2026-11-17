@@ -59,9 +59,46 @@ StepSource::StepSource(const StepConfig& cfg, bool rotational) : cfg_(cfg), rota
     throw std::invalid_argument("StepSource: return_duration_s must be > 0");
   }
   total_ = cfg.move_duration_s + cfg.dwell_s + (cfg.return_to_start ? cfg.return_duration_s : 0.0);
+  if (!cfg.sequence.empty()) {  // multi-leg profile: initial hold, then [move_s, hold_s] per leg
+    if (!(std::isfinite(cfg.initial_hold_s) && cfg.initial_hold_s >= 0.0)) {
+      throw std::invalid_argument("StepSource: initial_hold_s must be finite and >= 0");
+    }
+    double t = cfg.initial_hold_s;
+    double f_prev = 0.0;
+    for (const StepWaypoint& w : cfg.sequence) {
+      if (!(std::isfinite(w.f) && std::isfinite(w.move_s) && w.move_s > 0.0 && std::isfinite(w.hold_s) && w.hold_s >= 0.0)) {
+        throw std::invalid_argument("StepSource: invalid sequence leg");
+      }
+      legs_.push_back({t, t + w.move_s, t + w.move_s + w.hold_s, f_prev, w.f});
+      t += w.move_s + w.hold_s;
+      f_prev = w.f;
+    }
+    total_ = t;
+  } else if (cfg.initial_hold_s != 0.0) {
+    throw std::invalid_argument("StepSource: initial_hold_s requires a sequence");
+  }
 }
 
 void StepSource::profile(double t, double& f, double& df) const {
+  if (!legs_.empty()) {
+    f = 0.0;
+    df = 0.0;
+    if (t < legs_.front().t0) return;  // initial hold at the start pose
+    for (const Leg& g : legs_) {
+      if (t < g.t1) {  // moving: smoothstep between the two positions
+        const double x = (t - g.t0) / (g.t1 - g.t0);
+        f = g.f0 + (g.f1 - g.f0) * smoothstep(x);
+        df = (g.f1 - g.f0) * smoothstepDerivative(x) / (g.t1 - g.t0);
+        return;
+      }
+      if (t < g.t2) {  // holding at the leg's end position
+        f = g.f1;
+        return;
+      }
+    }
+    f = legs_.back().f1;  // after the end
+    return;
+  }
   const double t1 = cfg_.move_duration_s;
   const double t2 = t1 + cfg_.dwell_s;
   if (t < t1) {

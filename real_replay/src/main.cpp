@@ -47,6 +47,7 @@
 #include "real_replay/preflight_checks.hpp"
 #include "real_replay/prodmp_source.hpp"
 #include "real_replay/safety.hpp"
+#include "real_replay/sha256.hpp"
 #include "real_replay/target_source.hpp"
 
 namespace {
@@ -415,6 +416,14 @@ void preflightRobot(franka::Robot& robot, const franka::RobotState& s, ReplayLoo
 
   preflightModel(loop, cfg, s.q, report, /*robot_mode=*/true, moves);
 
+  if (cfg.start_pose_check.present) {  // optional: O_T_EE read from the robot vs the expected start pose
+    const StartPoseResult sp = checkStartPose(cfg.start_pose_check, s.O_T_EE);
+    report.check("start pose (O_T_EE) matches start_pose_check", sp.ok,
+                 fmt("position distance %.4f m (tol %.4f), rotation distance %.4f rad (tol %.4f); expected p=[%.4f %.4f %.4f]",
+                     sp.dist_m, cfg.start_pose_check.tol_position_m, sp.angle_rad, cfg.start_pose_check.tol_rotation_rad,
+                     cfg.start_pose_check.position_m[0], cfg.start_pose_check.position_m[1], cfg.start_pose_check.position_m[2]));
+  }
+
   // FK of the model (control frame) against the flange pose reconstructed from the robot state.
   core::RobotModel& m = loop.model();
   m.update(toVec(s.q), JointVec::Zero());
@@ -623,10 +632,36 @@ std::string logPath(const Cli& cli, const Config& cfg, const char* kind) {
   return p.string();
 }
 
-void writeLog(const ReplayLoop& loop, const std::string& path) {
+void printFrictionFf(const Config& cfg) {
+  const FrictionFfConfig& f = cfg.friction_ff;
+  if (!f.enabled) return;
+  std::printf("friction feedforward ON: alpha %.3f (x K gain ramp), eps_v %.4f rad/s, DLS lambda %.3f\n", f.alpha,
+              f.eps_v_rad_s, f.dls_lambda);
+}
+
+/// Sidecar <csv>.meta.txt: which config produced the log (path + SHA-256) and the friction_ff settings.
+void writeMeta(const Config& cfg, const std::string& csv_path) {
+  try {
+    const std::string meta = csv_path + ".meta.txt";
+    std::FILE* f = std::fopen(meta.c_str(), "wx");
+    if (!f) throw std::runtime_error("cannot create '" + meta + "'");
+    const FrictionFfConfig& ff = cfg.friction_ff;
+    std::fprintf(f, "csv: %s\nconfig_path: %s\nconfig_sha256: %s\n", csv_path.c_str(), cfg.config_path.c_str(),
+                 sha256FileHex(cfg.config_path).c_str());
+    std::fprintf(f, "friction_ff.enabled: %s\nfriction_ff.alpha: %.9g\nfriction_ff.eps_v_rad_s: %.9g\nfriction_ff.dls_lambda: %.9g\n",
+                 ff.enabled ? "true" : "false", ff.alpha, ff.eps_v_rad_s, ff.dls_lambda);
+    std::fclose(f);
+    std::printf("log meta written: %s\n", meta.c_str());
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "WARNING: log meta not written: %s\n", e.what());
+  }
+}
+
+void writeLog(const ReplayLoop& loop, const Config& cfg, const std::string& path) {
   std::string err;
   if (loop.logger().writeCsv(path, &err)) {
     std::printf("log written: %s (%zu rows)\n", path.c_str(), loop.logger().size());
+    writeMeta(cfg, path);
   } else {
     std::fprintf(stderr, "ERROR: log not written: %s\n", err.c_str());
   }
@@ -706,6 +741,7 @@ int runDry(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   if (cfg.dry_run.ignore_tracking_error) loop.setTrackingGuardEnabled(false);
 
   std::printf("=== DRY-RUN (no robot connection) ===\n");
+  printFrictionFf(cfg);
   Report report;
   checkLibfranka(cfg, report, /*fatal=*/false);
   applyRuntimeFlags(cfg);
@@ -769,7 +805,7 @@ int runDry(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
                 loop.rateLimitedCycles(), loop.clampedCycles());
   }
 
-  writeLog(loop, csv_path);
+  writeLog(loop, cfg, csv_path);
   std::printf("dry-run %s (%d failure(s), %d warning(s))\n", report.failures == 0 ? "OK" : "FAILED",
               report.failures, report.warnings);
   return report.failures == 0 ? 0 : 1;
@@ -824,6 +860,7 @@ int runRobot(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   int exit_code = 0;
 
   std::printf("=== ROBOT RUN: %s, mode %s, %.1f s ===\n", cfg.robot.ip.c_str(), cli.mode.c_str(), nominal_s);
+  printFrictionFf(cfg);
   Report report;
   checkLibfranka(cfg, report, /*fatal=*/true);
   if (report.failures > 0 && cfg.preflight.abort_on_failure) {
@@ -890,7 +927,7 @@ int runRobot(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   const RunStats st = collectStats(loop);
   printSummary(loop, st);
   printStats("period", st.period_ms, "ms");
-  writeLog(loop, csv_path);
+  writeLog(loop, cfg, csv_path);
 
   if (exit_code != 0) return exit_code;
   return loop.stopReason() == StopReason::kCompleted ? 0 : 2;
@@ -920,6 +957,13 @@ int main(int argc, char** argv) {
 
   try {
     Config cfg = loadConfig(cli.config);
+    {
+      std::string why;
+      if (!trackingIgnoreAllowed(cfg, cli.dry_run, &why)) {  // before any connection to the robot
+        std::fprintf(stderr, "error: %s (dry_run.ignore_tracking_error: true in %s)\n", why.c_str(), cfg.config_path.c_str());
+        return 1;
+      }
+    }
     if (!cli.robot_ip.empty()) cfg.robot.ip = cli.robot_ip;
     if (!cli.urdf.empty()) cfg.paths.urdf = cli.urdf;
     if (cli.duration_s > 0.0) {

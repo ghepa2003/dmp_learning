@@ -28,14 +28,20 @@ struct LogRecord {
   double q_meas[4];     ///< FK quaternion w,x,y,z
   double e_pos[3];      ///< position error actually used by the law
   double e_rot[3];      ///< orientation error (rotation vector) actually used by the law
+  // ---- written to the CSV only when the logger is constructed with extended = true (friction_ff) ----
+  double tau_ff[7];     ///< friction feedforward added before the safety layer
+  double vhat[7];       ///< J^+ * xdot_ref [rad/s]
 };
 
 class Logger {
  public:
   static constexpr std::size_t kNumFields = sizeof(LogRecord) / sizeof(double);
+  /// Columns written when not extended (everything before tau_ff).
+  static constexpr std::size_t kBaseFields = kNumFields - 14;
 
-  /// Allocates and zero-fills (touches every page) `capacity` records.
-  explicit Logger(std::size_t capacity);
+  /// Allocates and zero-fills (touches every page) `capacity` records. `extended` adds the
+  /// columns tau_ff1..7 and vhat1..7 to the CSV (otherwise the format is the original one).
+  explicit Logger(std::size_t capacity, bool extended = false);
 
   /// Next free slot, or nullptr when full.
   LogRecord* next() noexcept { return size_ < buf_.size() ? &buf_[size_++] : nullptr; }
@@ -53,6 +59,7 @@ class Logger {
  private:
   std::vector<LogRecord> buf_;
   std::size_t size_ = 0;
+  bool extended_ = false;
 };
 
 }  // namespace real_replay

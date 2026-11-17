@@ -151,6 +151,19 @@ if(REAL_REPLAY_BUILD_TESTS)
   add_test(NAME preflight_checks COMMAND test_preflight_checks "${RR_CONFIG}" "${RR_URDF}")
   set_tests_properties(preflight_checks PROPERTIES SKIP_RETURN_CODE 77)
 
+  add_executable(test_start_pose test/test_start_pose.cpp)
+  target_link_libraries(test_start_pose PRIVATE rr_lib)
+  add_test(NAME start_pose COMMAND test_start_pose "${CMAKE_CURRENT_SOURCE_DIR}/config/replay_demo1014_f030_hand_kr30_ffa100.yaml" "${RR_CONFIG}")
+
+  add_executable(test_tracking_ignore test/test_tracking_ignore.cpp)
+  target_link_libraries(test_tracking_ignore PRIVATE rr_lib)
+  add_test(NAME tracking_ignore COMMAND test_tracking_ignore "${RR_CONFIG}")
+
+  add_executable(test_friction_ff test/test_friction_ff.cpp)
+  target_link_libraries(test_friction_ff PRIVATE rr_lib)
+  add_test(NAME friction_ff COMMAND test_friction_ff "${RR_CONFIG}" "${RR_URDF}")
+  set_tests_properties(friction_ff PROPERTIES SKIP_RETURN_CODE 77)
+
   add_executable(test_replay_dryrun test/test_replay_dryrun.cpp)
   target_link_libraries(test_replay_dryrun PRIVATE rr_lib)
   # Count heap allocations: operator new is replaced in the test; direct malloc-family calls

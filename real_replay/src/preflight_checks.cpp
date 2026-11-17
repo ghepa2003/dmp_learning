@@ -1,11 +1,29 @@
 #include "real_replay/preflight_checks.hpp"
 
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <regex>
 #include <stdexcept>
 
 namespace real_replay {
+
+StartPoseResult checkStartPose(const StartPoseCheckConfig& e, const std::array<double, 16>& o_t_ee) {
+  StartPoseResult r;
+  Eigen::Map<const Eigen::Matrix4d> T(o_t_ee.data());
+  const Eigen::Vector3d p_exp(e.position_m[0], e.position_m[1], e.position_m[2]);
+  r.dist_m = (Eigen::Vector3d(T.block<3, 1>(0, 3)) - p_exp).norm();
+  const Eigen::Quaterniond q_exp(e.quaternion_wxyz[0], e.quaternion_wxyz[1], e.quaternion_wxyz[2], e.quaternion_wxyz[3]);
+  const Eigen::Quaterniond q_rob = Eigen::Quaterniond(Eigen::Matrix3d(T.block<3, 3>(0, 0))).normalized();
+  const double d = std::min(1.0, std::fabs(q_rob.dot(q_exp.normalized())));  // |dot|: q and -q are the same rotation
+  r.angle_rad = 2.0 * std::acos(d);
+  r.ok = std::isfinite(r.dist_m) && std::isfinite(r.angle_rad) && r.dist_m <= e.tol_position_m &&
+         r.angle_rad <= e.tol_rotation_rad;
+  return r;
+}
 
 MeasuredGravityResult checkGravityVsMeasured(const Array7& g_franka, const Array7& tau_j, const Array7& dq,
                                              double tol_nm, double still_max_dq_rad_s) {

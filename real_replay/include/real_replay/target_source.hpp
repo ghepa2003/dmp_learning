@@ -7,6 +7,8 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
+#include <vector>
+
 #include "real_replay/config.hpp"
 
 namespace real_replay {
@@ -96,6 +98,11 @@ class StepSource final : public ITargetSource {
   StepConfig cfg_;
   bool rotational_ = false;
   Eigen::Vector3d axis_;
+  struct Leg {
+    double t0, t1, t2;  ///< start of the move, end of the move, end of the hold [s]
+    double f0, f1;      ///< displacement fraction at the start / end of the move
+  };
+  std::vector<Leg> legs_;  ///< empty: the classic move/dwell/return profile
   double total_;
   double elapsed_ = 0.0;
   Pose act_;

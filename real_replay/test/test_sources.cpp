@@ -4,7 +4,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <random>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "haptic_dmp_learning/core/prodmp_io.hpp"
@@ -357,6 +360,233 @@ void testStepSource() {
   CHECK(((end.p - act.p) - axis * c.amplitude_m).norm() < 1e-9, "no-return ends displaced");
 }
 
+// ---- step.sequence ------------------------------------------------------------------------------
+
+std::string g_cfg_path;  // argv[1]: temp configs are written next to it so relative paths still resolve
+
+std::string slurpFile(const std::string& p) {
+  std::ifstream f(p);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+/// Replaces the whole `step:` block of the config text with `block` (which starts with "step:").
+std::string withStepBlock(const std::string& text, const std::string& block) {
+  const std::size_t b = text.find("\nstep:");
+  if (b == std::string::npos) throw std::runtime_error("fixture: no step: block");
+  std::size_t e = b + 1;
+  while (true) {  // end = next line that starts a new top-level key
+    e = text.find('\n', e);
+    if (e == std::string::npos) {
+      e = text.size();
+      break;
+    }
+    ++e;
+    if (e < text.size() && text[e] != ' ' && text[e] != '#' && text[e] != '\n') break;
+  }
+  return text.substr(0, b + 1) + block + "\n" + text.substr(e);
+}
+
+/// Loads the config with a modified step block; returns the error message ("" if it loaded).
+std::string loadWithStep(const std::string& block, Config* out = nullptr) {
+  const std::string path = g_cfg_path.substr(0, g_cfg_path.find_last_of('/') + 1) + "_tmp_step_seq_test.yaml";
+  { std::ofstream(path) << withStepBlock(slurpFile(g_cfg_path), block); }
+  std::string err;
+  try {
+    Config c = loadConfig(path);
+    if (out) *out = c;
+  } catch (const std::exception& e) {
+    err = e.what();
+  }
+  std::remove(path.c_str());
+  return err;
+}
+
+StepConfig seqConfig(double initial_hold) {
+  StepConfig c{};
+  c.axis = {1.0, 0.0, 0.0};
+  c.amplitude_m = 0.02;
+  c.move_duration_s = 1.0;  // neutral values, as the parser sets them
+  c.initial_hold_s = initial_hold;
+  c.sequence = {{1.0, 1.0, 3.0}, {2.0, 1.0, 0.0}, {1.0, 1.0, 3.0}, {0.0, 1.0, 0.0}};
+  return c;
+}
+
+void testStepSequence() {
+  std::printf("[StepSource sequence]\n");
+  Pose act;
+  act.p = Eigen::Vector3d(0.4292, 0.0, 0.7855);
+  act.q = Eigen::Quaterniond(Eigen::AngleAxisd(0.8, Eigen::Vector3d(1, 1, 0).normalized()));
+  const Eigen::Vector3d ex(1, 0, 0);
+  const double A = 0.02;
+
+  // ---- (a) every position is reached at the end of its move; (b) zero velocity at the nodes ------
+  {
+    const StepConfig c = seqConfig(3.0);
+    StepSource s(c);
+    s.start(act);
+    s.sample(0.0);
+    CHECK(std::fabs(s.nominalDurationS() - 13.0) < 1e-12, "(a) total duration 3 + (1+3) + 1 + (1+3) + 1 = 13 s: %.6f",
+          s.nominalDurationS());
+    struct Node { double t, f; };
+    const Node nodes[] = {{4.0, 1.0}, {7.0, 1.0}, {8.0, 2.0}, {9.0, 1.0}, {12.0, 1.0}, {13.0, 0.0}};
+    for (const Node& nd : nodes) {
+      double f = -1, df = -1;
+      s.profile(nd.t, f, df);
+      CHECK(std::fabs(f - nd.f) < 1e-12, "(a) f(%.1f) = %.9f, expected %.1f", nd.t, f, nd.f);
+    }
+    for (double t : {3.0, 4.0, 7.0, 8.0, 9.0, 12.0, 13.0}) {  // starts and ends of every move
+      double f, df = -1;
+      s.profile(t, f, df);
+      CHECK(df == 0.0, "(b) velocity at node t=%.1f is %g", t, df);
+    }
+    double f0, d0;
+    s.profile(0.0, f0, d0);
+    CHECK(f0 == 0.0 && d0 == 0.0, "initial hold at S");
+    // Run it through sample(): poses and the end point (S), A reached twice.
+    Pose p;
+    int n = 0, in_A = 0;
+    bool was_in_A = false;
+    double max_v = 0.0;
+    Pose prev = act;
+    while (!s.done() && n < 100000) {
+      p = s.sample(1e-3);
+      ++n;
+      const double x = (p.p - act.p).dot(ex);
+      const bool at_A = std::fabs(x - A) < 1e-9;
+      if (at_A && !was_in_A) ++in_A;
+      was_in_A = at_A;
+      max_v = std::max(max_v, ((p.p - prev.p) / 1e-3).norm());
+      prev = p;
+      if (p.q.angularDistance(act.q) > 1e-12 || ((p.p - act.p) - ex * x).norm() > 1e-12) CHECK(false, "orientation / off-axis drift");
+    }
+    CHECK(std::abs(n - 13000) <= 1, "(a) samples to done: %d", n);
+    CHECK((p.p - act.p).norm() < 1e-9, "(a) last point is S");
+    CHECK(in_A == 2, "(a) A is reached twice: %d", in_A);
+    CHECK(max_v <= 0.0325, "peak speed %.5f m/s <= 0.0325", max_v);
+    CHECK(std::fabs(max_v - 0.03) < 1e-4, "peak speed = 1.5*0.02/1.0 = 0.030 m/s: %.5f", max_v);
+    CHECK(std::fabs((s.sample(0.0).p - act.p).norm()) < 1e-9, "stays at S after the end");
+  }
+
+  // ---- (c) derivative vs finite differences ---------------------------------------------------------
+  {
+    StepSource s(seqConfig(3.0));
+    s.start(act);
+    double max_err = 0.0;
+    const double h = 1e-5;
+    for (double t = 0.0; t <= 13.0; t += 0.0137) {
+      double f1, df, d;
+      s.profile(t, f1, df);
+      double fa, fb;  // smoothstep joins hold and move with zero slope (C1), so no node needs skipping
+      s.profile(t - h, fa, d);
+      s.profile(t + h, fb, d);
+      max_err = std::max(max_err, std::fabs(df - (fb - fa) / (2 * h)));
+    }
+    CHECK(max_err < 1e-6, "(c) df vs central finite difference: max error %.2e (1/s)", max_err);
+    // and the twist reported by the source (m/s) vs the difference of the sampled poses
+    s.start(act);
+    s.sample(0.0);
+    Pose prev = act;
+    double max_fd = 0.0;
+    while (!s.done()) {
+      const Pose p = s.sample(1e-3);
+      Eigen::Vector3d v, w;
+      s.twist(v, w);
+      max_fd = std::max(max_fd, (v - (p.p - prev.p) / 1e-3).norm());
+      prev = p;
+    }
+    CHECK(max_fd < 1e-4, "(c) twist vs sampled-pose difference: %.2e m/s", max_fd);
+  }
+
+  // ---- (d) no sequence = today's profile; and the same profile written as a sequence ----------------
+  {
+    StepConfig c{};
+    c.axis = {1.0, 2.0, 2.0};
+    c.amplitude_m = 0.05;
+    c.move_duration_s = 2.0;
+    c.dwell_s = 1.0;
+    c.return_to_start = true;
+    c.return_duration_s = 3.0;
+    const Eigen::Vector3d axis = Eigen::Vector3d(1.0, 2.0, 2.0).normalized();
+    auto ss = [](double x) { x = std::min(1.0, std::max(0.0, x)); return x * x * (3.0 - 2.0 * x); };
+    StepSource s(c);
+    s.start(act);
+    s.sample(0.0);
+    StepConfig q = c;  // the same move/dwell/return as a sequence
+    q.sequence = {{1.0, 2.0, 1.0}, {0.0, 3.0, 0.0}};
+    q.move_duration_s = 1.0;
+    q.dwell_s = 0.0;
+    q.return_to_start = false;
+    q.return_duration_s = 0.0;
+    StepSource sq(q);
+    sq.start(act);
+    sq.sample(0.0);
+    double max_ref = 0.0, max_seq = 0.0;
+    double t = 0.0;
+    int n = 0;
+    while (!s.done() && n < 100000) {
+      const Pose p = s.sample(1e-3);
+      const Pose pq = sq.sample(1e-3);
+      t += 1e-3;
+      ++n;
+      // independent expectation of today's formula
+      const double f = t < 2.0 ? ss(t / 2.0) : (t < 3.0 ? 1.0 : 1.0 - ss((t - 3.0) / 3.0));
+      max_ref = std::max(max_ref, (p.p - (act.p + axis * 0.05 * f)).norm());
+      max_seq = std::max(max_seq, (p.p - pq.p).norm());
+    }
+    CHECK(max_ref < 1e-9, "(d) no sequence: profile equals the classic formula (%.2e)", max_ref);
+    CHECK(max_seq < 1e-9, "(d) the same profile as a sequence is identical (%.2e)", max_seq);
+    CHECK(std::fabs(s.nominalDurationS() - sq.nominalDurationS()) < 1e-12, "(d) same duration");
+  }
+
+  // ---- (e) initial_hold_s shifts every instant -------------------------------------------------------
+  {
+    StepSource s0(seqConfig(0.0)), s3(seqConfig(3.0));
+    double max_shift = 0.0;
+    for (double t = 0.0; t < 16.0; t += 0.0071) {
+      double f3, d3, f0, d0;
+      s3.profile(t, f3, d3);
+      s0.profile(t - 3.0, f0, d0);  // t - 3 < 0: the first leg has not started, profile(t<0) is 0
+      max_shift = std::max(max_shift, std::fabs(f3 - (t < 3.0 ? 0.0 : f0)) + std::fabs(d3 - (t < 3.0 ? 0.0 : d0)));
+    }
+    CHECK(max_shift < 1e-12, "(e) profile(t; hold 3) == profile(t - 3; hold 0): %.2e", max_shift);
+    CHECK(std::fabs(s3.nominalDurationS() - s0.nominalDurationS() - 3.0) < 1e-12, "(e) duration shifted by 3 s");
+    double f, d;
+    s3.profile(2.999, f, d);
+    CHECK(f == 0.0 && d == 0.0, "(e) still at S before 3 s");
+    s3.profile(3.5, f, d);
+    CHECK(f > 0.0 && d > 0.0, "(e) moving at 3.5 s");
+  }
+
+  // ---- (f) configuration ---------------------------------------------------------------------------------
+  {
+    const std::string seq = "  sequence: [{f: 1, move_s: 1.0, hold_s: 3.0}, {f: 0, move_s: 1.0, hold_s: 0.0}]\n";
+    const std::string head = "step:\n  axis: [1.0, 0.0, 0.0]\n  amplitude_m: 0.02\n";
+    Config c;
+    CHECK(loadWithStep(head + "  initial_hold_s: 3.0\n" + seq, &c).empty(), "(f) valid sequence config loads");
+    CHECK(c.step.sequence.size() == 2 && c.step.initial_hold_s == 3.0 && c.step.sequence[0].f == 1.0 && c.step.sequence[0].hold_s == 3.0,
+          "(f) sequence parsed");
+    CHECK(loadWithStep(head + seq, &c).empty() && c.step.initial_hold_s == 0.0, "(f) initial_hold_s defaults to 0");
+    const char* bad[] = {"  dwell_s: 2.0\n", "  return_to_start: true\n", "  return_duration_s: 5.0\n", "  move_duration_s: 5.0\n"};
+    const char* key[] = {"dwell_s", "return_to_start", "return_duration_s", "move_duration_s"};
+    for (int i = 0; i < 4; ++i) {
+      const std::string e = loadWithStep(head + seq + bad[i]);
+      CHECK(e.find(key[i]) != std::string::npos && e.find("sequence") != std::string::npos, "(f) sequence + %s refused: '%s'", key[i], e.c_str());
+    }
+    CHECK(!loadWithStep(head + "  initial_hold_s: 1.0\n  move_duration_s: 1\n  dwell_s: 0\n  return_to_start: false\n  return_duration_s: 0\n").empty(),
+          "(f) initial_hold_s without sequence refused");
+    CHECK(!loadWithStep(head + "  sequence: [{f: 1, move_s: 0.0, hold_s: 1.0}]\n").empty(), "(f) move_s = 0 refused");
+    CHECK(!loadWithStep(head + "  sequence: [{f: 1, move_s: 1.0, hold_s: -1.0}]\n").empty(), "(f) hold_s < 0 refused");
+    CHECK(!loadWithStep(head + "  sequence: [{f: .nan, move_s: 1.0, hold_s: 1.0}]\n").empty(), "(f) f = nan refused");
+    CHECK(!loadWithStep(head + "  sequence: []\n").empty(), "(f) empty sequence refused");
+    CHECK(!loadWithStep(head + "  sequence: [{f: 1, move_s: 1.0}]\n").empty(), "(f) missing hold_s refused");
+    // legacy config (no sequence) still loads
+    CHECK(loadWithStep(head + "  move_duration_s: 5.0\n  dwell_s: 2.0\n  return_to_start: true\n  return_duration_s: 5.0\n", &c).empty() &&
+              c.step.sequence.empty(), "(f) legacy step block still loads, no sequence");
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -372,6 +602,8 @@ int main(int argc, char** argv) {
     testEndBehaviour(cfg);
     testStepSource();
     testStepRotSource();
+    g_cfg_path = argv[1];
+    testStepSequence();
   } catch (const std::exception& e) {
     std::printf("EXCEPTION: %s\n", e.what());
     return 2;

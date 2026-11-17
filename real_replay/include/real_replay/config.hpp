@@ -42,13 +42,25 @@ struct TrajectoryConfig {
   double stop_at_fraction;    ///< replay only: freeze the target at this fraction of tau, (0, 1]
 };
 
+/// One leg of step.sequence: smoothstep from the previous position to f * amplitude_m (f * rot_angle_rad
+/// for step_rot) in move_s, then hold for hold_s.
+struct StepWaypoint {
+  double f;
+  double move_s;
+  double hold_s;
+};
+
 struct StepConfig {
   Array3 axis;               ///< direction in the robot base frame (normalised by the source)
   double amplitude_m;
-  double move_duration_s;    ///< smoothstep out
-  double dwell_s;            ///< pause at the displaced pose
-  bool return_to_start;
-  double return_duration_s;  ///< smoothstep back (used only if return_to_start)
+  double move_duration_s;    ///< smoothstep out            (NOT allowed together with `sequence`)
+  double dwell_s;            ///< pause at the displaced pose (NOT allowed together with `sequence`)
+  bool return_to_start;      ///< (NOT allowed together with `sequence`)
+  double return_duration_s;  ///< smoothstep back (used only if return_to_start; NOT allowed with `sequence`)
+  // Optional multi-leg profile. Non-empty: it replaces move/dwell/return; positions f*amplitude_m from the
+  // activation pose, preceded by a hold of initial_hold_s at the start pose.
+  std::vector<StepWaypoint> sequence;
+  double initial_hold_s = 0.0;  ///< only with `sequence`
   // --mode step_rot only (same profile/dwell/return as the translation; position held):
   Array3 rot_axis = {0.0, 0.0, 1.0};  ///< fixed axis in the robot BASE frame (normalised by the source)
   double rot_angle_rad = 0.087;       ///< peak rotation angle (~5 deg)
@@ -147,6 +159,27 @@ struct RuntimeConfig {
   std::string expected_libfranka_dir;  ///< the loaded libfranka*.so must live under this directory
 };
 
+/// Joint friction feedforward (default OFF; the section is optional in the YAML):
+///   tau_ff,j = alpha * gain_alpha(t) * [ tau_c,j * tanh(vhat_j / eps_v) + b_j * vhat_j ],
+///   vhat = J^+ * xdot_ref   (damped pseudo-inverse of the solver's Jacobian, reference twist only).
+struct FrictionFfConfig {
+  bool enabled = false;
+  double alpha = 0.0;        ///< overall scale, >= 0 (additionally ramped with the K gain_alpha)
+  double eps_v_rad_s = 0.005;
+  double dls_lambda = 0.05;  ///< J^+ = J^T (J J^T + lambda^2 I)^-1
+  Array7 tau_c = {0.615, 0.361, 0.361, 0.562, 0.352, 0.341, 0.154};  ///< Coulomb [Nm]
+  Array7 b = {2.83, 1.89, 2.71, 1.6, 0.38, 0.33, 0.18};              ///< viscous [Nm s/rad]
+};
+
+/// Optional (key `start_pose_check`): in robot mode the pose O_T_EE read from the robot must match this one.
+struct StartPoseCheckConfig {
+  bool present = false;                         ///< false: no check
+  Array3 position_m = {0.0, 0.0, 0.0};          ///< expected O_T_EE position, base frame
+  std::array<double, 4> quaternion_wxyz = {1.0, 0.0, 0.0, 0.0};  ///< expected orientation, REQUIRED (normalised by the check)
+  double tol_position_m = 0.005;
+  double tol_rotation_rad = 0.02;
+};
+
 struct DryRunConfig {
   Array7 q;     ///< fixed activation configuration
   bool paced;   ///< sleep to a 1 kHz cadence between cycles
@@ -170,9 +203,15 @@ struct Config {
   PreflightConfig preflight;
   RuntimeConfig runtime;
   DryRunConfig dry_run;
+  FrictionFfConfig friction_ff;
+  StartPoseCheckConfig start_pose_check;
 };
 
 /// Parses and validates the YAML file. Throws std::runtime_error with a descriptive message.
 Config loadConfig(const std::string& yaml_path);
+
+/// dry_run.ignore_tracking_error disables a safety guard: allowed only in --dry-run. Returns false and
+/// fills *message when the config requests it and the program is not in dry-run mode.
+bool trackingIgnoreAllowed(const Config& cfg, bool dry_run, std::string* message);
 
 }  // namespace real_replay

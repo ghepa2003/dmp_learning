@@ -147,6 +147,24 @@ core::RobotModel::JointVector axisDampingTorque(const core::RobotModel::Jacobian
   return J.transpose() * force;
 }
 
+core::RobotModel::JointVector dlsJointVelocity(const core::RobotModel::Jacobian6x7& J, const Vector6& xdot_ref,
+                                               double lambda) noexcept {
+  Eigen::Matrix<double, 6, 6> A = J * J.transpose();
+  A.diagonal().array() += lambda * lambda;
+  const Vector6 y = A.ldlt().solve(xdot_ref);
+  return J.transpose() * y;
+}
+
+core::RobotModel::JointVector frictionTorque(const core::RobotModel::JointVector& vhat,
+                                             const FrictionFfConfig& cfg, double scale) noexcept {
+  core::RobotModel::JointVector t;
+  for (int j = 0; j < 7; ++j) {
+    const std::size_t k = static_cast<std::size_t>(j);
+    t(j) = scale * (cfg.tau_c[k] * std::tanh(vhat(j) / cfg.eps_v_rad_s) + cfg.b[k] * vhat(j));
+  }
+  return t;
+}
+
 ReplayLoop::ReplayLoop(const Config& cfg, const std::string& urdf_xml,
                        std::unique_ptr<ITargetSource> source)
     : cfg_(cfg),
@@ -155,7 +173,7 @@ ReplayLoop::ReplayLoop(const Config& cfg, const std::string& urdf_xml,
       base_params_(makeParams(cfg.gains)),
       guard_(cfg.safety, toArray(model_.jointLowerLimits()), toArray(model_.jointUpperLimits())),
       source_(std::move(source)),
-      logger_(logCapacity(cfg)) {}
+      logger_(logCapacity(cfg), cfg.friction_ff.enabled) {}
 
 double ReplayLoop::gainAlpha(double t) const noexcept {
   const double a0 = cfg_.gains.gain_ramp_initial;
@@ -315,7 +333,26 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
   const JointVec tau_solver = solver_.computeTorque(model_, err, q, dq, tau_solver_prev_);
   const JointVec tau_damp =
       axisDampingTorque(model_.jacobian(), dq, phase_ == LoopPhase::kStopping ? d_stop_ : d_nom_);
-  const JointVec tau_d = tau_solver + tau_damp;
+  JointVec tau_d = tau_solver + tau_damp;
+
+  // Optional joint friction feedforward from the REFERENCE twist only (never from measurements).
+  // Added before the safety layer, so it goes through the rate limit and the clamp.
+  JointVec tau_ff = JointVec::Zero();
+  JointVec vhat = JointVec::Zero();
+  if (cfg_.friction_ff.enabled) {
+    Vector6 xdot_ref = Vector6::Zero();
+    if (phase_ == LoopPhase::kRunning) {  // the controlled stop holds a still target
+      Eigen::Vector3d v = Eigen::Vector3d::Zero();
+      Eigen::Vector3d w = Eigen::Vector3d::Zero();
+      if (source_->twist(v, w)) {
+        xdot_ref.head<3>() = v;
+        xdot_ref.tail<3>() = w;
+      }
+    }
+    vhat = dlsJointVelocity(model_.jacobian(), xdot_ref, cfg_.friction_ff.dls_lambda);
+    tau_ff = frictionTorque(vhat, cfg_.friction_ff, cfg_.friction_ff.alpha * alpha);
+    tau_d += tau_ff;
+  }
 
   if (!tau_d.allFinite()) {
     if (stop_reason_ == StopReason::kNone || stop_reason_ == StopReason::kCompleted) {
@@ -350,6 +387,8 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
       r->dq[i] = in.dq[k];
       r->tau_J[i] = in.tau_J[k];
       r->tau_cmd[i] = out.tau[k];
+      r->tau_ff[i] = tau_ff(i);
+      r->vhat[i] = vhat(i);
     }
     for (int i = 0; i < 3; ++i) {
       r->p_des[i] = target_.p(i);

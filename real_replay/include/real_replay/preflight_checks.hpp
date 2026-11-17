@@ -2,6 +2,7 @@
 
 // Pure (robot-free) preflight helpers, unit-tested with synthetic data.
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,14 @@ struct UrdfGravityResult {
 };
 
 UrdfGravityResult checkGravityVsUrdf(const Array7& g_franka, const Array7& g_urdf, double warn_nm);
+
+/// Pose O_T_EE read from the robot (column-major 4x4, base frame) against start_pose_check.
+struct StartPoseResult {
+  bool ok = true;
+  double dist_m = 0.0;     ///< |p_robot - p_expected|
+  double angle_rad = 0.0;  ///< geodesic angle between the two orientations
+};
+StartPoseResult checkStartPose(const StartPoseCheckConfig& expected, const std::array<double, 16>& o_t_ee);
 
 /// Returns `urdf_xml` with the mass of the named links multiplied by `factor` and their inertia
 /// tensor (ixx..izz) multiplied by the same factor (same shape, density scaled). Throws if a link

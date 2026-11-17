@@ -7,7 +7,7 @@ namespace real_replay {
 
 static_assert(sizeof(LogRecord) % sizeof(double) == 0, "LogRecord must be a flat array of doubles");
 
-Logger::Logger(std::size_t capacity) : buf_(capacity) {}  // value-initialised: zero-filled
+Logger::Logger(std::size_t capacity, bool extended) : buf_(capacity), extended_(extended) {}  // value-initialised: zero-filled
 
 bool Logger::allFinite() const noexcept {
   for (std::size_t i = 0; i < size_; ++i) {
@@ -21,7 +21,7 @@ bool Logger::allFinite() const noexcept {
 
 namespace {
 
-std::string header() {
+std::string header(bool extended) {
   std::string h = "t,period,cb_us,success_rate,gain_alpha,phase,flags";
   auto add7 = [&h](const char* base) {
     for (int i = 1; i <= 7; ++i) h += std::string(",") + base + std::to_string(i);
@@ -36,6 +36,10 @@ std::string header() {
   h += ",q_meas_w,q_meas_x,q_meas_y,q_meas_z";
   h += ",e_pos_x,e_pos_y,e_pos_z";
   h += ",e_rot_x,e_rot_y,e_rot_z";
+  if (extended) {
+    add7("tau_ff");
+    add7("vhat");
+  }
   return h;
 }
 
@@ -47,12 +51,13 @@ bool Logger::writeCsv(const std::string& path, std::string* error) const {
     if (error) *error = "cannot create '" + path + "' (exists already, or not writable)";
     return false;
   }
-  std::fprintf(f, "%s\n", header().c_str());
+  std::fprintf(f, "%s\n", header(extended_).c_str());
+  const std::size_t nfields = extended_ ? Logger::kNumFields : Logger::kBaseFields;
   char line[Logger::kNumFields * 32 + 8];
   for (std::size_t i = 0; i < size_; ++i) {
     const double* d = reinterpret_cast<const double*>(&buf_[i]);
     int n = 0;
-    for (std::size_t k = 0; k < kNumFields; ++k) {
+    for (std::size_t k = 0; k < nfields; ++k) {
       n += std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n), k == 0 ? "%.9g" : ",%.9g",
                          d[k]);
     }

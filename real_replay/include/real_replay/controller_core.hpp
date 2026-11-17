@@ -98,6 +98,16 @@ core::RobotModel::JointVector axisDampingTorque(const core::RobotModel::Jacobian
                                                 const core::RobotModel::JointVector& dq,
                                                 const Vector6& D) noexcept;
 
+/// Joint velocity "seen" by the reference: vhat = J^+ xdot_ref with the damped pseudo-inverse
+/// J^+ = J^T (J J^T + lambda^2 I)^-1 (J: LOCAL_WORLD_ALIGNED, xdot_ref = [v; w] in the base frame).
+/// Fixed-size Eigen only: no heap allocation.
+core::RobotModel::JointVector dlsJointVelocity(const core::RobotModel::Jacobian6x7& J, const Vector6& xdot_ref,
+                                               double lambda) noexcept;
+
+/// tau_ff,j = scale * [ tau_c,j * tanh(vhat_j / eps_v) + b_j * vhat_j ]  (scale = alpha * gain_alpha).
+core::RobotModel::JointVector frictionTorque(const core::RobotModel::JointVector& vhat,
+                                             const FrictionFfConfig& cfg, double scale) noexcept;
+
 enum class LoopPhase : int { kWaitFirst = 0, kRunning = 1, kStopping = 2, kFinished = 3 };
 
 class ReplayLoop {

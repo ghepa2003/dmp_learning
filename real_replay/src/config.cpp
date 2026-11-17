@@ -120,10 +120,44 @@ Config loadConfig(const std::string& yaml_path) {
     StepConfig& t = c.step;
     t.axis = reqArray<3>(s, "step", "axis");
     t.amplitude_m = req<double>(s, "step", "amplitude_m");
-    t.move_duration_s = req<double>(s, "step", "move_duration_s");
-    t.dwell_s = req<double>(s, "step", "dwell_s");
-    t.return_to_start = req<bool>(s, "step", "return_to_start");
-    t.return_duration_s = req<double>(s, "step", "return_duration_s");
+    const bool has_seq = s["sequence"].IsDefined();
+    if (has_seq) {
+      for (const char* k : {"move_duration_s", "dwell_s", "return_to_start", "return_duration_s"}) {
+        if (s[k].IsDefined()) {
+          throw std::runtime_error(std::string("config: step.") + k +
+                                   " cannot be used together with step.sequence (it would be ignored): remove it");
+        }
+      }
+      const Node q = s["sequence"];
+      if (!q.IsSequence() || q.size() == 0) throw std::runtime_error("config: step.sequence must be a non-empty list");
+      for (std::size_t i = 0; i < q.size(); ++i) {
+        const std::string ctx = "step.sequence[" + std::to_string(i) + "]";
+        if (!q[i].IsMap()) throw std::runtime_error("config: " + ctx + " must be a map {f, move_s, hold_s}");
+        StepWaypoint w{};
+        w.f = req<double>(q[i], ctx, "f");
+        w.move_s = req<double>(q[i], ctx, "move_s");
+        w.hold_s = req<double>(q[i], ctx, "hold_s");
+        if (!std::isfinite(w.f)) throw std::runtime_error("config: " + ctx + ".f must be finite");
+        requireFinitePositive(w.move_s, ctx + ".move_s");
+        requireFiniteNonNegative(w.hold_s, ctx + ".hold_s");
+        t.sequence.push_back(w);
+      }
+      t.initial_hold_s = opt<double>(s, "step", "initial_hold_s", 0.0);
+      requireFiniteNonNegative(t.initial_hold_s, "step.initial_hold_s");
+      // The legacy fields are unused with a sequence; set neutral values so nothing reads garbage.
+      t.move_duration_s = 1.0;
+      t.dwell_s = 0.0;
+      t.return_to_start = false;
+      t.return_duration_s = 0.0;
+    } else {
+      if (s["initial_hold_s"].IsDefined()) {
+        throw std::runtime_error("config: step.initial_hold_s is only valid together with step.sequence");
+      }
+      t.move_duration_s = req<double>(s, "step", "move_duration_s");
+      t.dwell_s = req<double>(s, "step", "dwell_s");
+      t.return_to_start = req<bool>(s, "step", "return_to_start");
+      t.return_duration_s = req<double>(s, "step", "return_duration_s");
+    }
     if (!(std::isfinite(t.axis[0]) && std::isfinite(t.axis[1]) && std::isfinite(t.axis[2]) &&
           (t.axis[0] * t.axis[0] + t.axis[1] * t.axis[1] + t.axis[2] * t.axis[2]) > 1e-12)) {
       throw std::runtime_error("config: step.axis must be a non-zero finite vector");
@@ -324,7 +358,44 @@ Config loadConfig(const std::string& yaml_path) {
     c.dry_run.paced = req<bool>(s, "dry_run", "paced");
     c.dry_run.ignore_tracking_error = req<bool>(s, "dry_run", "ignore_tracking_error");
   }
+  if (root["friction_ff"].IsDefined()) {  // optional section: absent = feature off
+    const Node s = section(root, "friction_ff");
+    FrictionFfConfig& f = c.friction_ff;
+    f.enabled = opt<bool>(s, "friction_ff", "enabled", f.enabled);
+    f.alpha = opt<double>(s, "friction_ff", "alpha", f.alpha);
+    f.eps_v_rad_s = opt<double>(s, "friction_ff", "eps_v_rad_s", f.eps_v_rad_s);
+    f.dls_lambda = opt<double>(s, "friction_ff", "dls_lambda", f.dls_lambda);
+    if (s["tau_c"].IsDefined()) f.tau_c = reqArray<7>(s, "friction_ff", "tau_c");
+    if (s["b"].IsDefined()) f.b = reqArray<7>(s, "friction_ff", "b");
+    requireFiniteNonNegative(f.alpha, "friction_ff.alpha");
+    requireFinitePositive(f.eps_v_rad_s, "friction_ff.eps_v_rad_s");
+    requireFinitePositive(f.dls_lambda, "friction_ff.dls_lambda");
+    for (double v : f.tau_c) requireFiniteNonNegative(v, "friction_ff.tau_c[*]");
+    for (double v : f.b) requireFiniteNonNegative(v, "friction_ff.b[*]");
+  }
+  if (root["start_pose_check"].IsDefined()) {  // optional section: absent = no check
+    const Node s = section(root, "start_pose_check");
+    StartPoseCheckConfig& sp = c.start_pose_check;
+    sp.present = true;
+    sp.position_m = reqArray<3>(s, "start_pose_check", "position_m");
+    sp.tol_position_m = opt<double>(s, "start_pose_check", "tol_position_m", sp.tol_position_m);
+    sp.tol_rotation_rad = opt<double>(s, "start_pose_check", "tol_rotation_rad", sp.tol_rotation_rad);
+    sp.quaternion_wxyz = reqArray<4>(s, "start_pose_check", "quaternion_wxyz");  // no silent default: error if missing
+    requireFinitePositive(sp.tol_position_m, "start_pose_check.tol_position_m");
+    requireFinitePositive(sp.tol_rotation_rad, "start_pose_check.tol_rotation_rad");
+    double n2 = 0.0;
+    for (double v : sp.quaternion_wxyz) n2 += v * v;
+    if (!(n2 > 1e-12)) throw std::runtime_error("config: start_pose_check.quaternion_wxyz must be non-zero");
+  }
   return c;
+}
+
+bool trackingIgnoreAllowed(const Config& cfg, bool dry_run, std::string* message) {
+  if (cfg.dry_run.ignore_tracking_error && !dry_run) {
+    if (message) *message = "ignore_tracking_error e consentito solo in dry-run";
+    return false;
+  }
+  return true;
 }
 
 }  // namespace real_replay
