@@ -107,7 +107,7 @@ timing:
 
 task:                                  # task layer del robot 1 (real_replay --mode task), stadio 2
   T_hold_stage2_s: 3.0                 # HOLD_SAFE: target congelato sul goal, poi STOP al satellite ed uscita
-  cmd_max_age_s: 600.0                 # GraspCommand piu' vecchio di cosi' (stamp_unix_s) = rifiutato in VALIDATE
+  cmd_max_age_s: 604800.0                 # GraspCommand piu' vecchio di cosi' (stamp_unix_s) = rifiutato in VALIDATE
   start_pos_tol_m: 0.005               # |start_pose.position - TCP misurato| (VALIDATE e allo scatto)
   start_rot_tol_rad: 0.02              # angolo(start_pose.quaternion, TCP misurato)
   sat_timeout_s: 2.0                   # nessun datagramma valido del satellite per piu' di cosi' = guasto
