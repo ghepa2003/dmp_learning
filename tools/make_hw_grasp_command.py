@@ -227,11 +227,14 @@ def main(argv=None):
     ap.add_argument("--weights-dir", type=Path, default=DEFAULT_WEIGHTS_DIR, help="cartella con weights.yaml e weights_demo_params.yaml")
     ap.add_argument("--params", type=Path, default=DEFAULT_PARAMS, help="YAML dei parametri del planner")
     ap.add_argument("--timeout", type=float, default=300.0)
+    ap.add_argument("--log", type=Path, default=None, help="scrive qui il log del nodo (opzionale)")
     a = ap.parse_args(argv)
     sha = sha256_file(a.weights_dir / "weights.yaml")
     if sha != EXPECTED_SHA:
         raise SystemExit("sha256(weights.yaml) = %s != atteso %s" % (sha, EXPECTED_SHA))
     msg, log = run_planner(a)
+    if a.log:
+        a.log.write_text(log)
     q_wxyz, p_fk = fk_start_quat_wxyz(str(WS / "fer_flat_effort.urdf"), Q_MEAS)
     d = {"status": msg.status, "theta_star_rad": msg.theta_star_rad, "contact_time_s": msg.contact_time_s,
          "omega_rad_s": msg.omega_rad_s, "weights_sha256": msg.weights_sha256, "k": msg.k, "wrist_flip": msg.wrist_flip,

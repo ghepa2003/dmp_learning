@@ -1,0 +1,26 @@
+# GraspCommand hardware (grasp_command_v2) generato da tools/make_hw_grasp_command.py
+# params: /root/thesis_ws/config/grasp_planner_hardware_j1p90.yaml  weights: /root/thesis_ws/runs/20261124T165020_prodmp
+# Diagnostica (solo commenti, non chiavi):
+#   cost: 30.008702126044803
+#   d_pos_m: 0.009005411404854734
+#   w_hat: 0.771773486159555
+#   min_joint_margin_rad: 0.7031669256127793
+#   posthoc_dv_m_s: nan
+#   evaluations: 720
+#   selection_elapsed_s: 1.504112733
+#   provisional_delay_s: 28.029887266999996
+#   snapshot_theta_deg: -20.000000000000004
+#   start_quat_vs_ref_max_abs: 3.5792563679581946e-07
+#   theta0_deg: -20.0
+format: grasp_command_v2
+status: SELECTED
+frame_id: world
+stamp_unix_s: 1795613444.955
+theta_star_deg: -122
+contact_time_s: 21.466
+omega_deg_s: -2
+weights_sha256: "50326451fe00f8ee8264d54105e9a79268d322f3def62215a6b655876c37ba4a"
+start_pose: {position_m: [2.273e-06, 0.432493844, 0.772246186], quaternion_wxyz: [0.494584964, -0.505353351, -0.505353166, -0.494592642]}
+goal_pose: {position_m: [-0.046991784, 0.516475991, 0.7], quaternion_wxyz: [-0.34281217, 0.618449526, 0.34281217, 0.618449526]}
+k: 2
+wrist_flip: true
