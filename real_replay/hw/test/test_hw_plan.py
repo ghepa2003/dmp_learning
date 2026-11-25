@@ -40,38 +40,39 @@ class PlanTest(unittest.TestCase):
     def test_nominale_ok(self):
         ok, checks, info = self.plan()
         self.assertTrue(ok, failed(checks))
-        self.assertAlmostEqual(info["T_c"], 21.466 + 5.4, places=9)
-        self.assertAlmostEqual(info["theta_trig"], -83.9 + 2.0 * 26.866, places=9)  # -30.168
+        # contact_delay_s = 0 (come l'executor del simulatore): T_c = tau
+        self.assertAlmostEqual(info["T_c"], 21.466, places=9)
+        self.assertAlmostEqual(info["theta_trig"], -83.9 + 2.0 * 21.466, places=9)  # -40.968
         self.assertAlmostEqual(info["theta0"], -10.0, places=6)
         self.assertAlmostEqual(info["theta_end"], -109.9, places=9)  # T_close_max 6 + T_follow 5 + T_ramp 2 = 13 s
         # condizione A: |omega|*(ramp_s/2 + omega_window_s + margin_arm_s) = 2*(1 + 5 + 2) = 16 deg
         self.assertAlmostEqual(info["condition_a"], 16.0, places=9)
         lo, hi = info["theta0_interval"]
-        self.assertAlmostEqual(lo, -30.168 + 16.0, places=6)
+        self.assertAlmostEqual(lo, -40.968 + 16.0, places=6)
         self.assertAlmostEqual(hi, -5.0, places=9)
-        self.assertAlmostEqual(info["trigger_timeout_s"], 20.168 / 2.0 + 5.0, places=6)
+        # timeout = (theta_trig - theta0)/omega + ramp_s/2 + margine (come real_replay --mode task)
+        self.assertAlmostEqual(info["trigger_timeout_s"], 30.968 / 2.0 + 1.0 + 5.0, places=6)
         self.assertIsNone(info["robot1_reach"])
 
     def test_theta0_troppo_vicino_al_trigger(self):
-        ok, checks, _ = self.plan(theta0=-25.0)  # T_arm_min chiede theta0 >= -20.168, la condizione A >= -14.168
+        ok, checks, _ = self.plan(theta0=-35.0)  # B chiede theta0 >= -30.968, A >= -24.968
         self.assertFalse(ok)
-        self.assertEqual(failed(checks), ["A: s*(theta_trig - theta0) >= |omega|*(ramp_s/2 + omega_window_s + margin_arm_s)",
-                                          "s*(theta_trig - theta0) >= |omega|*T_arm_min"])
+        self.assertEqual(failed(checks), ["A: s*(theta_trig - theta0) >= |omega|*(ramp_s/2 + omega_window_s + margin_arm_s)", "B: s*(theta_trig - theta0) >= |omega|*T_arm_min"])
 
     def test_condizione_a_omega_non_ancora_valida(self):
-        # theta0 = -18: s*(theta_trig - theta0) = 12.168 deg: T_arm_min soddisfatto (>= 10), condizione A no (< 16)
-        ok, checks, _ = self.plan(theta0=-18.0)
+        # theta0 = -28: s*(theta_trig - theta0) = 12.968 deg: B soddisfatto (>= 10), condizione A no (< 16)
+        ok, checks, _ = self.plan(theta0=-28.0)
         self.assertFalse(ok)
         self.assertEqual(failed(checks), ["A: s*(theta_trig - theta0) >= |omega|*(ramp_s/2 + omega_window_s + margin_arm_s)"])
-        ok, checks, _ = self.plan(theta0=-14.0)
+        ok, checks, _ = self.plan(theta0=-24.0)
         self.assertTrue(ok, failed(checks))
 
     def test_theta0_fuori_finestra(self):
         ok, checks, _ = self.plan(theta0=2.0)
         self.assertFalse(ok)
-        self.assertEqual(failed(checks), ["theta0 dentro la finestra con margine"])
+        self.assertEqual(failed(checks), ["C: theta0 dentro la finestra con margine"])
         ok, checks, _ = self.plan(theta0=-3.0)  # dentro la finestra ma nel margine di 5 deg
-        self.assertIn("theta0 dentro la finestra con margine", failed(checks))
+        self.assertIn("C: theta0 dentro la finestra con margine", failed(checks))
 
     def test_omega_zero(self):
         cmd = dict(self.cmd, omega_deg_s=0.0)
@@ -84,11 +85,20 @@ class PlanTest(unittest.TestCase):
         cfg = copy.deepcopy(self.cfg)
         cfg["scene"]["omega_deg_s"] = 2.0
         cmd = dict(self.cmd, omega_deg_s=2.0, theta_star_deg=-10.0)
-        # theta_trig = -10 - 2*26.866 = -63.732; s=+1: theta0 <= -73.732 per l'armamento
+        # theta_trig = -10 - 2*21.466 = -52.932; s=+1: theta0 <= -68.932 (condizione A)
         ok, checks, info = self.plan(cfg=cfg, cmd=cmd, theta0=-100.0)
         self.assertFalse(ok)
         self.assertAlmostEqual(info["theta_end"], -10.0 + 2.0 * 13.0, places=9)
-        self.assertEqual(failed(checks), ["theta_end = theta* + omega*(T_close_max+T_follow+T_ramp) dentro la finestra con margine"])
+        self.assertEqual(failed(checks), ["D: theta_end = theta* + omega*(T_close_max+T_follow+T_ramp) dentro la finestra con margine"])
+
+    def test_schema_v2(self):
+        cmd = dict(self.cmd, goal_pose=None)
+        ok, checks, _ = self.plan(cmd=cmd)
+        self.assertFalse(ok)
+        self.assertEqual(failed(checks), ["start_pose e goal_pose presenti, finiti, quaternioni unitari"])
+        cmd = dict(self.cmd, format="grasp_command_v1", frame_id="map")
+        ok, checks, _ = self.plan(cmd=cmd)
+        self.assertEqual(failed(checks), ["format grasp_command_v2", "frame_id world"])
 
     def test_sha256_diverso(self):
         other = os.path.join(self.tmp, "w.yaml")

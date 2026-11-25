@@ -1,12 +1,20 @@
-# GraspCommand di esempio (formato grasp_command_v1, vedi hw/README.md). Valori nominali di prova.
-# weights_sha256 = sha256 di examples/weights_sintetico_test.yaml (file SINTETICO, solo test).
-format: grasp_command_v1
-status: SELECTED
+# GraspCommand di esempio (formato grasp_command_v2, vedi hw/README.md). Valori nominali di prova.
+# weights_sha256 = sha256 di examples/weights_sintetico_test.yaml (file SINTETICO, solo test: non caricabile da
+# ProDmpSource; real_replay --mode task richiede i pesi veri, vedi hw/test/test_task_e2e.py).
+# Angoli in GRADI: real_replay li converte in radianti una volta sola (task::loadGraspCommand).
+format: grasp_command_v2
+status: SELECTED                 # SELECTED | NO_FEASIBLE_CANDIDATE | POSTHOC_FAILED | UNSET
+frame_id: world                  # = base del robot 1
+stamp_unix_s: 1764000000.0       # creazione del comando (tempo di parete); VALIDATE: non nel futuro, eta' <= task.cmd_max_age_s
 theta_star_deg: -83.9            # fase del satellite al contatto, ramo [-270, 90)
 contact_time_s: 21.466           # = tau dei pesi (GraspLaunchResult::tau_launch_s)
 omega_deg_s: -2.0                # velocita' di fase usata dalla selezione
 weights_sha256: "95f8474c3eabf2978696e435302ea3cc34c8611e22f5d107fd578edc346411fb"
-# Campi per lo stadio 2 (non usati da hw.py plan); null = non disponibili in questo esempio.
-goal_pose: null                  # {position_m: [x,y,z], quaternion_wxyz: [w,x,y,z]}, frame robot 1
-k: null                          # GraspPointId 0..3
-wrist_flip: null
+start_pose:                      # posa TCP del robot 1 da cui il planner ha validato il rollout (FK di Q_MEAS)
+  position_m: [0.000002, 0.432494, 0.772246]
+  quaternion_wxyz: [0.494585, -0.505353, -0.505353, -0.494593]
+goal_pose:                       # posa TCP obiettivo a fine approach (t = tau), frame robot 1
+  position_m: [0.000002, 0.512494, 0.772246]
+  quaternion_wxyz: [0.494585, -0.505353, -0.505353, -0.494593]
+k: 0                             # GraspPointId 0..3 (0=kP0, 1=kP90, 2=kP180, 3=kP270)
+wrist_flip: false                # goal ruotato di pi attorno a z_tcp

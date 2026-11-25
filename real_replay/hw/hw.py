@@ -6,7 +6,8 @@ Sottocomandi:
   ik [--psi0-deg X]             q del robot 2 da centro, inclinazione asse e psi0 (offline, senza robot)
   reset [--robot 1|2|both] [--yes]   porta i robot nella posa di partenza (joint_point_to_point_motion, uno alla volta)
   plan [--grasp-command F] [--weights F]   fattibilita' temporale/di finestra del GraspCommand, senza muovere nulla
-  run [--only-satellite] [--dry-run] [--max-travel-deg D]   stadio 1: avvia SOLO satellite_node e mostra fase/omega live
+  run [--dry-run] [--grasp-command F] [--weights F]   stadio 2: plan, posa robot, satellite_node, real_replay --mode task
+  run --only-satellite [--dry-run] [--max-travel-deg D]   stadio 1: SOLO satellite_node, fase/omega live
 
 Unico file di configurazione: hw/hw_config.yaml (--config per cambiarlo). Formati e protocollo: hw/README.md.
 Dipendenze: python3 stdlib, PyYAML, numpy. Nessun ROS.
@@ -162,6 +163,11 @@ def load_config(path):
 
 def cfg_path(cfg, p):
     return p if os.path.isabs(p) else os.path.normpath(os.path.join(cfg["_dir"], p))
+
+
+def cli_or_cfg_path(cfg, cli_value, cfg_value):
+    """Percorso da riga di comando (relativo alla cartella corrente) oppure dalla config (relativo alla config)."""
+    return os.path.abspath(cli_value) if cli_value else cfg_path(cfg, cfg_value)
 
 
 def axis_from_tilt(tilt_deg):
@@ -577,6 +583,27 @@ def load_yaml(path, what):
     return d
 
 
+def check_poses(cmd):
+    """start_pose / goal_pose: {position_m: [3], quaternion_wxyz: [4]} finiti, |q| = 1 +- 1e-3."""
+    det = []
+    for key in ("start_pose", "goal_pose"):
+        p = cmd.get(key)
+        if not isinstance(p, dict):
+            return False, "%s mancante o null" % key
+        try:
+            pos = [float(x) for x in p["position_m"]]
+            q = [float(x) for x in p["quaternion_wxyz"]]
+        except (KeyError, TypeError, ValueError):
+            return False, "%s: position_m [3] e quaternion_wxyz [4] richiesti" % key
+        if len(pos) != 3 or len(q) != 4 or not all(math.isfinite(x) for x in pos + q):
+            return False, "%s: valori non finiti o dimensioni errate" % key
+        n = math.sqrt(sum(x * x for x in q))
+        if abs(n - 1.0) > 1e-3:
+            return False, "%s: |q| = %.6f" % (key, n)
+        det.append("%s [%.4f %.4f %.4f]" % (key, pos[0], pos[1], pos[2]))
+    return True, ", ".join(det) + ", k %s, wrist_flip %s" % (cmd.get("k"), cmd.get("wrist_flip"))
+
+
 def check_robot1_reach(cfg, cmd, plan):
     """PUNTO DI ESTENSIONE (stadio 2): portata del robot 1 lungo contatto + follow. None = non verificata."""
     return None
@@ -593,6 +620,10 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
     sc, tm, pl = cfg["scene"], cfg["timing"], cfg["plan"]
     status = str(cmd.get("status", "")).upper()
     add("status", status == "SELECTED", "status = %s" % status)
+    add("format grasp_command_v2", cmd.get("format") == "grasp_command_v2", "format = %s" % cmd.get("format"))
+    add("frame_id world", cmd.get("frame_id") == "world", "frame_id = %s" % cmd.get("frame_id"))
+    poses_ok, pd = check_poses(cmd)
+    add("start_pose e goal_pose presenti, finiti, quaternioni unitari", poses_ok, pd)
     for k in ("theta_star_deg", "contact_time_s", "omega_deg_s", "weights_sha256"):
         if k not in cmd:
             raise HwError("grasp command: chiave '%s' mancante" % k)
@@ -611,7 +642,7 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
         "comando %.3f, config %.3f deg/s (tol %.2f)" % (w_cmd, w_cfg, float(pl["omega_tol_deg_s"])))
     add("omega != 0", w_cmd != 0.0, "omega %.3f deg/s" % w_cmd)
     dom = [float(x) for x in pl["omega_domain_deg_s"]]
-    add("|omega| nel dominio %s deg/s" % dom, any(abs(abs(w_cmd) - d) <= float(pl["omega_tol_deg_s"]) for d in dom),
+    add("E: |omega| nel dominio %s deg/s" % dom, any(abs(abs(w_cmd) - d) <= float(pl["omega_tol_deg_s"]) for d in dom),
         "|omega| %.3f deg/s" % abs(w_cmd), blocking=False)
 
     lo, hi = [float(x) for x in sc["psi_window_deg"]]
@@ -622,7 +653,7 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
     else:
         theta0, src = float(theta0_deg), "argomento"
     info.update(theta0=theta0, theta0_src=src, window=(lo, hi), margin=m)
-    add("theta0 dentro la finestra con margine", lo + m <= theta0 <= hi - m, "theta0 %.3f deg (%s), ammesso [%.1f, %.1f]" % (theta0, src, lo + m, hi - m))
+    add("C: theta0 dentro la finestra con margine", lo + m <= theta0 <= hi - m, "theta0 %.3f deg (%s), ammesso [%.1f, %.1f]" % (theta0, src, lo + m, hi - m))
     if w_cmd == 0.0:
         return all(c[1] for c in checks if c[3]), checks, info
 
@@ -633,7 +664,7 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
     theta_trig = wrap_branch(theta_trig_wrap)  # confronti sul ramo [-270, 90)
     info.update(s=s, T_c=T_c, theta_star=theta_star, theta_trig=theta_trig, theta_trig_wrapPi=theta_trig_wrap)
     arm = abs(w_cmd) * float(tm["T_arm_min_s"])
-    add("s*(theta_trig - theta0) >= |omega|*T_arm_min", s * (theta_trig - theta0) >= arm - 1e-9,
+    add("B: s*(theta_trig - theta0) >= |omega|*T_arm_min", s * (theta_trig - theta0) >= arm - 1e-9,
         "s*(theta_trig - theta0) = %.3f deg, richiesto >= %.3f deg" % (s * (theta_trig - theta0), arm))
     # Condizione A: prima che omega_valid diventi vero il satellite percorre |omega|*(ramp_s/2 + omega_window_s)
     # (rampa smoothstep: meta' angolo a pari tempo; poi una finestra intera di regressione a velocita' costante);
@@ -655,18 +686,19 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
     T_after = float(tm["T_close_max_s"]) + float(tm["T_follow_s"]) + float(tm["T_ramp_s"])
     theta_end = theta_star + w_cmd * T_after
     info["theta_end"] = theta_end
-    add("theta_end = theta* + omega*(T_close_max+T_follow+T_ramp) dentro la finestra con margine", lo + m <= theta_end <= hi - m,
+    add("D: theta_end = theta* + omega*(T_close_max+T_follow+T_ramp) dentro la finestra con margine", lo + m <= theta_end <= hi - m,
         "theta_end %.3f deg, ammesso [%.1f, %.1f]" % (theta_end, lo + m, hi - m))
     t_trig = (theta_trig - theta0) / w_cmd
     info["t_trigger_s"] = t_trig
-    info["trigger_timeout_s"] = t_trig + float(tm["trigger_timeout_margin_s"])
+    # timeout come real_replay --mode task: tempo dall'invio di START (rampa smoothstep: + ramp_s/2) + margine
+    info["trigger_timeout_s"] = t_trig + float(ctl["ramp_s"]) / 2.0 + float(tm["trigger_timeout_margin_s"])
     info["robot1_reach"] = check_robot1_reach(cfg, cmd, info)
     return all(c[1] for c in checks if c[3]), checks, info
 
 
 def cmd_plan(args, cfg):
-    gc = cfg_path(cfg, args.grasp_command or cfg["planner"]["grasp_command_yaml"])
-    wp = cfg_path(cfg, args.weights or cfg["planner"]["weights_yaml"])
+    gc = cli_or_cfg_path(cfg, args.grasp_command, cfg["planner"]["grasp_command_yaml"])
+    wp = cli_or_cfg_path(cfg, args.weights, cfg["planner"]["weights_yaml"])
     cmd = load_yaml(gc, "grasp command")
     weights = load_yaml(wp, "weights")
     print("plan: grasp command %s\n      weights       %s%s" % (gc, wp, "   [SINTETICO, solo test]" if weights.get("synthetic_test_only") else ""))
@@ -715,10 +747,201 @@ class Heartbeat(threading.Thread):
                 self.send(CMD_HEARTBEAT)
 
 
+def confirm_load(cfg):
+    """Conferma digitata del carico del robot 2 (satellite_node con --yes salta la propria): stessa regola, 1 g."""
+    mk = cfg["mockup"]
+    mass = float(mk["mass_kg"])
+    print("=" * 80)
+    print("  CARICO DICHIARATO: %.3f kg, com %s m (frame flangia) -- il mockup e' montato?" % (mass, mk["com_m"]))
+    print("=" * 80)
+    try:
+        typed = input("Digita la massa del mockup montato in kg (deve coincidere con %.3f kg entro 1 g): " % mass)
+    except EOFError:
+        typed = ""
+    if not mass_confirmation_ok(typed, mass):
+        print("carico NON confermato ('%s')." % typed.strip())
+        return False
+    return True
+
+
+TASK_EXIT = {0: "HOLD_SAFE completato (stadio 2), STOP inviato al satellite",
+             1: "INIT fallito (config, comando, preflight, socket): nessun comando al satellite",
+             2: "annullato dall'operatore prima di prendere il controllo",
+             3: "eccezione libfranka / controllo",
+             5: "FAULT_NOMOTION: guasto prima dell'avvicinamento (STOP inviato, nessun movimento)",
+             6: "FAULT_MOTION: guasto durante/dopo l'avvicinamento (target congelato, STOP inviato)"}
+
+
+def robot_ready(cfg, n, q_goal, tol_deg, max_dq=0.01):
+    """robot_mode Idle, in posa (max |dq| <= tol) e fermo (max |dq| <= max_dq rad/s). (ok, messaggio)."""
+    s = read_robot_state(cfg, cfg["robot%d" % n]["ip"])
+    mode = s.get("robot_mode")
+    q = np.array(s["q"], dtype=float)
+    dq = np.abs(np.array(s["dq"], dtype=float)).max() if "dq" in s else float("nan")
+    d = np.abs(q - q_goal).max() / DEG
+    ok = mode == "Idle" and d <= tol_deg and dq <= max_dq
+    return ok, "robot %d: mode %s, max |q - partenza| %.3f deg (tol %.2f), max |dq| %.4f rad/s%s" % (
+        n, mode, d, tol_deg, dq, "" if mode == "Idle" else " (" + BAD_MODES.get(mode, "serve Idle") + ")")
+
+
+def wait_state(sock, state, child, timeout_s):
+    """Ultimo pacchetto ricevuto; None se il figlio esce o scade il timeout prima di vedere `state`."""
+    t_end = time.monotonic() + timeout_s
+    last = None
+    while time.monotonic() < t_end:
+        if child.poll() is not None:
+            return None
+        r, _, _ = select.select([sock], [], [], 0.1)
+        if r:
+            p = decode_state(sock.recv(512))
+            if p is not None:
+                last = p
+                if p["state"] == state:
+                    return p
+    return None
+
+
+def cmd_run_full(args, cfg):
+    """Sequenza completa dello stadio 2: plan, posa robot, satellite_node, real_replay --mode task."""
+    build = cfg_path(cfg, cfg["paths"]["build_dir"])
+    sat_exe = os.path.join(build, "satellite_node")
+    rr_exe = os.path.join(build, "real_replay")
+    for exe in (sat_exe, rr_exe):
+        if not os.access(exe, os.X_OK):
+            raise HwError("eseguibile non trovato: %s" % exe)
+    u = cfg["udp"]
+    host, mon_port = u["host"], int(u["monitor_port"])
+    if mon_port <= 0:
+        raise HwError("udp.monitor_port = 0: hw.py run ha bisogno della porta monitor")
+    gc = cli_or_cfg_path(cfg, args.grasp_command, cfg["planner"]["grasp_command_yaml"])
+    wp = cli_or_cfg_path(cfg, args.weights, cfg["planner"]["weights_yaml"])
+    rr_cfg = cfg_path(cfg, cfg["robot1"]["real_replay_config_dry" if args.dry_run else "real_replay_config"])
+
+    # 1) plan
+    cmd = load_yaml(gc, "grasp command")
+    ok, checks, info = plan_feasibility(cfg, cmd, wp)
+    for name, good, detail, blocking in checks:
+        print("  plan [%s] %s: %s" % ("PASS" if good else ("FAIL" if blocking else "WARN"), name, detail))
+    print("  portata robot 1: NON verificata")
+    if not ok:
+        if not args.no_plan_gate:
+            print("plan NON fattibile: non avvio nulla.")
+            return 1
+        print("plan NON fattibile ma --no-plan-gate: avvio comunque (VALIDATE di real_replay deve rifiutare prima di START)")
+
+    # 2) robot in posa e fermi (come reset)
+    tty = sys.stdin.isatty()
+    if not args.dry_run:
+        q1 = np.array(cfg["robot1"]["start_q_rad"], dtype=float)
+        q2, _src = robot2_start_q(cfg)
+        for n, qg, tol in ((1, q1, float(cfg["robot1"]["tol_deg"])), (2, q2, float(cfg["robot2"]["tol"]["q_deg"]))):
+            good, msg = robot_ready(cfg, n, qg, tol)
+            print("  " + msg)
+            if not good:
+                print("robot %d non pronto: usa 'hw.py reset --robot %d'. Non avvio nulla." % (n, n))
+                return 1
+        if not tty:
+            print("stdin non e' un terminale: in robot mode serve la conferma dell'operatore. Non avvio nulla.")
+            return 1
+    # 3) conferme
+    if tty:
+        if not confirm("Avviare satellite_node e real_replay --mode task%s?" % (" (DRY-RUN)" if args.dry_run else " (ENTRAMBI i robot in controllo di coppia)")):
+            print("annullato.")
+            return 1
+        if not args.dry_run and not confirm_load(cfg):
+            return 2
+
+    # 4) satellite_node + handshake WAIT_START
+    sat_argv = [sat_exe, "--config", cfg["_path"]]
+    if args.dry_run:
+        q2, _src = robot2_start_q(cfg)
+        sat_argv += ["--dry-run", "--dry-q-deg", ",".join("%.6f" % math.degrees(x) for x in q2)]
+    else:
+        sat_argv.append("--yes")  # solo dopo la NOSTRA conferma (e quella del carico)
+    rr_argv = [rr_exe, "--config", rr_cfg, "--mode", "task", "--grasp-command", gc, "--hw-config", cfg["_path"], "--weights", wp]
+    if args.dry_run:
+        rr_argv.append("--dry-run")
+    if tty or args.dry_run:
+        rr_argv.append("--yes")  # VALIDATE: la conferma e' gia' stata data qui (o dry-run senza movimento)
+    if args.fault_linger_s is not None:
+        rr_argv += ["--fault-linger-s", "%.3f" % args.fault_linger_s]
+
+    mon = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    mon.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    mon.bind((host, mon_port))
+    print("+ " + " ".join(sat_argv))
+    sat = subprocess.Popen(sat_argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    rr = None
+    children = [sat]
+    interrupted = [None]
+
+    def on_sigint_all():
+        if interrupted[0] is None:
+            interrupted[0] = time.monotonic()
+            print("\nCtrl-C: SIGINT a entrambi i processi, attendo le rampe di arresto (max 15 s)...")
+            for c in children:
+                if c.poll() is None:
+                    c.send_signal(signal.SIGINT)
+
+    try:
+        p = wait_state(mon, 1, sat, 30.0 + float(cfg["robot2"]["control"]["countdown_s"]))
+        if p is None:
+            print("satellite_node non e' arrivato in WAIT_START: interrompo.")
+            if sat.poll() is None:
+                sat.send_signal(signal.SIGINT)
+            rc_sat = wait_child(sat)
+            print("satellite_node: exit %d = %s" % (rc_sat, NODE_EXIT.get(rc_sat, "?")))
+            return 1
+        print("handshake: satellite_node in WAIT_START, theta %.3f deg" % math.degrees(p["theta"]))
+        # 5) real_replay --mode task (invia START, heartbeat, STOP)
+        print("+ " + " ".join(rr_argv))
+        rr = subprocess.Popen(rr_argv, stdin=subprocess.DEVNULL, start_new_session=True)
+        children.append(rr)
+        mon.setblocking(False)
+        t_print = 0.0
+        last = p
+        t_rr_end = None
+        while True:
+            try:
+                if rr.poll() is not None and t_rr_end is None:
+                    t_rr_end = time.monotonic()
+                    print("real_replay terminato (exit %d): attendo la fine del satellite (STOP gia' inviato)..." % rr.returncode)
+                if t_rr_end is not None and sat.poll() is not None:
+                    break
+                while True:
+                    r, _, _ = select.select([mon], [], [], 0.05)
+                    if not r:
+                        break
+                    q = decode_state(mon.recv(512))
+                    if q is not None:
+                        last = q
+                if time.monotonic() - t_print >= 1.0 and sat.poll() is None:
+                    t_print = time.monotonic()
+                    print("  satellite: " + state_line(last, float(u["T_age_s"])))
+                if interrupted[0] is not None and time.monotonic() - interrupted[0] > 15.0:
+                    for c in children:
+                        if c.poll() is None:
+                            print("processo %d non terminato 15 s dopo SIGINT: SIGKILL" % c.pid)
+                            c.kill()
+                if t_rr_end is not None and sat.poll() is None and time.monotonic() - t_rr_end > 20.0 and interrupted[0] is None:
+                    print("satellite_node ancora attivo 20 s dopo real_replay: SIGINT")
+                    on_sigint_all()
+            except KeyboardInterrupt:
+                on_sigint_all()
+    finally:
+        mon.close()
+    rc_rr = rr.returncode if rr is not None else None
+    rc_sat = sat.wait()
+    print("real_replay --mode task: exit %s = %s" % (rc_rr, TASK_EXIT.get(rc_rr, "?")))
+    print("satellite_node: exit %d = %s" % (rc_sat, NODE_EXIT.get(rc_sat, "?")))
+    if rc_rr:
+        return rc_rr
+    return 0 if rc_sat == 0 else 7
+
+
 def cmd_run(args, cfg):
     if not args.only_satellite:
-        print("run completo (task layer robot 1 + satellite): disponibile dallo stadio 2. Usa 'run --only-satellite'.")
-        return 0
+        return cmd_run_full(args, cfg)
     exe = os.path.join(cfg_path(cfg, cfg["paths"]["build_dir"]), "satellite_node")
     if not os.access(exe, os.X_OK):
         raise HwError("satellite_node non trovato: %s (cmake --build build --target satellite_node)" % exe)
@@ -739,20 +962,9 @@ def cmd_run(args, cfg):
         if not confirm("Avviare satellite_node%s?" % ("" if args.dry_run else " (il robot 2 verra' messo in controllo di coppia)")):
             print("annullato.")
             return 1
-        if not args.dry_run:
-            # satellite_node con --yes salta la propria conferma del carico: la chiediamo qui, stessa regola (1 g)
-            mk = cfg["mockup"]
-            mass = float(mk["mass_kg"])
-            print("=" * 80)
-            print("  CARICO DICHIARATO: %.3f kg, com %s m (frame flangia) -- il mockup e' montato?" % (mass, mk["com_m"]))
-            print("=" * 80)
-            try:
-                typed = input("Digita la massa del mockup montato in kg (deve coincidere con %.3f kg entro 1 g): " % mass)
-            except EOFError:
-                typed = ""
-            if not mass_confirmation_ok(typed, mass):
-                print("carico NON confermato ('%s'): non avvio satellite_node." % typed.strip())
-                return 2
+        if not args.dry_run and not confirm_load(cfg):
+            print("non avvio satellite_node.")
+            return 2
         argv.append("--yes")  # solo dopo la NOSTRA conferma
         for k in range(3, 0, -1):
             print("avvio tra %d..." % k)
@@ -845,9 +1057,15 @@ def build_parser():
     p.add_argument("--grasp-command", help="YAML del comando (default: planner.grasp_command_yaml)")
     p.add_argument("--weights", help="YAML dei pesi (default: planner.weights_yaml)")
     p.add_argument("--theta0-deg", type=float, default=None, help="fase di partenza da usare invece di quella da config/IK")
-    p = sub.add_parser("run", help="stadio 1: solo satellite_node (--only-satellite)")
-    p.add_argument("--only-satellite", action="store_true", help="avvia solo satellite_node")
-    p.add_argument("--dry-run", action="store_true", help="satellite_node --dry-run (nessun robot)")
+    p = sub.add_parser("run", help="sequenza completa (plan, posa, satellite_node, real_replay --mode task) o --only-satellite")
+    p.add_argument("--only-satellite", action="store_true", help="stadio 1: avvia solo satellite_node (START/heartbeat da hw.py)")
+    p.add_argument("--dry-run", action="store_true", help="entrambi i processi in dry-run (nessun robot)")
+    p.add_argument("--grasp-command", help="YAML del comando (default: planner.grasp_command_yaml)")
+    p.add_argument("--weights", help="YAML dei pesi ProDMP veri (default: planner.weights_yaml)")
+    p.add_argument("--fault-linger-s", type=float, default=None,
+                   help="real_replay: secondi nello stato di guasto prima di uscire (default config: 0 = fino a Ctrl-C)")
+    p.add_argument("--no-plan-gate", action="store_true",
+                   help="SOLO TEST: avvia anche se plan fallisce (VALIDATE di real_replay deve rifiutare prima di START)")
     p.add_argument("--max-travel-deg", type=float, default=0.0, help="limita la corsa di J7 (oltre alla finestra)")
     return ap
 

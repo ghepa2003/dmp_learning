@@ -6,6 +6,8 @@
 //
 // Exit codes: 0 completed; 1 usage/config/preflight failure; 2 run stopped by the safety layer or
 // by the user; 3 exception from libfranka or from the control code.
+// --mode task (stage 2 task layer, see hw/README.md): 0 HOLD_SAFE completed; 5 FAULT_NOMOTION; 6 FAULT_MOTION;
+// 1 INIT failure (config, command file, preflight, sockets); 3 libfranka/control exception.
 
 #include <sys/mman.h>
 
@@ -49,6 +51,8 @@
 #include "real_replay/safety.hpp"
 #include "real_replay/sha256.hpp"
 #include "real_replay/target_source.hpp"
+#include "real_replay/task_logic.hpp"
+#include "real_replay/task_runtime.hpp"
 
 namespace {
 
@@ -77,6 +81,11 @@ struct Cli {
   bool preflight_only = false;
   bool mass_sensitivity = false;
   bool help = false;
+  // --mode task
+  std::string grasp_command;
+  std::string hw_config;
+  std::string weights;
+  double fault_linger_s = -1.0;  ///< < 0: from hw_config task.fault_linger_s
 };
 
 void printUsage(const char* argv0) {
@@ -94,7 +103,9 @@ void printUsage(const char* argv0) {
       "  --urdf FILE        override paths.urdf\n"
       "  --log-out FILE     CSV output (default: <log_dir>/<start time with ms>_<mode>_<dryrun|robot>.csv; never overwritten)\n"
       "  --no-pace          dry-run: do not sleep to a 1 kHz cadence\n"
-      "  --yes              skip the 'press Enter' prompt (robot mode)\n",
+      "  --yes              skip the 'press Enter' prompt (robot mode); in --mode task also the VALIDATE confirmation\n"
+      "  --mode task        stage-2 task layer: --grasp-command FILE --hw-config FILE [--weights FILE] [--fault-linger-s S]\n"
+      "                     (weights default: replay.weights_path; fault-linger 0 = stay in the fault state until Ctrl-C)\n",
       argv0);
 }
 
@@ -133,6 +144,21 @@ bool parseCli(int argc, char** argv, Cli& cli, std::string& err) {
       if (!value(cli.urdf)) return false;
     } else if (a == "--log-out") {
       if (!value(cli.log_out)) return false;
+    } else if (a == "--grasp-command") {
+      if (!value(cli.grasp_command)) return false;
+    } else if (a == "--hw-config") {
+      if (!value(cli.hw_config)) return false;
+    } else if (a == "--weights") {
+      if (!value(cli.weights)) return false;
+    } else if (a == "--fault-linger-s") {
+      std::string v;
+      if (!value(v)) return false;
+      try {
+        cli.fault_linger_s = std::stod(v);
+      } catch (const std::exception&) {
+        err = "invalid number for --fault-linger-s: " + v;
+        return false;
+      }
     } else if (a == "--duration") {
       std::string v;
       if (!value(v)) return false;
@@ -933,6 +959,262 @@ int runRobot(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   return loop.stopReason() == StopReason::kCompleted ? 0 : 2;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// --mode task (stage 2 task layer)
+// ---------------------------------------------------------------------------------------------
+
+struct TaskCycleCtx {
+  task::TaskShared* sh = nullptr;
+  task::TaskCycleLog* log = nullptr;
+  double jitter_period_s = 0.003;
+  int jitter_n = 3;
+  int jitter_count = 0;
+  bool activation_published = false;
+};
+
+double monoNowS() {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<double>(ts.tv_sec) + 1e-9 * static_cast<double>(ts.tv_nsec);
+}
+
+/// runCycle() + publication of the measured TCP pose and of the activation (lock-free), jitter watchdog, task log.
+/// No allocation, no network syscall.
+franka::Torques runTaskCycle(ReplayLoop& loop, const franka::RobotState& s, double period_s, TaskCycleCtx& c) {
+  const franka::Torques tq = runCycle(loop, s, period_s);
+  const double t = monoNowS();
+  const std::size_t n = loop.logger().size();
+  if (n > 0) {
+    const LogRecord& r = loop.logger().at(n - 1);
+    task::PoseSnap ps{};
+    for (int k = 0; k < 3; ++k) ps.p[k] = r.p_meas[k];
+    for (int k = 0; k < 4; ++k) ps.q[k] = r.q_meas[k];
+    for (int k = 0; k < 7; ++k) ps.qj[k] = s.q[static_cast<std::size_t>(k)];
+    ps.t_mono_s = t;
+    c.sh->measured.store(ps);
+    if (!c.activation_published && loop.hasFirstTarget()) {
+      const Pose& a = loop.activationPose();  // orientation read ONCE, at the first cycle
+      task::PoseSnap as = ps;
+      for (int k = 0; k < 3; ++k) as.p[k] = a.p[k];
+      as.q[0] = a.q.w();
+      as.q[1] = a.q.x();
+      as.q[2] = a.q.y();
+      as.q[3] = a.q.z();
+      c.sh->activation.store(as);
+      c.sh->activation_ready.store(true, std::memory_order_release);
+      c.activation_published = true;
+    }
+    c.log->record(*c.sh, t, r.e_pos, r.e_rot);
+  }
+  if (period_s > c.jitter_period_s) {
+    if (++c.jitter_count >= c.jitter_n) c.sh->jitter_fault.store(true);
+  } else {
+    c.jitter_count = 0;
+  }
+  if (tq.motion_finished) c.sh->loop_finished.store(true);
+  return tq;
+}
+
+void printTaskFigures(const task::TaskMachine& m) {
+  using task::kNaN;
+  const task::RunFigures& f = m.figures();
+  const double D = 180.0 / M_PI;
+  std::printf("=== task layer: result ===\n");
+  std::printf("  final state: %s%s%s\n", task::toString(m.state()), m.faultReason().empty() ? "" : "  -- ", m.faultReason().c_str());
+  std::printf("  theta* %.4f deg, theta_trig %.4f deg, omega_cmd %.4f deg/s, tau %.4f s\n", f.theta_star * D, f.theta_trig * D, f.omega_cmd * D, f.tau);
+  if (std::isfinite(f.t_start_sent)) {
+    std::printf("  START -> omega_valid: %.3f s   START -> trigger: %.3f s\n", f.t_omega_valid - f.t_start_sent, f.t_trigger - f.t_start_sent);
+  }
+  if (std::isfinite(f.t_trigger)) {
+    const double e_trig = std::remainder(f.theta_trig - f.theta_at_trigger, 2.0 * M_PI);
+    std::printf("  TRIGGER ERROR (theta_trig - theta measured at the trigger): %+.4f deg  (d_k %+.4f deg, sample age %.1f ms)\n", e_trig * D,
+                f.d_at_trigger * D, f.age_at_trigger * 1e3);
+  }
+  if (std::isfinite(f.t_approach_end)) {
+    const double dur = f.t_approach_end - f.t_trigger;
+    const double e_ph = std::remainder(f.theta_at_approach_end - f.theta_star, 2.0 * M_PI);
+    const double e_ph_x = e_ph + f.omega_cmd * f.age_at_approach_end;  // extrapolated by the sample age
+    std::printf("  duration trigger -> end of APPROACH: %.4f s (tau %.4f s, first 1 kHz cycle after %.4f s)\n", dur, f.tau,
+                f.t_approach_start - f.t_trigger);
+    std::printf("  PHASE ERROR AT CONTACT = theta(end of approach) - theta*: %+.4f deg (sample age %.1f ms; extrapolated %+.4f deg)\n", e_ph * D,
+                f.age_at_approach_end * 1e3, e_ph_x * D);
+    std::printf("  implied effective contact_delay_s = -(theta_end - theta*)/omega = %+.4f s (configured T_c - tau)\n", -e_ph_x / f.omega_cmd);
+  }
+}
+
+bool writeTaskEvents(const task::TaskMachine& m, const std::string& path) {
+  std::FILE* f = std::fopen(path.c_str(), "wx");
+  if (!f) return false;
+  std::fprintf(f, "t_mono_s,event,detail\n");
+  for (const task::Event& e : m.events()) {
+    std::string d = e.detail;
+    for (char& ch : d) {
+      if (ch == '"') ch = '\'';
+    }
+    std::fprintf(f, "%.6f,\"%s\",\"%s\"\n", e.t, e.name.c_str(), d.c_str());
+  }
+  std::fclose(f);
+  return true;
+}
+
+int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
+  using namespace real_replay::task;
+  if (cli.grasp_command.empty() || cli.hw_config.empty()) throw std::runtime_error("--mode task needs --grasp-command and --hw-config");
+  HwTaskConfig hw = loadHwTaskConfig(cli.hw_config);
+  if (cli.fault_linger_s >= 0.0) hw.p.fault_linger_s = cli.fault_linger_s;
+  const std::string weights = cli.weights.empty() ? cfg.replay.weights_path : cli.weights;
+  const GraspCommand cmd = loadGraspCommand(cli.grasp_command);
+
+  auto approach = std::make_unique<ProDmpSource>(weights, "", 1.0, 0.0);
+  StaticValidation sv;
+  sv.tau = approach->tau();
+  sv.weights_sha256 = approach->sha256();
+  sv.stop_at_fraction = cfg.trajectory.stop_at_fraction;
+  const bool goal_ok = cmd.goal_p.allFinite() && cmd.goal_q.coeffs().allFinite() && cmd.goal_q.norm() > 1e-9;
+  if (goal_ok) approach->setGoal(cmd.goal_p, cmd.goal_q);
+  std::printf("=== TASK LAYER (stage 2) %s ===\n  command %s\n  weights %s (sha256 %s..., tau %.6f s)\n  hw_config %s\n",
+              cli.dry_run ? "DRY-RUN" : ("ROBOT " + cfg.robot.ip).c_str(), cmd.path.c_str(), weights.c_str(), sv.weights_sha256.substr(0, 16).c_str(),
+              sv.tau, cli.hw_config.c_str());
+  std::printf("  goal [%.4f %.4f %.4f] m, start [%.4f %.4f %.4f] m, theta* %.3f deg, omega %.3f deg/s, contact_delay_s %.3f s\n", cmd.goal_p.x(),
+              cmd.goal_p.y(), cmd.goal_p.z(), cmd.start_p.x(), cmd.start_p.y(), cmd.start_p.z(), cmd.theta_star * 180.0 / M_PI,
+              cmd.omega * 180.0 / M_PI, hw.p.contact_delay_s);
+
+  TaskShared sh;
+  TaskMachine machine(hw.p, sv.tau, sat::kFaultPhaseMismatch);
+  machine.submitCommand(cmd);
+  const double nominal = cfg.run.max_duration_s - cfg.safety.stop_duration_s - 1.0;
+  ReplayLoop loop(cfg, urdf_xml, std::make_unique<TaskSource>(std::move(approach), sh, nominal));
+  loop.setExternalStopFlag(&g_stop_requested);
+  const std::string csv_path = logPath(cli, cfg, cli.dry_run ? "dryrun" : "robot");
+  const std::string base = csv_path.substr(0, csv_path.size() - 4);
+  if (cli.dry_run && cfg.dry_run.ignore_tracking_error) loop.setTrackingGuardEnabled(false);
+
+  Report report;
+  checkLibfranka(cfg, report, /*fatal=*/!cli.dry_run);
+  auto pathCheck = [&](const Array7& q) {
+    if (!goal_ok) {
+      loop.prepareDamping(q, nullptr, nullptr);
+      return;
+    }
+    ProDmpSource ps(weights, "", 1.0, 0.0);
+    ps.setGoal(cmd.goal_p, cmd.goal_q);
+    const PathCheckResult r = checkJointPath(cfg, urdf_xml, ps, q);
+    sv.path_checked = true;
+    sv.path_ok = r.ok;
+    sv.path_detail = fmt("worst joint%d, margin %.4f rad (required %.3f), min w_trans %.5f, %zu samples", r.worst_joint + 1,
+                         r.worst_joint >= 0 ? r.min_margin_rad[static_cast<std::size_t>(r.worst_joint)] : 0.0, r.margin_rad, r.min_w_trans,
+                         r.samples);
+    std::printf("  goal trajectory joint-path check: %s (%s)\n", r.ok ? "OK" : "FAIL", sv.path_detail.c_str());
+    loop.prepareDamping(q, &r.lambda_min, &r.lambda_max);
+  };
+
+  const std::size_t max_cycles = static_cast<std::size_t>((cfg.run.max_duration_s + cfg.safety.stop_duration_s) / kNominalCycleS) + 100;
+  TaskCycleLog tlog(max_cycles);
+  TaskCycleCtx cc;
+  cc.sh = &sh;
+  cc.log = &tlog;
+  cc.jitter_period_s = hw.jitter_period_s;
+  cc.jitter_n = hw.jitter_consecutive;
+  std::unique_ptr<TaskRuntime> rt;
+  int exit_code = 0;
+
+  if (cli.dry_run) {
+    applyRuntimeFlags(cfg);
+    pathCheck(cfg.dry_run.q);
+    preflightModel(loop, cfg, cfg.dry_run.q, report, /*robot_mode=*/false, /*moves=*/true);
+    if (report.failures > 0) {
+      std::printf("INIT: %d preflight failure(s): no satellite command sent\n", report.failures);
+      return 1;
+    }
+    rt = std::make_unique<TaskRuntime>(hw, machine, sh, sv, cli.yes, &g_stop_requested);
+    rt->start();
+    franka::RobotState state{};
+    state.q = cfg.dry_run.q;
+    state.control_command_success_rate = 1.0;
+    auto next = SteadyClock::now();
+    for (std::size_t i = 0; i < max_cycles; ++i) {
+      const franka::Torques tq = runTaskCycle(loop, state, kNominalCycleS, cc);
+      if (tq.motion_finished) break;
+      next += std::chrono::microseconds(1000);
+      std::this_thread::sleep_until(next);
+    }
+  } else {
+    if (report.failures > 0 && cfg.preflight.abort_on_failure) {
+      std::printf("INIT: preflight failed, not connecting.\n");
+      return 1;
+    }
+    try {
+      franka::Robot robot(cfg.robot.ip, franka::RealtimeConfig::kIgnore);
+      robot.setCollisionBehavior(cfg.collision.lower_torque_acc, cfg.collision.upper_torque_acc, cfg.collision.lower_torque_nom,
+                                 cfg.collision.upper_torque_nom, cfg.collision.lower_force_acc, cfg.collision.upper_force_acc,
+                                 cfg.collision.lower_force_nom, cfg.collision.upper_force_nom);
+      robot.setJointImpedance(cfg.collision.joint_impedance);
+      robot.setCartesianImpedance(cfg.collision.cartesian_impedance);
+      if (cfg.end_effector.set_ee) robot.setEE(cfg.end_effector.ne_t_ee);
+      if (cfg.end_effector.set_load) robot.setLoad(cfg.end_effector.load_mass, cfg.end_effector.f_x_cload, cfg.end_effector.load_inertia);
+      const franka::RobotState s0 = robot.readOnce();
+      std::printf("INIT preflight:\n");
+      pathCheck(s0.q);
+      preflightRobot(robot, s0, loop, cfg, report, /*moves=*/true, /*settings_applied=*/true);
+      if (report.failures > 0 && cfg.preflight.abort_on_failure) {
+        std::printf("INIT: %d preflight failure(s) -> aborting before control; no satellite command sent\n", report.failures);
+        return 1;
+      }
+      if (!cli.yes) {
+        std::printf("\nWARNING: robot 1 will be torque-controlled (hold, then the approach after the trigger). Keep the user stop at hand.\n"
+                    "Press Enter to take control (Ctrl+C to abort)...\n");
+        std::cin.get();
+        if (g_stop_requested) {
+          std::printf("aborted by user before control.\n");
+          return 2;
+        }
+      }
+      applyRuntimeFlags(cfg);
+      rt = std::make_unique<TaskRuntime>(hw, machine, sh, sv, cli.yes, &g_stop_requested);
+      rt->start();
+      std::function<franka::Torques(const franka::RobotState&, franka::Duration)> callback =
+          [&loop, &cc](const franka::RobotState& s, franka::Duration d) { return runTaskCycle(loop, s, d.toSec(), cc); };
+      robot.control(callback, /*limit_rate=*/true, franka::kMaxCutoffFrequency);
+    } catch (const franka::ControlException& e) {
+      std::fprintf(stderr, "franka::ControlException: %s (%zu recorded states)\n", e.what(), e.log.size());
+      loop.markException(e.what());
+      exit_code = 3;
+    } catch (const franka::Exception& e) {
+      std::fprintf(stderr, "franka::Exception: %s\n", e.what());
+      loop.markException(e.what());
+      exit_code = 3;
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "exception: %s\n", e.what());
+      loop.markException(e.what());
+      exit_code = 3;
+    }
+  }
+  if (rt) rt->finish();  // the task thread sees the end of the loop; STOP guaranteed if START was sent
+
+  std::printf("=== loop results ===\n");
+  const RunStats st = collectStats(loop);
+  printSummary(loop, st);
+  if (rt) {
+    std::printf("  satellite datagrams: accepted %llu, rejected seq %llu, clock %llu, age %llu, non-finite/malformed %llu\n",
+                static_cast<unsigned long long>(rt->accepted()), static_cast<unsigned long long>(rt->rejected(SampleVerdict::kSeq)),
+                static_cast<unsigned long long>(rt->rejected(SampleVerdict::kClockBack)),
+                static_cast<unsigned long long>(rt->rejected(SampleVerdict::kAge)),
+                static_cast<unsigned long long>(rt->rejected(SampleVerdict::kNonFinite)));
+  }
+  printTaskFigures(machine);
+  writeLog(loop, cfg, csv_path);
+  std::string err;
+  if (tlog.writeCsv(base + "_task.csv", &err)) {
+    std::printf("task log written: %s_task.csv (%zu rows)\n", base.c_str(), tlog.size());
+  } else {
+    std::fprintf(stderr, "ERROR: task log: %s\n", err.c_str());
+  }
+  if (writeTaskEvents(machine, base + "_events.csv")) std::printf("task events written: %s_events.csv\n", base.c_str());
+  if (exit_code != 0) return exit_code;
+  return machine.exitCode();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -947,8 +1229,8 @@ int main(int argc, char** argv) {
     printUsage(argv[0]);
     return cli.help ? 0 : 1;
   }
-  if (cli.mode != "hold" && cli.mode != "step" && cli.mode != "step_rot" && cli.mode != "replay") {
-    std::fprintf(stderr, "error: unknown mode '%s' (hold | step | step_rot | replay)\n", cli.mode.c_str());
+  if (cli.mode != "hold" && cli.mode != "step" && cli.mode != "step_rot" && cli.mode != "replay" && cli.mode != "task") {
+    std::fprintf(stderr, "error: unknown mode '%s' (hold | step | step_rot | replay | task)\n", cli.mode.c_str());
     return 1;
   }
 
@@ -977,6 +1259,10 @@ int main(int argc, char** argv) {
     std::printf("config: %s\nurdf:   %s (control frame '%s')\n", cfg.config_path.c_str(),
                 cfg.paths.urdf.c_str(), cfg.robot.ee_frame.c_str());
     if (cli.preflight_only && cli.dry_run) throw std::runtime_error("--preflight-only and --dry-run are mutually exclusive");
+    if (cli.mode == "task") {
+      if (cli.preflight_only) throw std::runtime_error("--preflight-only is not supported with --mode task");
+      return runTask(cli, cfg, urdf_xml);
+    }
     if (cli.preflight_only) return runPreflightOnly(cli, cfg, urdf_xml);
     return cli.dry_run ? runDry(cli, cfg, urdf_xml) : runRobot(cli, cfg, urdf_xml);
   } catch (const std::exception& e) {

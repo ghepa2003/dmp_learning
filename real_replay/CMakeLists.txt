@@ -114,8 +114,14 @@ target_include_directories(rr_lib PUBLIC include)
 target_link_libraries(rr_lib PUBLIC fcc_core hdl_core sgp_jps ${YAML_TARGET} Eigen3::Eigen)
 target_compile_options(rr_lib PRIVATE -Wall -Wextra)
 
+# stage 2 task layer (pure logic + runtime threads; no libfranka, no ROS)
+add_library(task_lib STATIC src/task_logic.cpp src/task_runtime.cpp)
+target_include_directories(task_lib PUBLIC include)
+target_link_libraries(task_lib PUBLIC rr_lib ${YAML_TARGET} Eigen3::Eigen Threads::Threads)
+target_compile_options(task_lib PRIVATE -Wall -Wextra)
+
 add_executable(real_replay src/main.cpp)
-target_link_libraries(real_replay PRIVATE rr_lib Franka::Franka Threads::Threads)
+target_link_libraries(real_replay PRIVATE task_lib rr_lib Franka::Franka Threads::Threads)
 target_compile_options(real_replay PRIVATE -Wall -Wextra)
 
 # The non-rt and the system libfranka share name and SOVERSION (both 0.9.3): force the build
@@ -220,5 +226,24 @@ if(REAL_REPLAY_BUILD_TESTS)
     add_test(NAME satellite_dryrun_e2e COMMAND ${PYTHON3_EXE} "${CMAKE_CURRENT_SOURCE_DIR}/hw/test/test_satellite_e2e.py"
              $<TARGET_FILE:satellite_node> "${HW_CONFIG}" "${CMAKE_CURRENT_BINARY_DIR}/logs")
     set_tests_properties(satellite_dryrun_e2e PROPERTIES TIMEOUT 120)
+  endif()
+endif()
+
+# ---- stadio 2: ProDmpSource goal mode equivalence ----------------------------------------------------
+if(REAL_REPLAY_BUILD_TESTS)
+  add_executable(test_prodmp_goal test/test_prodmp_goal.cpp)
+  target_link_libraries(test_prodmp_goal PRIVATE rr_lib)
+  add_test(NAME prodmp_goal COMMAND test_prodmp_goal "${CMAKE_CURRENT_SOURCE_DIR}/../runs/20261014T150851_prodmp/weights.yaml")
+  add_executable(test_task_logic test/test_task_logic.cpp)
+  target_link_libraries(test_task_logic PRIVATE task_lib)
+  add_test(NAME task_logic COMMAND test_task_logic "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/hw/examples/grasp_command_nominale.yaml")
+  find_program(PYTHON3_EXE_TASK python3)
+  if(PYTHON3_EXE_TASK)
+    # hw.py run --dry-run end-to-end (about 2.5 min): omega -2, omega -3, infeasible x2, satellite killed
+    add_test(NAME task_dryrun_e2e COMMAND ${PYTHON3_EXE_TASK} "${CMAKE_CURRENT_SOURCE_DIR}/hw/test/test_task_e2e.py"
+             "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml"
+             "${CMAKE_CURRENT_SOURCE_DIR}/../runs/20261014T150851_prodmp/weights.yaml")
+    set_tests_properties(task_dryrun_e2e PROPERTIES TIMEOUT 400)
   endif()
 endif()

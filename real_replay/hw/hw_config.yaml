@@ -24,7 +24,7 @@ scene:
     yaw_deg: 0.0
 
 mockup:
-  mass_kg: 0.4                         # inviata con setLoad dal satellite_node
+  mass_kg: 0.0                         # inviata con setLoad dal satellite_node
   com_m: [0.0, 0.0, 0.1035]            # centro di massa nel frame flangia. STIMA (= centro del satellite)
   dimensions:                          # non usate dal codice dello stadio 1 (solo stampate). DA MISURARE
     body_diameter_m: null
@@ -39,6 +39,8 @@ robot1:
   start_q_rad: [1.570787, -0.786572, 0.000002, -2.378914, -0.000006, 3.141609, 0.785398]   # Q_MEAS
   reset_speed: 0.05                    # speed-factor di joint_point_to_point_motion, (0, 1]
   tol_deg: 0.5                         # max |dq| ammesso rispetto a start_q per dire "in posa"
+  real_replay_config: "../config/task_robot1_hand.yaml"          # --mode task sul robot
+  real_replay_config_dry: "../config/task_robot1_hand_dry.yaml"  # --mode task in dry-run (ignore_tracking_error)
 
 robot2:
   ip: "192.168.0.202"
@@ -91,7 +93,10 @@ udp:
   hb_send_hz: 10.0                     # frequenza con cui hw.py run invia heartbeat
 
 timing:
-  contact_delay_s: 5.4                 # sim ~= 5.4, da misurare sull'hardware
+  # T_c = tau + contact_delay_s. 0 = come l'executor del simulatore (theta_trig = wrapPi(theta* - omega*tau)): il braccio
+  # arriva al goal quando la presa arriva al goal. provisional_delay_s del GraspCommand NON e' questo (e' solo diagnostico).
+  # Il valore effettivo si misura: real_replay --mode task stampa "implied effective contact_delay_s" a fine run.
+  contact_delay_s: 0.0
   T_arm_min_s: 5.0                     # tempo minimo fra partenza e trigger
   T_follow_s: 5.0                      # inseguimento dopo il contatto
   T_ramp_s: 2.0                        # rampa di uscita dell'inseguimento
@@ -99,6 +104,21 @@ timing:
   T_close_max_s: 6.0                   # chiusura pinza, caso peggiore
   margin_arm_s: 2.0                    # condizione A: margine dopo che omega diventa valida (omega_valid) e prima del trigger
   trigger_timeout_margin_s: 5.0        # timeout trigger = (theta_trig - theta0)/omega + questo
+
+task:                                  # task layer del robot 1 (real_replay --mode task), stadio 2
+  T_hold_stage2_s: 3.0                 # HOLD_SAFE: target congelato sul goal, poi STOP al satellite ed uscita
+  cmd_max_age_s: 600.0                 # GraspCommand piu' vecchio di cosi' (stamp_unix_s) = rifiutato in VALIDATE
+  start_pos_tol_m: 0.005               # |start_pose.position - TCP misurato| (VALIDATE e allo scatto)
+  start_rot_tol_rad: 0.02              # angolo(start_pose.quaternion, TCP misurato)
+  sat_timeout_s: 2.0                   # nessun datagramma valido del satellite per piu' di cosi' = guasto
+  sat_start_timeout_s: 2.0             # satellite non RUNNING entro cosi' dopo START = guasto
+  trigger_max_age_s: 0.2               # eta' massima del campione per armare/far scattare il trigger
+  omega_meas_tol_deg_s: 0.1            # |omega_meas - omega_cmd| (solo con omega_valid): oltre = guasto
+  trigger_max_d_deg: 90.0              # lo scatto richiede |d_k| < questo (nessuno scatto su un salto di fase)
+  hb_send_hz: 20.0                     # heartbeat verso satellite_node (thread dedicato)
+  jitter_period_s: 0.003               # periodo del ciclo a 1 kHz oltre cui si conta un ciclo in ritardo
+  jitter_consecutive: 3                # tanti cicli consecutivi oltre jitter_period_s = guasto
+  fault_linger_s: 0.0                  # 0 = nello stato di guasto il processo resta vivo fino a Ctrl-C
 
 paths:
   libfranka_examples_dir: "/root/comanipulation_dualpanda/libfranka-active-control-non-rt/build/examples"

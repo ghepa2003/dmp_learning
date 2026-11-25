@@ -170,7 +170,9 @@ static void testConfig(const char* path) {
     check(near(c.scene.center_m[1], 0.720, 1e-12) && near(c.scene.omega_rad_s, -2.0 * kDeg, 1e-12), "scene values");
     check(c.robot2.ip == "192.168.0.202" && c.udp.publish_port == 5601 && c.udp.command_port == 5602, "robot2 ip and ports");
     check(near(c.robot2.q7_lo_rad, -135.0 * kDeg, 1e-12) && near(c.robot2.q7_hi_rad, 45.0 * kDeg, 1e-12), "q7 window");
-    check(near(c.mockup.mass_kg, 0.4, 1e-12), "mockup 0.4 kg");
+    // value set by the operator in hw_config (0.4 kg mock-up, 0.0 without it): only its validity is tested here
+    check(std::isfinite(c.mockup.mass_kg) && c.mockup.mass_kg >= 0.0 && c.mockup.mass_kg <= 3.0,
+          "mockup.mass_kg valid (" + std::to_string(c.mockup.mass_kg) + " kg)");
   } catch (const std::exception& e) {
     check(false, std::string("load: ") + e.what());
   }

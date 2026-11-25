@@ -1,4 +1,4 @@
-# hw/ — set-up a due Franka, stadio 1 (robot 2 "satellite")
+# hw/ — set-up a due Franka: stadio 1 (robot 2 "satellite") e stadio 2 (task layer del robot 1)
 
 Contenuto:
 
@@ -7,9 +7,11 @@ Contenuto:
 | `hw_config.yaml` | unica configurazione (scena, mockup, robot 1, robot 2, UDP, timing, percorsi, planner) |
 | `hw.py` | strumenti utente: `status`, `ik`, `reset`, `plan`, `run` (`python3 hw/hw.py --help`) |
 | `../tools/satellite_node.cpp` | processo del robot 2: ruota J7, pubblica lo stato via UDP |
+| `real_replay --mode task` | processo del robot 1 (stadio 2): VALIDATE, START al satellite, trigger di fase, avvicinamento ProDMP |
+| `../config/task_robot1_hand.yaml`, `..._dry.yaml` | config real_replay del task layer (robot e dry-run) |
 | `examples/grasp_command_nominale.yaml` | GraspCommand di esempio |
 | `examples/weights_sintetico_test.yaml` | pesi **sintetici, solo per i test** (contiene solo `tau`; non è un file di pesi reale) |
-| `test/` | test offline (`ctest`: `hw_plan`, `satellite_dryrun_e2e`) |
+| `test/` | test offline (`ctest`: `hw_plan`, `satellite_dryrun_e2e`, `task_dryrun_e2e`) |
 
 Nessun ROS. Tutto gira nel container `franka` (`/root/thesis_ws/real_replay`).
 
@@ -37,7 +39,8 @@ Nessun ROS. Tutto gira nel container `franka` (`/root/thesis_ws/real_replay`).
 | `ik [--psi0-deg X]` | IK offline del robot 2: minimi quadrati smorzati, spazio nullo verso il seme su J1–J6 (J7 libero = fase), q dentro i limiti. Rifiuta (exit 1) se un margine è < `ik_limit_margin_deg` o se l'errore supera 0.1 mm / 0.01°. |
 | `reset [--robot 1\|2\|both] [--yes]` | Un robot alla volta: q attuale → q obiettivo, conferma, poi `joint_point_to_point_motion <ip> q1..q7 [rad] <speed-factor>`. L'Invio che l'esempio aspetta lo manda hw.py dopo la propria conferma. Rifiuta se `robot_mode` ≠ `Idle`, con il motivo per Reflex / User stopped / Other. |
 | `plan` | Fattibilità del GraspCommand, senza muovere nulla (sotto). |
-| `run --only-satellite [--dry-run] [--max-travel-deg D]` | Avvia **solo** `satellite_node`, poi START, heartbeat a `udp.hb_send_hz` e stato live dalla porta monitor. Senza `--only-satellite` stampa "disponibile dallo stadio 2". |
+| `run --only-satellite [--dry-run] [--max-travel-deg D]` | Stadio 1: avvia **solo** `satellite_node`; START, heartbeat a `udp.hb_send_hz` e stato live li gestisce hw.py. |
+| `run [--dry-run] [--grasp-command F] [--weights F] [--fault-linger-s S]` | Stadio 2, sequenza completa (sotto). `--no-plan-gate` è solo per i test. |
 
 Ctrl-C durante `run` o `reset`: hw.py manda **un** SIGINT al figlio e attende la sua rampa di stop. SIGKILL solo dopo 15 s.
 
@@ -47,7 +50,8 @@ Exit code di hw.py:
 - 0 = ok;
 - 1 = controllo fallito / rifiutato / annullato;
 - 2 = errore di config o d'ingresso;
-- `run` = exit code di `satellite_node`.
+- `run --only-satellite` = exit code di `satellite_node`;
+- `run` = exit code di `real_replay --mode task` se ≠ 0, altrimenti 0 se anche `satellite_node` ha chiuso con 0, 7 se no.
 
 ### Controlli di `plan`
 
@@ -56,48 +60,133 @@ Notazione:
 - `T_c = τ + timing.contact_delay_s`
 - `θ_trig = wrapPi(θ* − ω·T_c)`, riportato sul ramo [−270, 90) per i confronti
 
-Controlli bloccanti:
-1. `status == SELECTED`.
+Controlli bloccanti (le lettere A–E sono le stesse di `real_replay --mode task`, `task::feasibility()`):
+1. `status == SELECTED`, `format == grasp_command_v2`, `frame_id == world`, `start_pose`/`goal_pose` presenti e finiti.
 2. `sha256(weights) == weights_sha256`.
 3. `|contact_time_s − τ| ≤ plan.tau_tol_s` (1e-6). τ è la chiave `tau` dei pesi, la stessa di `prodmp_io::loadProDmpFromYaml`.
 4. `|ω_comando − scene.omega_deg_s| ≤ plan.omega_tol_deg_s` (0.1°/s).
 5. ω ≠ 0. Solo avviso se |ω| non è in `plan.omega_domain_deg_s` = {2, 3}°/s.
-6. θ0 dentro la finestra con margine. θ0 = θ dalla FK della posa di partenza del robot 2 (`robot2.start`: q fisso o IK).
-7. Armamento: `s·(θ_trig − θ0) ≥ |ω|·T_arm_min_s`.
-8. Condizione A: `s·(θ_trig − θ0) ≥ |ω|·(ramp_s/2 + omega_window_s) + |ω|·timing.margin_arm_s`.
+6. **A**: `s·(θ_trig − θ0) ≥ |ω|·(ramp_s/2 + omega_window_s) + |ω|·timing.margin_arm_s`.
    - `|ω|·(ramp_s/2 + omega_window_s)` è l'angolo percorso prima che `omega_valid` diventi vero.
    - `ramp_s` e `omega_window_s` vengono da `robot2.control`.
-9. `θ_end = θ* + ω·(T_close_max + T_follow + T_ramp)` dentro la finestra con margine.
+7. **B** (armamento): `s·(θ_trig − θ0) ≥ |ω|·T_arm_min_s`.
+8. **C**: θ0 dentro la finestra con margine. In `plan` θ0 = θ dalla FK della posa di partenza del robot 2 (`robot2.start`: q fisso o IK); in `real_replay --mode task` θ0 è la fase **misurata** del satellite in WAIT_START.
+9. **D**: `θ_end = θ* + ω·(T_close_max + T_follow + T_ramp)` dentro la finestra con margine.
+10. **E** (solo avviso): |ω| in `plan.omega_domain_deg_s` = {2, 3}°/s.
 
 Stampa anche:
-- l'intervallo ammesso di θ0 (finestra con margine ∩ armamento);
-- il timeout del trigger, `(θ_trig − θ0)/ω + trigger_timeout_margin_s`;
+- l'intervallo ammesso di θ0 (finestra con margine ∩ A ∩ B);
+- il timeout del trigger dall'invio di START, `(θ_trig − θ0)/ω + ramp_s/2 + trigger_timeout_margin_s` (la rampa smoothstep del satellite fa perdere `ramp_s/2` secondi);
 - "portata robot 1: NON verificata". Il punto di estensione è `check_robot1_reach()`.
 
-Con la config e il comando di esempio:
-- θ_trig = −30.168°;
-- condizione A = 2·(1 + 5 + 2) = 16°;
-- θ0 ammesso ∈ [−14.168, −5.000]°;
+`timing.contact_delay_s` vale **0**: come l'executor del simulatore (`satellite_intercept.hpp`, `plannerThetaTrigRad`), `θ_trig = wrapPi(θ* − ω·τ)`. Il braccio arriva al goal (t = τ) quando la presa ci arriva. `provisional_delay_s` del GraspCommand non è un ritardo di contatto: è l'attesa stimata fra lo snapshot del planner e lo scatto, solo diagnostica, ignorata dall'executor. Il valore effettivo lo stampa `real_replay --mode task` a fine run ("implied effective contact_delay_s").
+
+Con la config e il comando di esempio (τ = 21.466 s sintetico):
+- θ_trig = −83.9 + 2·21.466 = −40.968°;
+- A = 2·(1 + 5 + 2) = 16°;
+- θ0 ammesso ∈ [−24.968, −5.000]°;
 - θ0 = −10° → FATTIBILE;
-- θ_end = −83.9 − 2·(6 + 5 + 2) = −109.9°.
+- θ_end = −83.9 − 2·(6 + 5 + 2) = −109.9°;
+- timeout del trigger = 15.484 + 1 + 5 = 21.484 s.
 
 ## Formato YAML d'ingresso
 
-**GraspCommand** (`format: grasp_command_v1`). Rispecchia `satellite_grasp_msgs/GraspCommand.msg`, ma usa i gradi:
+**GraspCommand** (`format: grasp_command_v2`). Rispecchia `satellite_grasp_msgs/GraspCommand.msg`, ma usa i gradi. `real_replay` li converte in radianti **una sola volta**, in `task::loadGraspCommand()`:
 
 ```yaml
-format: grasp_command_v1
-status: SELECTED              # SELECTED | NO_FEASIBLE_CANDIDATE | POSTHOC_FAILED | UNSET
+format: grasp_command_v2
+status: SELECTED              # SELECTED | NO_FEASIBLE_CANDIDATE | POSTHOC_FAILED | UNSET (msg.status)
+frame_id: world               # msg.header.frame_id; world = base del robot 1
+stamp_unix_s: 1764000000.0    # tempo di parete di creazione (msg.header.stamp); VALIDATE: non nel futuro (tol 1 s), età <= task.cmd_max_age_s
 theta_star_deg: -83.9         # msg.theta_star_rad in gradi, ramo [-270, 90)
 contact_time_s: 21.466        # msg.contact_time_s (= tau dei pesi)
 omega_deg_s: -2.0             # msg.omega_rad_s in gradi
 weights_sha256: "<hex>"       # msg.weights_sha256
-goal_pose: null               # stadio 2: {position_m: [x,y,z], quaternion_wxyz: [w,x,y,z]}, frame 1
-k: null                       # stadio 2: GraspPointId 0..3
-wrist_flip: null              # stadio 2
+start_pose:                   # msg.start_position + orientazione (estensione: il msg ha solo la posizione)
+  position_m: [x, y, z]       # TCP del robot 1 da cui il planner ha validato il rollout, frame 1
+  quaternion_wxyz: [w, x, y, z]
+goal_pose:                    # msg.goal_pose: TCP a fine approach (t = tau), frame 1
+  position_m: [x, y, z]
+  quaternion_wxyz: [w, x, y, z]
+k: 0                          # msg.k, GraspPointId 0..3 (informativo nello stadio 2)
+wrist_flip: false             # msg.wrist_flip (informativo nello stadio 2: l'orientazione è già in goal_pose)
 ```
 
 **Weights**: il file ProDMP reale (`weights.yaml` di `runs/...`). `plan` legge solo `tau` e lo sha256 del file intero. Il file `examples/weights_sintetico_test.yaml` è un sostituto sintetico per i test (`synthetic_test_only: true`).
+
+## real_replay --mode task (stadio 2)
+
+```
+real_replay --config config/task_robot1_hand[_dry].yaml --mode task --grasp-command F --hw-config hw/hw_config.yaml
+            [--weights F] [--dry-run] [--yes] [--fault-linger-s S]
+```
+
+Stati (`include/real_replay/task_logic.hpp`):
+- INIT → WAIT_CMD → VALIDATE → WAIT_TRIGGER → APPROACH → HOLD_SAFE → DONE.
+- Guasti: FAULT_NOMOTION (prima dell'avvicinamento) e FAULT_MOTION (durante o dopo). In entrambi: target congelato con v = 0, STOP al satellite, heartbeat spenti, processo vivo fino a Ctrl-C (o `task.fault_linger_s` / `--fault-linger-s`).
+- CLOSE_FOLLOW, SQUEEZE, RELEASE, FAULT_GRASP: stub dello stadio 3. Sono nello stesso enum, con le transizioni dichiarate in `transitionAllowed()`, ma mai raggiunti.
+
+Sequenza:
+1. **INIT**: preflight di real_replay (robot Idle, masse, FK, gravità, `start_pose_check`) e check dei limiti di giunto lungo la traiettoria con il goal (JointPathSimulator). Lo stesso check dà anche Λ_min/Λ_max al progetto dello smorzamento.
+2. **WAIT_CMD**: hold della posa di attivazione. L'orientazione viene letta **una volta**, al primo ciclo.
+3. **VALIDATE**: i controlli di `validateCommand()` (formato, status, frame, campi finiti, stamp, sha256, τ, start_pose vs TCP misurato ≤ 5 mm / 0.02 rad, ω vs config, `stop_at_fraction` = 1, limiti di giunto) più la fattibilità A–E con il θ0 misurato. Poi la conferma dell'operatore (o `--yes`). Se qualcosa fallisce: FAULT_NOMOTION **prima** di START. START viene inviato solo se il satellite è in WAIT_START, una volta sola.
+4. **WAIT_TRIGGER**: heartbeat a `task.hb_send_hz`. Il trigger si arma solo con `omega_valid`, età ≤ `trigger_max_age_s` e |ω_meas − ω_cmd| ≤ `omega_meas_tol_deg_s`.
+   - Scatto: `d_k = wrapPi(θ_k − θ_trig)`, con `sgn(ω)·d_{k−1} < 0`, `sgn(ω)·d_k ≥ 0` e `|d_k| < trigger_max_d_deg`.
+   - Allo scatto il TCP misurato deve essere ancora entro 5 mm / 0.02 rad da `start_pose`.
+5. **APPROACH**: `ProDmpSource` in modalità goal (sotto), avviata dalla posa di attivazione al primo ciclo a 1 kHz che vede il comando. Finisce a t = τ esattamente sul goal.
+6. **HOLD_SAFE**: target congelato sul goal; dopo `task.T_hold_stage2_s`, STOP al satellite, stop controllato del loop, uscita 0.
+
+Guasti gestiti (ognuno porta a uno stato di guasto con STOP, mai un'eccezione che chiude il processo):
+- nessun datagramma valido per più di `sat_timeout_s`;
+- età del campione oltre T_age in APPROACH, oltre `trigger_max_age_s` allo scatto;
+- NaN, seq non crescente, `t_mono` che torna indietro;
+- satellite con bit di guasto (es. heartbeat perso), oppure uscito da RUNNING, oppure non in RUNNING entro `sat_start_timeout_s`;
+- ω_meas fuori banda, `omega_valid` perso dopo l'armamento;
+- jitter del ciclo (`jitter_consecutive` periodi oltre `jitter_period_s`);
+- loop a 1 kHz terminato (tracking guard / SafetyGuard);
+- timeout del trigger;
+- Ctrl-C in qualunque stato (stop controllato del loop);
+- comando o START duplicati: ignorati e registrati negli eventi.
+
+Exit code: 0 HOLD_SAFE completato; 5 FAULT_NOMOTION; 6 FAULT_MOTION; 1 INIT fallito (nessun comando al satellite); 2 annullato prima del controllo; 3 eccezione libfranka.
+
+Log in `paths.log_dir` della config real_replay:
+- `<ts>_task_<kind>.csv`: il log del loop esistente;
+- `<ts>_task_<kind>_task.csv`: per ciclo, con stato, θ, età del campione, |e_pos|, |e_rot|;
+- `<ts>_task_<kind>_events.csv`: eventi con timestamp (START, omega_valid, TRIGGER con θ e d_k, inizio/fine APPROACH, guasti, STOP).
+
+A fine run vengono stampati i numeri del risultato:
+- errore di scatto `θ_trig − θ` misurata allo scatto;
+- durata trigger → fine approach;
+- **errore di fase al contatto** `θ(fine approach) − θ*`, grezzo ed estrapolato con l'età del campione;
+- `contact_delay_s` effettivo implicito, `−(θ_end − θ*)/ω`.
+
+### Goal da GraspCommand e ancoraggio rigido
+
+`ProDmpSource::setGoal(p, q)`, chiamato prima di `start()`, attiva la **modalità goal**. È la stessa catena dell'executor del simulatore in `grasp_command` (`startContinuousRollout`, con `grasp_orientation_mode = planner_goal`):
+- `setRelativeGoal(true)`, poi `setInitialConditions(0, p_att, 0)`, poi `setGoal(p_goal)`;
+- orientazione = SLERP da `q_att` ad `alignShortestPath(q_att, q_goal)`, con s = min(1, t/τ);
+- a t = τ: `p_goal` e `q_goal` esatti, twist nullo.
+
+Le due modalità non si sommano:
+- nella modalità goal il ProDMP è già ancorato dalla sua condizione iniziale alla posa di attivazione, quindi gli offset rigidi sono l'identità (`p_off = 0`, `q_off = I`, verificato in `start()`);
+- l'ancoraggio rigido (`p_off = p_att − p_raw0`, `q_off = q_att·q_raw0⁻¹`) resta, invariato, solo per `--mode replay` (nessun `setGoal`).
+
+Nel task layer la posa di attivazione è la posa TCP **misurata** al primo ciclo, e VALIDATE (e di nuovo lo scatto) richiede che disti ≤ 5 mm / 0.02 rad dalla `start_pose` del comando.
+
+Equivalenza (`test_prodmp_goal`, pesi `runs/20261014T150851_prodmp`, 3 goal): rollout a 1 kHz contro la catena dell'executor a 1 ms / 5 ms / 0.1 ms. Lo scarto massimo è 1.7e-4 mm e 1.1e-11°; posa finale bit per bit uguale al goal.
+
+### hw.py run (sequenza completa)
+
+1. `plan` con la partenza configurata: se fallisce non avvia nulla (exit 1).
+2. Solo in robot mode: robot 1 e robot 2 Idle, in posa e fermi (stesso criterio di `reset`), con `echo_robot_state`.
+3. Conferma dell'operatore e conferma digitata del carico (solo robot mode).
+4. Avvio di `satellite_node` e handshake: attende lo stato WAIT_START sulla porta monitor.
+5. Avvio di `real_replay --mode task`. È lui a inviare START, heartbeat e STOP; hw.py non invia comandi al satellite.
+6. Ctrl-C manda SIGINT a entrambi e attende le rampe (SIGKILL solo dopo 15 s). Se real_replay è uscito e il satellite non lo è ancora dopo 20 s, al satellite arriva SIGINT.
+7. Interpretazione degli exit code di entrambi.
+
+Con `--dry-run` entrambi i processi girano in dry-run (config `robot1.real_replay_config_dry`). Pesi: `--weights`, default `planner.weights_yaml`, che oggi è il file **sintetico**: per un run vero va puntato al `weights.yaml` reale.
 
 ## Protocollo UDP (versione 2, little-endian, 127.0.0.1)
 
