@@ -1,0 +1,115 @@
+# Configurazione hardware a due robot (stadio 1: robot 2 "satellite" + strumenti utente).
+# Unico file letto da hw/hw.py e da satellite_node. Percorsi relativi = rispetto alla cartella di questo file.
+# Angoli in gradi dove la chiave finisce con _deg, altrimenti radianti; lunghezze in metri.
+# Frame di riferimento di TUTTO cio' che e' pubblicato/controllato: base del robot 1 ("frame 1").
+
+scene:
+  center_m: [0.000, 0.720, 0.700]      # centro del satellite, frame 1
+  # Inclinazione dell'asse di rotazione: [tilt_x_deg, tilt_y_deg].
+  # Convenzione: axis_up = Ry(tilt_y) * Rx(tilt_x) * [0,0,1] (frame 1). [0,0] = asse verticale.
+  # La flangia del robot 2 ha z = -axis_up. hw.py e satellite_node stampano il vettore risultante.
+  axis_tilt_deg: [0.0, 0.0]
+  omega_deg_s: -2.0                    # velocita' di fase comandata. omega < 0 = orario visto dall'alto
+  flange_to_center_m: 0.1035           # centro = posizione flangia + 0.1035 m lungo z flangia
+  # Fase theta = psi_c = x_angle(flangia) + collar_phase_offset_deg; x_angle = angolo antiorario da +x (dall'alto)
+  # dell'asse x della flangia nel frame 1. IPOTESI (riferimento e segno) da verificare fisicamente.
+  collar_phase_offset_deg: -45.0
+  # Formula equivalente da q7 (valida con q1 = -90 deg, yaw base 0): theta_q7 = offset_deg + sign * q7.
+  # satellite_node calcola e logga entrambe e segnala (flag, non ferma) se differiscono oltre
+  # robot2.control.phase_mismatch_warn_deg.
+  q7_phase: {offset_deg: -135.0, sign: -1}
+  psi_window_deg: [-180.0, 0.0]        # finestra ammessa della fase. Ramo di unwrap [-270, +90) deg (non wrapPi)
+  base2_in_base1:                      # base robot 2 rispetto a base robot 1. ASSUNTA: da misurare
+    t_m: [0.0, 0.975, 0.0]
+    yaw_deg: 0.0
+
+mockup:
+  mass_kg: 0.4                         # inviata con setLoad dal satellite_node
+  com_m: [0.0, 0.0, 0.1035]            # centro di massa nel frame flangia. STIMA (= centro del satellite)
+  dimensions:                          # non usate dal codice dello stadio 1 (solo stampate). DA MISURARE
+    body_diameter_m: null
+    body_height_m: null
+  collar:
+    outer_radius_m: null               # DA MISURARE
+    wall_m: null                       # DA MISURARE
+    grasp_radius_m: 0.1975             # raggio dei punti di presa (meta' parete)
+
+robot1:
+  ip: "192.168.0.201"
+  start_q_rad: [1.570787, -0.786572, 0.000002, -2.378914, -0.000006, 3.141609, 0.785398]   # Q_MEAS
+  reset_speed: 0.05                    # speed-factor di joint_point_to_point_motion, (0, 1]
+  tol_deg: 0.5                         # max |dq| ammesso rispetto a start_q per dire "in posa"
+
+robot2:
+  ip: "192.168.0.202"
+  # Config real_replay da cui satellite_node prende SOLO safety, collision, end_effector.set_ee/ne_t_ee e le tolleranze
+  # di gravita'. Il suo robot.ip e il suo m_ee/m_load_max NON sono usati (vedi m_ee_max_kg e mockup qui sotto).
+  real_replay_config: "../config/hold3_robot2_nohand.yaml"
+  start:
+    mode: center_tilt                  # q = usa q_deg; center_tilt = IK da scene.center_m, axis_tilt_deg e psi0_deg
+    q_deg: [-90.0, -35.456, 0.0, -93.701, 0.0, 58.246, -125.0]
+    psi0_deg: -10.0                    # fase di partenza (dentro la finestra con margine)
+  validated_q_deg: [-90.0, -35.456, 0.0, -93.701, 0.0, 58.246, -135.0]   # posa validata: flangia (0,-0.255,0.8035) frame 2
+  ik_seed_deg: [-90.0, -35.456, 0.0, -93.701, 0.0, 58.246, -135.0]
+  q7_window_deg: [-135.0, 45.0]        # <=> psi in [-180, 0] con q7_phase nominale
+  window_margin_deg: 5.0               # margine dentro la finestra (partenza e fine corsa nominale)
+  ik_limit_margin_deg: 10.0            # hw.py ik rifiuta se un giunto e' a meno di questo dal limite
+  reset_speed: 0.05
+  m_ee_max_kg: 0.05                    # Desk: nessuna mano configurata sul robot 2 (il mockup va in m_load via setLoad)
+  m_load_tol_kg: 0.05                  # |m_load letto - mockup.mass_kg| oltre questo: WARN
+  tol:
+    q_deg: 0.5                         # hw.py status: max |dq| dalla posa di partenza
+    center_m: 0.005                    # preflight satellite_node: |centro da FK - scene.center_m|
+    axis_deg: 1.0                      # preflight: angolo tra asse da FK e asse da axis_tilt_deg
+    fk_vs_robot_m: 0.001               # preflight robot: FK DH vs O_T_EE * F_T_EE^-1 (posizione)
+    fk_vs_robot_deg: 0.5               # idem, orientamento
+  control:                             # PD di giunto in coppia a 1 kHz (come satellite_j7)
+    kp: [300.0, 300.0, 300.0, 300.0, 150.0, 100.0, 40.0]
+    kd: [15.0, 15.0, 15.0, 15.0, 8.0, 6.0, 3.0]
+    max_track_err_rad: 0.05
+    ramp_s: 2.0
+    stop_ramp_s: 2.0
+    hold_s: 1.0
+    max_travel_deg: 0.0                # 0 = solo la finestra limita la corsa
+    max_wait_start_s: 120.0            # in WAIT_START senza START per piu' di cosi': uscita (exit 3)
+    countdown_s: 3
+    omega_window_s: 5.0                # regressione lineare di theta su finestra mobile
+    omega_sample_hz: 100.0             # campionamento di theta per la regressione
+    phase_mismatch_warn_deg: 0.5
+  dry_run:
+    period_jitter_s: 0.0001            # jitter uniforme +- sul periodo simulato
+    meas_delay_cycles: 3               # ritardo della misura simulata (cicli da 1 ms)
+
+udp:
+  host: "127.0.0.1"
+  publish_port: 5601                   # stato satellite -> task layer
+  monitor_port: 5603                   # copia dello stato per hw.py status/run (0 = disattivata)
+  command_port: 5602                   # heartbeat / start / stop -> satellite_node
+  rate_hz: 100.0
+  T_hb_s: 0.5                          # dopo il primo heartbeat, assenza per T_hb_s => rampa di stop
+  T_age_s: 0.1                         # (consumatori) pacchetto piu' vecchio di cosi' = stato non valido
+  hb_send_hz: 10.0                     # frequenza con cui hw.py run invia heartbeat
+
+timing:
+  contact_delay_s: 5.4                 # sim ~= 5.4, da misurare sull'hardware
+  T_arm_min_s: 5.0                     # tempo minimo fra partenza e trigger
+  T_follow_s: 5.0                      # inseguimento dopo il contatto
+  T_ramp_s: 2.0                        # rampa di uscita dell'inseguimento
+  T_settle_s: 1.0
+  T_close_max_s: 6.0                   # chiusura pinza, caso peggiore
+  margin_arm_s: 2.0                    # condizione A: margine dopo che omega diventa valida (omega_valid) e prima del trigger
+  trigger_timeout_margin_s: 5.0        # timeout trigger = (theta_trig - theta0)/omega + questo
+
+paths:
+  libfranka_examples_dir: "/root/comanipulation_dualpanda/libfranka-active-control-non-rt/build/examples"
+  build_dir: "../build"
+  log_dir: "../build/logs"
+
+planner:
+  grasp_command_yaml: "examples/grasp_command_nominale.yaml"
+  weights_yaml: "examples/weights_sintetico_test.yaml"   # SINTETICO, solo test: sostituire con i pesi reali
+
+plan:                                  # soglie di hw.py plan
+  omega_tol_deg_s: 0.1                 # |omega comando - scene.omega_deg_s|
+  omega_domain_deg_s: [2.0, 3.0]       # |omega| attesi: fuori = avviso
+  tau_tol_s: 1.0e-6                    # |contact_time_s - tau dei pesi|

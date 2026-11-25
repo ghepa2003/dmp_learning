@@ -186,3 +186,39 @@ set_target_properties(satellite_j7 PROPERTIES
   BUILD_WITH_INSTALL_RPATH OFF
   BUILD_RPATH "${FRANKA_NONRT_BUILD_DIR}")
 target_link_options(satellite_j7 PRIVATE -Wl,--disable-new-dtags)
+
+# ---- hw stage 1: robot 2 "satellite" process (hw/hw_config.yaml, UDP state/commands) ----------------
+# Pure helpers (no libfranka): hw_config loader; satellite_phase.hpp / satellite_udp.hpp are header-only.
+add_library(sat_lib STATIC src/hw_config.cpp)
+target_include_directories(sat_lib PUBLIC include)
+target_link_libraries(sat_lib PUBLIC Eigen3::Eigen ${YAML_TARGET})
+target_compile_options(sat_lib PRIVATE -Wall -Wextra)
+
+add_executable(satellite_node tools/satellite_node.cpp)
+target_link_libraries(satellite_node PRIVATE sat_lib rr_lib Franka::Franka Threads::Threads)
+target_compile_options(satellite_node PRIVATE -Wall -Wextra)
+set_target_properties(satellite_node PROPERTIES
+  BUILD_WITH_INSTALL_RPATH OFF
+  BUILD_RPATH "${FRANKA_NONRT_BUILD_DIR}")
+target_link_options(satellite_node PRIVATE -Wl,--disable-new-dtags)
+
+if(REAL_REPLAY_BUILD_TESTS)
+  set(HW_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml")
+
+  add_executable(test_satellite_phase test/test_satellite_phase.cpp)
+  target_link_libraries(test_satellite_phase PRIVATE sat_lib)
+  add_test(NAME satellite_phase COMMAND test_satellite_phase "${HW_CONFIG}")
+
+  add_executable(test_satellite_udp test/test_satellite_udp.cpp)
+  target_link_libraries(test_satellite_udp PRIVATE sat_lib Threads::Threads)
+  add_test(NAME satellite_udp COMMAND test_satellite_udp)
+
+  find_program(PYTHON3_EXE python3)
+  if(PYTHON3_EXE)
+    add_test(NAME hw_plan COMMAND ${PYTHON3_EXE} "${CMAKE_CURRENT_SOURCE_DIR}/hw/test/test_hw_plan.py")
+    # dry-run end-to-end (about 25 s): satellite_node --dry-run --autostart + UDP listener (omega within 1 %)
+    add_test(NAME satellite_dryrun_e2e COMMAND ${PYTHON3_EXE} "${CMAKE_CURRENT_SOURCE_DIR}/hw/test/test_satellite_e2e.py"
+             $<TARGET_FILE:satellite_node> "${HW_CONFIG}" "${CMAKE_CURRENT_BINARY_DIR}/logs")
+    set_tests_properties(satellite_dryrun_e2e PROPERTIES TIMEOUT 120)
+  endif()
+endif()

@@ -1,0 +1,12 @@
+# GraspCommand di esempio (formato grasp_command_v1, vedi hw/README.md). Valori nominali di prova.
+# weights_sha256 = sha256 di examples/weights_sintetico_test.yaml (file SINTETICO, solo test).
+format: grasp_command_v1
+status: SELECTED
+theta_star_deg: -83.9            # fase del satellite al contatto, ramo [-270, 90)
+contact_time_s: 21.466           # = tau dei pesi (GraspLaunchResult::tau_launch_s)
+omega_deg_s: -2.0                # velocita' di fase usata dalla selezione
+weights_sha256: "95f8474c3eabf2978696e435302ea3cc34c8611e22f5d107fd578edc346411fb"
+# Campi per lo stadio 2 (non usati da hw.py plan); null = non disponibili in questo esempio.
+goal_pose: null                  # {position_m: [x,y,z], quaternion_wxyz: [w,x,y,z]}, frame robot 1
+k: null                          # GraspPointId 0..3
+wrist_flip: null

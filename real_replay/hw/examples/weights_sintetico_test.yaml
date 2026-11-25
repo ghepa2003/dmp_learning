@@ -1,0 +1,6 @@
+# FILE SINTETICO, SOLO PER I TEST di hw.py plan. NON e' un file di pesi reale e NON e' caricabile da ProDmpSource
+# (mancano centers/widths/weights/quaternion_dmp). Contiene solo la chiave 'tau' (stessa chiave letta da
+# prodmp_io::loadProDmpFromYaml) con il valore del comando di esempio.
+synthetic_test_only: true
+formulation: prodmp_integral
+tau: 21.466
