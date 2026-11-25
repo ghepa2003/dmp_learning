@@ -262,6 +262,7 @@ Config loadConfig(const std::string& yaml_path) {
     f.watchdog_grace_cycles = req<int>(s, "safety", "watchdog_grace_cycles");
     f.stop_duration_s = req<double>(s, "safety", "stop_duration_s");
     f.stop_damping_scale = req<double>(s, "safety", "stop_damping_scale");
+    f.stop_nullspace_to_current = opt<bool>(s, "safety", "stop_nullspace_to_current", false);
     for (double v : f.effort_limits_nm) requireFinitePositive(v, "safety.effort_limits_nm[*]");
     if (!(f.torque_limit_fraction > 0.0 && f.torque_limit_fraction <= 1.0)) {
       throw std::runtime_error("config: safety.torque_limit_fraction must be in (0, 1]");

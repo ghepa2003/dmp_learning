@@ -117,6 +117,10 @@ struct SafetyConfig {
   int watchdog_grace_cycles;     ///< success-rate check ignored for the first N cycles
   double stop_duration_s;        ///< controlled-stop phase length
   double stop_damping_scale;     ///< D multiplier during the controlled stop
+  /// On entering the controlled stop the nullspace target becomes the MEASURED joint configuration at that instant (F6 of the
+  /// 2026-11-25 analysis: without it the posture spring keeps pushing the self-motion towards the activation q_ref during the stop).
+  /// Default false = previous behaviour.
+  bool stop_nullspace_to_current = false;
 };
 
 struct CollisionConfig {

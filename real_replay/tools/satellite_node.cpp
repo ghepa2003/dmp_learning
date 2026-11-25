@@ -348,7 +348,7 @@ struct Comms {
 
 // ---- Log --------------------------------------------------------------------------------------------
 struct Rec {
-  double t, period, cb_us, state;
+  double t, period, cb_us, success_rate, state;
   double q[7];
   double dq7, q7_ref, dq7_ref, e_q7, tau7;
   double theta_flange, theta_q7, omega_meas, omega_cmd, omega_valid;
@@ -359,7 +359,7 @@ static_assert(sizeof(Rec) % sizeof(double) == 0, "Rec must be a flat array of do
 constexpr std::size_t kRecFields = sizeof(Rec) / sizeof(double);
 
 std::string csvHeader() {
-  std::string h = "t,period,cb_us,state";
+  std::string h = "t,period,cb_us,success_rate,state";
   for (int k = 1; k <= 7; ++k) h += ",q" + std::to_string(k);
   h += ",dq7,q7_ref,dq7_ref,e_q7,tau7,theta_flange_deg,theta_q7_deg,omega_meas_deg_s,omega_cmd_deg_s,omega_valid,cx,cy,cz,faults";
   return h;
@@ -515,11 +515,11 @@ class Controller {
       if (hb_timeout) set(Stop::kHeartbeat, "no heartbeat for more than T_hb_s");
       {
         const real_replay::StopReason r = guard_.checkCycle(in.period_s, last_cb_us_, in.success_rate, cycle_);
-        if (r != real_replay::StopReason::kNone) set(Stop::kSafety, std::string("SafetyGuard: ") + real_replay::toString(r));
+        if (r != real_replay::StopReason::kNone) set(Stop::kSafety, std::string("SafetyGuard: ") + guardText(r));
       }
       {
         const real_replay::StopReason r = guard_.checkState(in.q, in.dq, 0.0, 0.0);
-        if (r != real_replay::StopReason::kNone) set(Stop::kSafety, std::string("SafetyGuard: ") + real_replay::toString(r));
+        if (r != real_replay::StopReason::kNone) set(Stop::kSafety, std::string("SafetyGuard: ") + guardText(r));
       }
       for (std::size_t k = 0; k < 6; ++k) {
         if (std::fabs(q0_[k] - in.q[k]) > p_.max_track_err) set(Stop::kTracking, "held joint " + std::to_string(k + 1) + " deviates");
@@ -623,6 +623,7 @@ class Controller {
       Rec r{};
       r.t = t_;
       r.period = in.period_s;
+      r.success_rate = in.success_rate;
       r.state = static_cast<double>(static_cast<std::uint32_t>(st));
       for (std::size_t k = 0; k < 7; ++k) r.q[k] = in.q[k];
       r.dq7 = in.dq[6];
@@ -673,6 +674,11 @@ class Controller {
 
   Stop stopReason() const { return stop_; }
   const std::string& stopMessage() const { return stop_msg_; }
+  std::string guardText(real_replay::StopReason r) const {
+    char b[256];
+    real_replay::formatStopReason(b, sizeof b, r, guard_.lastDetail());
+    return b;
+  }
   bool orderlyEnd() const { return phase_ == Phase::kDone && stop_ != Stop::kNonFinite; }
   const std::vector<Rec>& records() const { return rec_; }
   long cycles() const { return cycle_; }

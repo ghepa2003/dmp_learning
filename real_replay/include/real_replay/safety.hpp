@@ -3,6 +3,7 @@
 // Safety layer for the 1 kHz torque loop. No dynamic allocation, no I/O, no exceptions.
 
 #include <array>
+#include <cstddef>
 
 #include "real_replay/config.hpp"
 
@@ -27,6 +28,19 @@ enum class StopReason : int {
 };
 
 const char* toString(StopReason r) noexcept;
+
+/// Which guard tripped and with which numbers (written by SafetyGuard on the cycle that returns a reason; plain data,
+/// no allocation). joint is 0-based, -1 when the check is not per joint.
+struct StopDetail {
+  const char* what = "";   ///< static string: "joint limit", "joint speed", "tracking position", ...
+  int joint = -1;
+  double value = 0.0;      ///< measured value (rad, rad/s, m, rad, s, us, ratio)
+  double limit = 0.0;      ///< threshold that was exceeded
+  int consecutive = 0;     ///< debounce count configured for this check (0 = single cycle)
+};
+
+/// Writes a one-line, human-readable reason into buf (snprintf, truncated, always NUL terminated; no allocation).
+void formatStopReason(char* buf, std::size_t n, StopReason r, const StopDetail& d) noexcept;
 
 /// Counts consecutive violations; fires once the count reaches n.
 class Debounce {
@@ -69,6 +83,9 @@ class SafetyGuard {
   /// Dry-run only: the state is fixed there, so the target legitimately moves away from it.
   void setTrackingCheckEnabled(bool enabled) noexcept { track_enabled_ = enabled; }
 
+  /// Numbers of the last reason returned by checkState()/checkCycle().
+  const StopDetail& lastDetail() const noexcept { return detail_; }
+
   const Array7& lastTorque() const noexcept { return prev_; }
   const Array7& torqueLimits() const noexcept { return tau_limit_; }
 
@@ -81,6 +98,8 @@ class SafetyGuard {
   bool rate_limited_ = false;
   bool clamped_ = false;
   bool track_enabled_ = true;
+  StopDetail detail_{};
+  int fast_joint_ = 0;  ///< joint with the largest |dq| in the last cycle that exceeded the speed limit
   Debounce speed_;
   Debounce track_pos_;
   Debounce track_rot_;

@@ -176,6 +176,7 @@ struct Harness {
   double omega_meas_override = std::nan("");
   bool guard_on = false;
   double e_pos = 0.0, f_ext = 0.0;
+  std::string loop_stop_text, loop_reason_text = "test";
 
   Harness(const TaskParams& pp, const GraspCommand& c) : p(pp), m(pp, 24.474, sat::kFaultPhaseMismatch), filter(pp.T_age_s), omega(c.omega) {
     m.submitCommand(c);
@@ -260,7 +261,8 @@ struct Harness {
     in.approach_started = approach_started;
     in.approach_done = approach_done;
     in.loop_finished = loop_finished;
-    in.loop_reason = "test";
+    in.loop_reason = loop_reason_text;
+    in.loop_stop_text = loop_stop_text;
     in.abort = abort;
     in.grip_done_id = g_done_id;
     in.grip_done_ok = g_done_ok;
@@ -406,6 +408,38 @@ static void testMachine() {
     h.runFor(0.05);
     check(h.in(TaskState::kFaultMotion) && h.m.exitCode() == 6 && h.countCmd(GripperCmd::kOpen) == 1 && h.countCmd(GripperCmd::kGrasp) == 0,
           "fault in APPROACH -> FAULT_MOTION (exit 6): no grasp, no further gripper command (hand stays open)");
+  }
+  {  // the exact reason of the loop stop goes to the events (once), and into the fault text; satellite fault bits are named
+    Harness h(grasping(), nominalCmd());
+    h.runUntil([&] { return h.in(TaskState::kApproach); }, 200.0);
+    h.runFor(1.0);
+    h.loop_stop_text = "t=56.577 s cycle 56370: joint_speed: joint 5: |dq| = 1.008 rad/s > 1.000 rad/s for 3 consecutive cycles";
+    h.runFor(0.05);
+    h.loop_reason_text = h.loop_stop_text + "; libfranka/control exception: joint_velocity_violation";
+    h.loop_finished = true;
+    h.runFor(0.05);
+    int n_ev = 0;
+    std::string detail;
+    for (const Event& e : h.m.events()) {
+      if (e.name == "control loop stop") {
+        ++n_ev;
+        detail = e.detail;
+      }
+    }
+    check(n_ev == 1 && detail.find("joint 5") != std::string::npos && detail.find("1.008") != std::string::npos,
+          "event 'control loop stop' written once with joint and value: " + detail);
+    check(h.in(TaskState::kFaultMotion) && h.m.faultReason().find("joint_speed") != std::string::npos &&
+              h.m.faultReason().find("joint_velocity_violation") != std::string::npos,
+          "fault text carries the guard and the libfranka exception: " + h.m.faultReason());
+  }
+  {  // satellite fault word 0x8: named bit, not the old misleading "bit 1 = our heartbeat lost"
+    Harness h(grasping(), nominalCmd());
+    h.runUntil([&] { return h.in(TaskState::kApproach); }, 200.0);
+    h.sat_faults = sat::kFaultSafety;
+    h.runFor(0.2);
+    check(h.in(TaskState::kFaultMotion) && h.m.faultReason().find("0x8") != std::string::npos &&
+              h.m.faultReason().find("bit3 SafetyGuard") != std::string::npos && h.m.faultReason().find("heartbeat lost") == std::string::npos,
+          "satellite faults 0x8 -> names bit3 (SafetyGuard of robot 2): " + h.m.faultReason());
   }
   {  // fault before the approach
     Harness h(grasping(), nominalCmd());

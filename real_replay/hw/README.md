@@ -335,6 +335,13 @@ Il carico è impostato **prima** del run (`setLoad` non è possibile durante il 
 
 `config/task_robot1_hand_ff.yaml` / `_ff_dry.yaml` = `task_robot1_hand*.yaml` + `friction_ff` del controllore validato il 17/11 (`*_ffa100`: α 1.0, eps 0.005 rad/s, DLS 0.05, τc [0.615 0.361 0.361 0.562 0 0 0.154], b [2.83 1.89 2.71 1.6 0 0 0.18], rampa gain 0.1→1 in 3 s). `task_robot1_hand.yaml` non lo abilita (invariato). La velocità di riferimento viene da `twist()` della sorgente: ProDmpSource in APPROACH, rotazione rigida in FOLLOW (si annulla con la rampa e dopo il congelamento).
 
+### Stop controllato, nullspace e log dei guasti (2026-11-25)
+
+- `safety.stop_nullspace_to_current` (default **false**): se true, entrando nello stop controllato il target di nullspace diventa la `q` misurata in quell'istante, quindi dopo lo stop la coppia di nullspace dipende da `(q - q_stop)` e non dalla distanza dalla postura di attivazione (che col q_ref fisso resta una molla da decine di gradi su J1). Test: `test_stop_nullspace`. Abilitato SOLO nelle config nuove `*_j1ns1`.
+- Eventi (`*_events.csv`): `control loop stop` = istante in cui il loop esce da RUNNING, con guardia, giunto e valore (es. `joint_speed: joint 5: |dq| = 1.008 rad/s > 1.000 rad/s for 3 consecutive cycles`); il testo dell'eccezione libfranka (reflex) è nel motivo del FAULT (`control loop ended: ...; libfranka/control exception: ...`). I bit del satellite sono nominati (0x8 = SafetyGuard di robot 2, non "heartbeat").
+- Il CSV del satellite ha la colonna `success_rate` dopo `cb_us`.
+- Varianti F5+F6 pronte (non modificano le config esistenti): `hw/hw_config_j1ns1.yaml`, `config/task_robot1_hand_ff_j1ns1[_dry].yaml` (`joint1_nullspace_stiffness` 1 e `stop_nullspace_to_current`), planner `config/grasp_planner_hardware_j1p90_B_open040_j1ns1.yaml` (`s1.follow_joint1_nullspace_stiffness` 1.0, DEVE coincidere col controllore), comando `hw/examples/grasp_command_hw_j1p90_B_open040_j1ns1_w2_th0m10.yaml`.
+
 ### Altri
 
 - `start_pose.quaternion_wxyz` è opzionale: senza, l'orientazione di partenza non è controllata (WARN in VALIDATE; `hw.py plan` lo segnala).

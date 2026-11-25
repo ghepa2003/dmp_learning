@@ -9,6 +9,7 @@
 // (sockets, YAML, validation, stdin, printing) runs in the threads below.
 
 #include <atomic>
+#include <cstdio>
 #include <csignal>
 #include <cstdint>
 #include <memory>
@@ -43,6 +44,18 @@ struct TaskShared {
   std::atomic<bool> approach_done{false};
   std::atomic<bool> loop_finished{false};
   std::atomic<int> loop_reason{0};
+  /// Why the 1 kHz loop ended / started its controlled stop (guard + numbers, libfranka exception text). Single writer at a time,
+  /// published with release; the task thread reads it only after reason_ready (acquire). Fixed buffer: no allocation in the callback.
+  char loop_text[320] = {0};
+  std::atomic<bool> loop_text_ready{false};
+  void setLoopText(const char* s) noexcept {
+    if (loop_text_ready.load(std::memory_order_acquire)) return;  // written once, by the 1 kHz callback
+    std::snprintf(loop_text, sizeof loop_text, "%s", s);
+    loop_text_ready.store(true, std::memory_order_release);
+  }
+  /// libfranka / control exception text: written by main() AFTER robot.control() returned and BEFORE loop_finished is raised, so the
+  /// task thread (which reads it only once loop_finished is true) never races with it.
+  char exc_text[320] = {0};
   std::atomic<bool> jitter_fault{false};
   std::atomic<std::uint64_t> loop_cycles{0};  ///< incremented by EVERY 1 kHz callback: gates the heartbeat
   std::atomic<bool> guard_valid{false};       ///< published by the callback (robot mode only)

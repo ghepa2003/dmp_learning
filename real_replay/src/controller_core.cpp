@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 
@@ -184,14 +185,41 @@ double ReplayLoop::gainAlpha(double t) const noexcept {
   return a0 + (1.0 - a0) * s;
 }
 
-void ReplayLoop::enterStopping(StopReason r, const Eigen::Vector3d& p,
-                               const Eigen::Quaterniond& q) noexcept {
+void ReplayLoop::setStopText(StopReason r) noexcept {
+  if (stop_text_ready_.load(std::memory_order_relaxed)) return;
+  char head[48];
+  std::snprintf(head, sizeof head, "t=%.3f s cycle %ld: ", t_, cycle_);
+  char body[200];
+  switch (r) {
+    case StopReason::kJointLimit:
+    case StopReason::kJointSpeed:
+    case StopReason::kTrackingError:
+    case StopReason::kPeriodWatchdog:
+    case StopReason::kCallbackBudget:
+    case StopReason::kSuccessRate:
+    case StopReason::kNonFiniteState:
+      formatStopReason(body, sizeof body, r, guard_.lastDetail());
+      break;
+    default:
+      std::snprintf(body, sizeof body, "%s", toString(r));
+      break;
+  }
+  std::snprintf(stop_text_, sizeof stop_text_, "%s%s", head, body);
+  stop_text_ready_.store(true, std::memory_order_release);
+}
+
+void ReplayLoop::enterStopping(StopReason r, const Eigen::Vector3d& p, const Eigen::Quaterniond& q,
+                               const JointVec& q_joint) noexcept {
   if (phase_ != LoopPhase::kRunning) return;
   stop_reason_ = r;
   phase_ = LoopPhase::kStopping;
   stop_target_.p = p;
   stop_target_.q = q;
   stop_elapsed_ = 0.0;
+  // F6: the posture reference follows the arm from now on, so the nullspace torque depends on (q - q_stop) and not on the
+  // distance to the activation configuration (which can be tens of degrees away and keeps pushing the self-motion).
+  if (cfg_.safety.stop_nullspace_to_current) solver_.setNullspaceTarget(q_joint);
+  setStopText(r);
 }
 
 void ReplayLoop::prepareDamping(const Array7& q, const Array6* lambda_min, const Array6* lambda_max) {
@@ -243,6 +271,7 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
   }
   if (!q.allFinite() || !dq.allFinite()) {
     if (stop_reason_ == StopReason::kNone) stop_reason_ = StopReason::kNonFiniteState;
+    setStopText(StopReason::kNonFiniteState);
     phase_ = LoopPhase::kFinished;
     out.finished = true;  // zero torque
     return;
@@ -262,6 +291,7 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
     if (drift > cfg_.damping.max_q_drift_rad) {
       // The robot moved between the damping design and the start of control: the design is stale.
       stop_reason_ = StopReason::kActivationDrift;
+      setStopText(StopReason::kActivationDrift);
       phase_ = LoopPhase::kFinished;
       out.finished = true;  // zero torque
       return;
@@ -314,7 +344,7 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
     // The source decides when it is over (replay: stop_at_fraction + hold_after_end_s live there).
     if (r == StopReason::kNone && source_->done()) r = StopReason::kCompleted;
     if (r != StopReason::kNone) {
-      enterStopping(r, p_meas, q_meas);
+      enterStopping(r, p_meas, q_meas, q);
       err = core::computePoseError(p_meas, q_meas, stop_target_.p, stop_target_.q);
     }
   }
@@ -357,6 +387,7 @@ void ReplayLoop::step(const LoopInput& in, LoopOutput& out) {
   if (!tau_d.allFinite()) {
     if (stop_reason_ == StopReason::kNone || stop_reason_ == StopReason::kCompleted) {
       stop_reason_ = StopReason::kNonFiniteTorque;
+      setStopText(StopReason::kNonFiniteTorque);
     }
     phase_ = LoopPhase::kFinished;
     out.finished = true;  // zero torque

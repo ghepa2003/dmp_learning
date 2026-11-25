@@ -374,7 +374,11 @@ void TaskRuntime::taskLoop() {
     in.approach_started = sh_.approach_started.load(std::memory_order_acquire);
     in.approach_done = sh_.approach_done.load(std::memory_order_acquire);
     in.loop_finished = sh_.loop_finished.load();
-    in.loop_reason = in.loop_finished ? "control loop finished" : "";
+    if (sh_.loop_text_ready.load(std::memory_order_acquire)) in.loop_stop_text = sh_.loop_text;
+    if (in.loop_finished) {
+      in.loop_reason = in.loop_stop_text.empty() ? std::string("loop finished") : in.loop_stop_text;
+      if (sh_.exc_text[0] != '\0') in.loop_reason += std::string("; ") + sh_.exc_text;
+    }
     in.jitter_fault = sh_.jitter_fault.load();
     in.abort = abort_ != nullptr && *abort_ != 0;
     in.guard_valid = sh_.guard_valid.load(std::memory_order_relaxed);

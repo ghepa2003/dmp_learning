@@ -264,6 +264,7 @@ struct MachineInputs {
   bool approach_done = false;
   bool loop_finished = false;
   std::string loop_reason;
+  std::string loop_stop_text;  ///< non-empty from the cycle in which the 1 kHz loop left RUNNING (guard + numbers): logged once as an event
   bool jitter_fault = false;
   bool abort = false;  ///< Ctrl-C / SIGTERM
   // gripper worker (ids are the ones the machine issued in MachineActions::gripper_id)
@@ -362,6 +363,7 @@ class TaskMachine {
   GraspCommand cmd_;
   bool have_cmd_ = false;
   bool validated_ = false, validation_failed_ = false, confirmed_ = false;
+  bool loop_stop_logged_ = false;
   bool start_sent_ = false, stop_sent_ = false, stop_pending_ = false, start_pending_ = false;
   bool stop_hard_pending_ = false, hard_sent_ = false;
   bool armed_ = false, sat_running_seen_ = false;

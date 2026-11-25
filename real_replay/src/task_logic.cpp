@@ -532,6 +532,31 @@ bool TaskMachine::guardTrip(const MachineInputs& in, std::string& why) {
   return true;
 }
 
+/// Names of the set bits of the satellite fault word (bit k = 1u << k, see sat::SatFault in satellite_udp.hpp).
+static std::string satFaultNames(std::uint32_t bits) {
+  struct N { std::uint32_t bit; const char* name; };
+  static const N names[] = {
+      {sat::kFaultWindow, "bit0 window: q7/theta outside the window"},
+      {sat::kFaultHeartbeat, "bit1 heartbeat: no heartbeat from the task layer"},
+      {sat::kFaultTracking, "bit2 joint tracking error of robot 2"},
+      {sat::kFaultSafety, "bit3 SafetyGuard of robot 2 (period / callback budget / success rate / joint limit / joint speed)"},
+      {sat::kFaultPhaseMismatch, "bit4 phase mismatch flange/q7"},
+      {sat::kFaultStopCommand, "bit5 STOP command"},
+      {sat::kFaultSignal, "bit6 SIGINT/SIGTERM"},
+      {sat::kFaultNonFinite, "bit7 non-finite state/torque"},
+      {sat::kFaultWaitTimeout, "bit8 no START within max_wait_start_s"},
+      {sat::kFaultLogFull, "bit9 log full"},
+  };
+  std::string out;
+  for (const N& n : names) {
+    if ((bits & n.bit) == 0) continue;
+    if (!out.empty()) out += "; ";
+    out += n.name;
+  }
+  if (out.empty()) out = "unknown bits";
+  return out;
+}
+
 bool TaskMachine::satFault(const MachineInputs& in, std::string& why) const {
   if (!rej_baseline_) return false;
   if (in.rejected_seq > rej_seq0_) {
@@ -558,7 +583,7 @@ bool TaskMachine::satFault(const MachineInputs& in, std::string& why) const {
     if (bad != 0) {
       char hex[16];
       std::snprintf(hex, sizeof hex, "0x%x", static_cast<unsigned>(bad));
-      why = std::string("satellite reports faults ") + hex + " (bit 1 = our heartbeat lost; see satellite_node)";
+      why = std::string("satellite reports faults ") + hex + " [" + satFaultNames(bad) + "] (see the satellite_node log)";
       return true;
     }
     const bool stopping_ok = stop_sent_ && in.sat.state == static_cast<std::uint32_t>(sat::SatState::kStopping);
@@ -573,6 +598,10 @@ bool TaskMachine::satFault(const MachineInputs& in, std::string& why) const {
 MachineActions TaskMachine::update(const MachineInputs& in) {
   MachineActions a;
   using S = TaskState;
+  if (!loop_stop_logged_ && !in.loop_stop_text.empty()) {  // the 1 kHz loop left RUNNING (guard / signal / duration): exact reason
+    loop_stop_logged_ = true;
+    event(in.now_s, "control loop stop", in.loop_stop_text);
+  }
   const auto running = static_cast<std::uint32_t>(sat::SatState::kRunning);
   const auto wait_start = static_cast<std::uint32_t>(sat::SatState::kWaitStart);
   std::string why;

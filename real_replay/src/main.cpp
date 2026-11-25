@@ -977,6 +977,7 @@ struct TaskCycleCtx {
   int jitter_n = 3;
   int jitter_count = 0;
   bool activation_published = false;
+  bool stop_text_published = false;
   bool guard_enabled = false;   ///< publish e_pos / F_ext for the machine's guard (robot mode only)
 };
 
@@ -991,6 +992,10 @@ double monoNowS() {
 franka::Torques runTaskCycle(ReplayLoop& loop, const franka::RobotState& s, double period_s, TaskCycleCtx& c) {
   const franka::Torques tq = runCycle(loop, s, period_s);
   c.sh->loop_cycles.fetch_add(1, std::memory_order_relaxed);  // liveness of the control loop (heartbeat gate)
+  if (!c.stop_text_published && loop.stopTextReady()) {       // the loop left RUNNING: guard + numbers go to the task events
+    c.sh->setLoopText(loop.stopText());
+    c.stop_text_published = true;
+  }
   const double t = monoNowS();
   const std::size_t n = loop.logger().size();
   if (n > 0) {
@@ -1292,14 +1297,17 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
     } catch (const franka::ControlException& e) {
       std::fprintf(stderr, "franka::ControlException: %s (%zu recorded states)\n", e.what(), e.log.size());
       loop.markException(e.what());
+      std::snprintf(sh.exc_text, sizeof sh.exc_text, "libfranka/control exception: %s", e.what());
       exit_code = 3;
     } catch (const franka::Exception& e) {
       std::fprintf(stderr, "franka::Exception: %s\n", e.what());
       loop.markException(e.what());
+      std::snprintf(sh.exc_text, sizeof sh.exc_text, "libfranka/control exception: %s", e.what());
       exit_code = 3;
     } catch (const std::exception& e) {
       std::fprintf(stderr, "exception: %s\n", e.what());
       loop.markException(e.what());
+      std::snprintf(sh.exc_text, sizeof sh.exc_text, "libfranka/control exception: %s", e.what());
       exit_code = 3;
     }
   }

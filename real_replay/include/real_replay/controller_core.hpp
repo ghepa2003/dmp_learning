@@ -7,6 +7,7 @@
 // Known allocations inside step(): RobotModel::update() (4 small Eigen heap buffers). They are
 // in existing code that this project does not modify; the dry-run measures their cost.
 
+#include <atomic>
 #include <csignal>
 #include <memory>
 #include <string>
@@ -153,12 +154,20 @@ class ReplayLoop {
   const Pose& activationPose() const noexcept { return activation_; }
   const Pose& firstTarget() const noexcept { return first_target_; }
   const std::string& exceptionMessage() const noexcept { return exception_msg_; }
+  /// One-line reason of the stop (guard + numbers), written ONCE when the loop leaves RUNNING; "" until then. Fixed buffer: safe to
+  /// read from another thread only after stopTextReady() returned true (release/acquire).
+  const char* stopText() const noexcept { return stop_text_; }
+  bool stopTextReady() const noexcept { return stop_text_ready_.load(std::memory_order_acquire); }
+  /// Nullspace target currently used by the solver, and the nullspace torque of the last cycle (diagnostics / tests).
+  const core::RobotModel::JointVector& nullspaceTarget() const noexcept { return solver_.nullspaceTarget(); }
+  const core::RobotModel::JointVector& lastNullspaceTorque() const noexcept { return solver_.lastNullspaceTorque(); }
 
  private:
   using JointVec = core::RobotModel::JointVector;
 
   double gainAlpha(double t) const noexcept;
-  void enterStopping(StopReason r, const Eigen::Vector3d& p, const Eigen::Quaterniond& q) noexcept;
+  void enterStopping(StopReason r, const Eigen::Vector3d& p, const Eigen::Quaterniond& q, const JointVec& q_joint) noexcept;
+  void setStopText(StopReason r) noexcept;
 
   Config cfg_;
   core::RobotModel model_;
@@ -173,6 +182,8 @@ class ReplayLoop {
   LoopPhase phase_ = LoopPhase::kWaitFirst;
   StopReason stop_reason_ = StopReason::kNone;
   std::string exception_msg_;
+  char stop_text_[256] = {0};
+  std::atomic<bool> stop_text_ready_{false};
 
   long cycle_ = 0;
   double t_ = 0.0;

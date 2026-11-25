@@ -152,6 +152,11 @@ if(REAL_REPLAY_BUILD_TESTS)
   add_test(NAME damping_torque COMMAND test_damping_torque "${RR_CONFIG}" "${RR_URDF}")
   set_tests_properties(damping_torque PROPERTIES SKIP_RETURN_CODE 77)
 
+  add_executable(test_stop_nullspace test/test_stop_nullspace.cpp)
+  target_link_libraries(test_stop_nullspace PRIVATE rr_lib)
+  add_test(NAME stop_nullspace COMMAND test_stop_nullspace "${RR_CONFIG}" "${RR_URDF}")
+  set_tests_properties(stop_nullspace PROPERTIES SKIP_RETURN_CODE 77)
+
   add_executable(test_preflight_checks test/test_preflight_checks.cpp)
   target_link_libraries(test_preflight_checks PRIVATE rr_lib)
   add_test(NAME preflight_checks COMMAND test_preflight_checks "${RR_CONFIG}" "${RR_URDF}")
