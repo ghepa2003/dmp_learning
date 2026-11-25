@@ -148,7 +148,7 @@ Guasti gestiti (ognuno porta a uno stato di guasto con STOP, mai un'eccezione ch
 - Ctrl-C in qualunque stato (stop controllato del loop);
 - comando o START duplicati: ignorati e registrati negli eventi.
 
-Exit code: 0 HOLD_SAFE completato; 5 FAULT_NOMOTION; 6 FAULT_MOTION; 1 INIT fallito (nessun comando al satellite); 2 annullato prima del controllo; 3 eccezione libfranka.
+Exit code: 0 HOLD_SAFE completato; 5 FAULT_NOMOTION; 6 FAULT_MOTION; **8 FAULT_GRASP** (stadio 3); 1 INIT fallito (nessun comando al satellite); 2 annullato prima del controllo; 3 eccezione libfranka. (7 è di hw.py: `real_replay` ok ma `satellite_node` no.)
 
 Log in `paths.log_dir` della config real_replay:
 - `<ts>_task_<kind>.csv`: il log del loop esistente;
@@ -188,9 +188,9 @@ Equivalenza (`test_prodmp_goal`, pesi `runs/20261014T150851_prodmp`, 3 goal): ro
 
 Con `--dry-run` entrambi i processi girano in dry-run (config `robot1.real_replay_config_dry`). Pesi: `--weights`, default `planner.weights_yaml`, che oggi è il file **sintetico**: per un run vero va puntato al `weights.yaml` reale.
 
-## Protocollo UDP (versione 2, little-endian, 127.0.0.1)
+## Protocollo UDP (versione 3, little-endian, 127.0.0.1)
 
-La versione 2 aggiunge il campo `flags` all'offset 116 (prima `reserved`). Un pacchetto con versione diversa viene scartato.
+La versione 2 ha aggiunto il campo `flags` all'offset 116 (prima `reserved`). La **versione 3** (stadio 3) lascia i layout invariati e aggiunge il comando `STOP_RAMP` (type 4): `STOP` (type 3) diventa lo **stop duro** (rampa `robot2.control.stop_hard_ramp_s`, 0.5 s, usato per i guasti), `STOP_RAMP` è lo stop normale (rampa `stop_ramp_s`, 2 s, usato da RELEASE e a fine corsa). Un pacchetto con versione diversa viene scartato da entrambe le parti: un nodo v2 non può ricevere uno STOP_RAMP che ignorerebbe. Uno STOP duro che arriva durante una rampa normale la accorcia, ripartendo dalla fase e dalla velocità correnti (posizione e velocità continue).
 
 | direzione | porta | contenuto |
 |---|---|---|
@@ -237,14 +237,14 @@ Bit di `faults`:
 
 È falso in WAIT_START, nella rampa di partenza, nella rampa di stop nominale, in STOPPING, HOLD e DONE. **Finché `omega_valid` è falso, `omega_meas` non va usata per nessuna decisione.** hw.py la mostra come `n.v.`.
 
-**Comando**, 24 byte, `'<IHHIIQ'`: magic `'SATC'` (0x43544153), version 2, type (1 HEARTBEAT, 2 START, 3 STOP), seq, riservato, t_mono_ns del mittente.
+**Comando**, 24 byte, `'<IHHIIQ'`: magic `'SATC'` (0x43544153), version 3, type (1 HEARTBEAT, 2 START, 3 STOP duro, 4 STOP_RAMP), seq, riservato, t_mono_ns del mittente.
 
 Regole:
 - Prima di avviare i thread, satellite_node svuota la porta comandi: scarta i datagrammi già in coda (START/STOP vecchi) e stampa quanti ne ha scartati.
 - satellite_node ruota solo dopo START (o con `--autostart`, ammesso solo in dry-run).
 - START conta anche come primo heartbeat.
 - Dopo il primo heartbeat, l'assenza di heartbeat per più di `T_hb_s` (0.5 s) fa partire la rampa di stop (exit 3).
-- STOP fa partire la rampa, e l'uscita è 0 (fine ordinata richiesta).
+- STOP (duro, 0.5 s) e STOP_RAMP (2 s) fanno partire la rampa, e l'uscita è 0 (fine ordinata richiesta). Lo stato passa da STOPPING (rampa in corso) a HOLD = **STOPPED** (a riposo); `omega_cmd` del pacchetto segue la rampa.
 - Il consumatore deve scartare un pacchetto con età `now − t_mono_ns > udp.T_age_s` e deve controllare `seq`.
 
 ## satellite_node
@@ -293,3 +293,51 @@ Exit code:
 - 2 = argomenti / config / carico non confermato;
 - 3 = fermato con rampa (Ctrl-C, heartbeat, tracking, finestra, safety, START mancato);
 - 4 = rampa non completata (reflex?).
+
+
+## Stadio 3: pinza, follow, rilascio, guasti
+
+Abilitazione: `gripper.enabled: true` in `hw_config.yaml` (default **false** = comportamento dello stadio 2, APPROACH → HOLD_SAFE). Con la pinza abilitata si usa `config/task_robot1_hand_ff*.yaml` (controllore con feedforward d'attrito, vedi sotto) impostando `robot1.real_replay_config(_dry)`.
+
+### Pinza (`gripper:`)
+
+- `IGripper` / `GripperWorker` (thread dedicato: `grasp()` è bloccante) / `FakeGripper` (test e dry-run) / `FrankaGripper` (`franka::Gripper` su `gripper.host`, default `robot1.ip`, connessione separata dal controllo). La pinza si apre anche con il braccio in errore o in reflex: non dipende dal controllo. Non fa mai `homing`: se `max_width < 0.05 m` rifiuta.
+- Apertura iniziale: `open_width_m` 0.080 m **totali** (0.040 per dito), comandata insieme a START; il trigger richiede la conferma di apertura, altrimenti FAULT_NOMOTION.
+- Chiusura `grasp(grasp_width_m, speed_m_s, force_n, eps_in_m, eps_out_m)`: velocità ≤ 0.03 m/s e forza ≤ 10 N sono **rifiutate** (non troncate) in lettura della config.
+- **La forza in N non è documentata da libfranka come per-dito o totale: non è assunta.** Il valore va a `grasp()` così com'è. `eps_*` sono tolleranze di `is_grasped`, non la larghezza raggiunta. `grasp_width_m` = spessore parete del collare (0.009, assunto).
+
+### Stati
+
+`APPROACH → (AT_END) → CLOSE_FOLLOW → SQUEEZE → HOLD → RELEASE → HOLD_SAFE → DONE`
+
+- CLOSE_FOLLOW: parte `grasp()`, il target segue il satellite. Successo (`grasp()` vero **e** `is_grasped`) → SQUEEZE; fallimento, o nessun esito entro `T_close_max_s` (6 s) → FAULT_GRASP.
+- SQUEEZE: si tiene la presa alla forza di config per `squeeze_s`. Non esiste il setpoint −0.05 m del sim (in Gazebo era una posizione oltre il limite fisico). `is_grasped` che cade → FAULT_GRASP.
+- HOLD: follow attivo fino a `T_follow_s` dopo il successo del grasp (caso peggiore = condizione D di `plan`: `T_close_max + T_follow + T_ramp`).
+- RELEASE: `STOP_RAMP` al satellite, il robot 1 continua a seguire la fase **misurata** (`omega_cmd` del satellite scende con la rampa); il target si congela quando il satellite segnala **STOPPED** (stato HOLD/DONE), non con `|ω_meas|` (finestra di 5 s: ritardo inutile per riconoscere l'arresto). Solo dopo STOPPED la pinza si apre. STOPPED non raggiunto entro `stop_ramp_s + 3 s` → FAULT_GRASP.
+
+### Follow
+
+`dθ = wrapPi(θ_sat − θ_end)`, con θ_sat = `θ_campione + ω_cmd·età` (campione fresco, età ≤ 0.5 s); con il campione più vecchio il θ continua a ω nominale dall'ultima stima fresca. `p = c + R(asse, dθ)(p_goal − c)`, `q = R(asse, dθ)·q_goal` (stessa convenzione di `reach_check.py`); c e asse dal datagramma del satellite. `twist()` = (ω × r, ω) alimenta il feedforward d'attrito e va a zero con la rampa.
+
+### Guasti
+
+Qualunque FAULT: (1) STOP **duro** al satellite per primo, (2) target congelato (posa di comando corrente, v = 0), (3) log in `*_events.csv`. FAULT_NOMOTION / FAULT_MOTION: la pinza resta com'è (aperta). Da CLOSE_FOLLOW in poi → FAULT_GRASP: STOP duro, poi apertura **subito dopo**, nello stesso aggiornamento, senza attendere l'arresto (ritenta fino a 3 volte). Un guasto dopo uno STOP_RAMP già inviato aggiunge lo STOP duro. All'uscita del processo (loop di controllo terminato: reflex, eccezione) la macchina vede `loop_finished`, manda STOP e apre la pinza prima di chiudere.
+
+**Heartbeat**: non è un timer indipendente. Parte solo se la macchina lo abilita **e** il ciclo a 1 kHz ha girato negli ultimi `task.hb_stall_s` (0.1 s). Se il loop si ferma o va in eccezione, il heartbeat smette e `satellite_node` si ferma da solo dopo `T_hb_s` (0.5 s). Provato in dry-run con `real_replay --mode task --dry-run --hang-loop-after-s S` (SOLO test: il loop smette di ciclare senza eccezione).
+
+**Guard dopo la presa** (`task.guard`, **proposte non validate**, solo robot): `K·e_pos` (K 2000 N/m: 1 mm = 2 N; warn 8 N, fault 16 N) e `|O_F_ext_hat_K|` (warn 10 N, fault 20 N), fault se superata per `debounce_s` 50 ms.
+
+### Carico (mockup 0.4 kg)
+
+Il carico è impostato **prima** del run (`setLoad` non è possibile durante il controllo): `end_effector.set_load/load_mass` del config robot (oggi 0.0). Il preflight accetta `m_load ≤ preflight.m_load_max_kg` (0.05 kg nel config task) e `m_ee ≤ 0.80 kg` (mano 0.73). Senza `setLoad` il peso del mockup (3.9 N) non è compensato: ≈ 2 mm statici (K = 2000 N/m), coperti dal guard. Per compensarlo servirebbero `load_mass` ≈ 0.4 e `m_load_max_kg` ≥ 0.4 **prima** della presa, con +2 mm di spinta verso l'alto prima di afferrare: **non modificato**, decisione dell'operatore.
+
+### Feedforward d'attrito
+
+`config/task_robot1_hand_ff.yaml` / `_ff_dry.yaml` = `task_robot1_hand*.yaml` + `friction_ff` del controllore validato il 17/11 (`*_ffa100`: α 1.0, eps 0.005 rad/s, DLS 0.05, τc [0.615 0.361 0.361 0.562 0 0 0.154], b [2.83 1.89 2.71 1.6 0 0 0.18], rampa gain 0.1→1 in 3 s). `task_robot1_hand.yaml` non lo abilita (invariato). La velocità di riferimento viene da `twist()` della sorgente: ProDmpSource in APPROACH, rotazione rigida in FOLLOW (si annulla con la rampa e dopo il congelamento).
+
+### Altri
+
+- `start_pose.quaternion_wxyz` è opzionale: senza, l'orientazione di partenza non è controllata (WARN in VALIDATE; `hw.py plan` lo segnala).
+- `hw.py plan` esegue `reach_check.py` come check bloccante "verifica cinematica (senza carico/collisioni)": IK del goal e del follow, margine ≥ `plan.reach_min_margin_deg`, nessun salto di ramo. **Non** è una portata verificata: carico, collisioni e dinamica non sono modellati.
+- `real_replay --mode task --preflight-only`: solo lettura (nessun `control()`, nessun `setEE/setLoad`, nessun comando al satellite); controlla preflight, pinza raggiungibile e omologata, e le verifiche statiche del comando.
+- Target CMake: `gripper_test`, `gripper_grasp_test`, `friction_id`.

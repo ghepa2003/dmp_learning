@@ -20,6 +20,8 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # matrici 6x7: i thread BLAS rallentano (tempo di sistema)
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 import yaml
 
@@ -120,7 +122,7 @@ class Arm:
     def ik(self, R_des, p_des, seed, iters=600, pos_tol=1e-5, ori_tol=1e-4, lam=0.05, k_null=1.0, max_step=0.2):
         q = np.clip(np.array(seed, float), self.lo, self.hi)
         for it in range(iters):
-            kn = k_null if it < iters // 2 else 0.0   # seconda meta': solo convergenza, senza pull verso il seed
+            kn = k_null if it < 30 else 0.0   # dopo 30 iterazioni: solo convergenza, senza pull verso il seed
             R, p, _j = self.fk(q)
             e = np.concatenate([p_des - p, rot_log(R_des @ R.T)])
             if np.linalg.norm(e[:3]) < pos_tol and np.linalg.norm(e[3:]) < ori_tol:

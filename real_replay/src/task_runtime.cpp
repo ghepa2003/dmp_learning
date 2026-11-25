@@ -38,8 +38,8 @@ constexpr double kDeg = sat::kDeg;
 }  // namespace
 
 // ---- TaskSource -------------------------------------------------------------------------------------------------
-TaskSource::TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s)
-    : approach_(std::move(approach)), shared_(shared), nominal_s_(nominal_s) {
+TaskSource::TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s, ClockFn clock, double omega_nominal)
+    : approach_(std::move(approach)), shared_(shared), nominal_s_(nominal_s), clock_(clock ? clock : &monoNow), omega_nominal_(omega_nominal) {
   if (!approach_) throw std::invalid_argument("TaskSource: no approach source");
 }
 
@@ -52,6 +52,7 @@ void TaskSource::start(const Pose& activation) {
 Pose TaskSource::sample(double dt) {
   const auto cmd = static_cast<SourceCmd>(shared_.source_cmd.load(std::memory_order_acquire));
   if (cmd == SourceCmd::kFreeze) mode_ = SourceCmd::kFreeze;  // sticky
+  if (cmd == SourceCmd::kFollow && mode_ == SourceCmd::kApproach && approach_done_ && !follow_started_) startFollow();
   if (mode_ == SourceCmd::kHold && cmd == SourceCmd::kApproach && !approach_started_) {
     // The goal was set (setGoal) by the task thread BEFORE the release store of kApproach: safe to use here.
     // Anchored at the activation pose: the orientation read ONCE in WAIT_CMD.
@@ -75,12 +76,69 @@ Pose TaskSource::sample(double dt) {
       break;
     case SourceCmd::kFreeze:
       break;  // last target, zero twist
+    case SourceCmd::kFollow:
+      stepFollow();
+      break;
   }
   return last_;
 }
 
+void TaskSource::startFollow() {
+  SatSample s;
+  const double now = clock_();
+  const bool ok = shared_.sat_latest.load(s) && std::isfinite(s.theta) && std::isfinite(s.center[0]) && std::isfinite(s.center[1]) &&
+                  std::isfinite(s.center[2]) && std::isfinite(s.axis[0]) && std::isfinite(s.axis[1]) && std::isfinite(s.axis[2]);
+  const Eigen::Vector3d ax(s.axis[0], s.axis[1], s.axis[2]);
+  if (!ok || !(ax.norm() > 0.5) || now - static_cast<double>(s.t_mono_ns) * 1e-9 > kFollowFreshAgeS) {
+    mode_ = SourceCmd::kFreeze;  // no usable phase: never move; the machine faults on the same data
+    return;
+  }
+  f_c_ = Eigen::Vector3d(s.center[0], s.center[1], s.center[2]);
+  f_axis_ = ax.normalized();
+  f_p_end_ = last_.p;  // the exact end of the approach (goal)
+  f_q_end_ = last_.q;
+  const double age = now - static_cast<double>(s.t_mono_ns) * 1e-9;
+  f_rate_ = std::isfinite(s.omega_cmd) ? s.omega_cmd : omega_nominal_;
+  f_theta_est_ = s.theta + f_rate_ * age;
+  f_theta_end_ = f_theta_est_;
+  f_t_est_ = now;
+  follow_started_ = true;
+  mode_ = SourceCmd::kFollow;
+}
+
+void TaskSource::stepFollow() {
+  SatSample s;
+  const double now = clock_();
+  f_stale_ = true;
+  if (shared_.sat_latest.load(s) && std::isfinite(s.theta)) {
+    const double age = now - static_cast<double>(s.t_mono_ns) * 1e-9;
+    if (age >= -1e-3 && age <= kFollowFreshAgeS) {
+      f_stale_ = false;
+      f_rate_ = std::isfinite(s.omega_cmd) ? s.omega_cmd : omega_nominal_;
+      f_theta_est_ = s.theta + f_rate_ * age;
+      f_t_est_ = now;
+    }
+  }
+  if (f_stale_) {  // open loop from the last fresh estimate, nominal omega
+    f_rate_ = omega_nominal_;
+    f_theta_est_ += omega_nominal_ * (now - f_t_est_);
+    f_t_est_ = now;
+  }
+  f_dtheta_ = sat::wrapPi(f_theta_est_ - f_theta_end_);
+  const Eigen::Quaterniond rot(Eigen::AngleAxisd(f_dtheta_, f_axis_));
+  last_.p = f_c_ + rot * (f_p_end_ - f_c_);
+  last_.q = (rot * f_q_end_).normalized();
+  f_w_ = f_rate_ * f_axis_;
+  f_v_ = f_w_.cross(last_.p - f_c_);
+}
+
 bool TaskSource::twist(Eigen::Vector3d& v, Eigen::Vector3d& w) const {
   if (mode_ == SourceCmd::kApproach && !approach_done_) return approach_->twist(v, w);
+  if (mode_ == SourceCmd::kFollow) {  // rigid rotation with the satellite (follows the stop ramp through omega_cmd)
+    v = f_v_;
+    w = f_w_;
+    return true;
+  }
   v.setZero();
   w.setZero();
   return true;
@@ -118,6 +176,13 @@ bool TaskCycleLog::writeCsv(const std::string& path, std::string* err) const {
   }
   std::fclose(f);
   return true;
+}
+
+// ---- Action order -----------------------------------------------------------------------------------------------
+void executeActions(const MachineActions& a, IActionSink& sink) {
+  if (a.send_start) sink.sendStart();
+  if (a.send_stop) sink.sendStop(a.stop_hard);  // always BEFORE the gripper (fault: satellite first, hand right after)
+  if (a.gripper != GripperCmd::kNone) sink.gripper(a.gripper, a.gripper_id);
 }
 
 // ---- Runtime ----------------------------------------------------------------------------------------------------
@@ -184,6 +249,15 @@ void TaskRuntime::send(std::uint16_t type) {
   (void)::send(tx_fd_, buf, sizeof buf, MSG_DONTWAIT);  // ECONNREFUSED (no satellite) ignored: the watchdogs act
 }
 
+void TaskRuntime::sendStart() { send(static_cast<std::uint16_t>(sat::CommandType::kStart)); }
+void TaskRuntime::sendStop(bool hard) {
+  send(static_cast<std::uint16_t>(hard ? sat::CommandType::kStop : sat::CommandType::kStopRamp));
+}
+void TaskRuntime::gripper(GripperCmd c, std::uint32_t id) {
+  if (!grip_) return;
+  grip_->request(c == GripperCmd::kOpen ? grip::GripperWorker::Kind::kOpen : grip::GripperWorker::Kind::kGrasp, id);
+}
+
 void TaskRuntime::rxLoop() {
   SatFilter filter(hw_.p.T_age_s);
   std::uint8_t buf[512];
@@ -204,6 +278,11 @@ void TaskRuntime::rxLoop() {
     s.t_mono_ns = p.t_mono_ns;
     s.theta = p.theta;
     s.omega_meas = p.omega_meas;
+    s.omega_cmd = p.omega_cmd;
+    for (int k = 0; k < 3; ++k) {
+      s.center[k] = p.center[k];
+      s.axis[k] = p.axis[k];
+    }
     s.omega_valid = (p.flags & sat::kFlagOmegaValid) != 0;  // omega_meas is used ONLY with this bit
     s.rx_s = now;
     const SampleVerdict v = filter.accept(s, now);
@@ -215,10 +294,14 @@ void TaskRuntime::rxLoop() {
 void TaskRuntime::hbLoop() {
   const auto period = std::chrono::nanoseconds(static_cast<long long>(1e9 / hw_.hb_send_hz));
   auto next = std::chrono::steady_clock::now();
+  HeartbeatGate gate(hw_.hb_stall_s);
   while (!quit_.load()) {
     next += period;
     std::this_thread::sleep_until(next);
-    if (hb_enabled_.load()) send(static_cast<std::uint16_t>(sat::CommandType::kHeartbeat));
+    // NOT an independent heartbeat: it needs the machine's enable AND a 1 kHz loop that is still cycling
+    if (gate.shouldSend(hb_enabled_.load(), sh_.loop_cycles.load(std::memory_order_relaxed), monoNow())) {
+      send(static_cast<std::uint16_t>(sat::CommandType::kHeartbeat));
+    }
   }
 }
 
@@ -272,6 +355,7 @@ void TaskRuntime::runValidation(const MachineInputs& in) {
 void TaskRuntime::taskLoop() {
   std::size_t printed = 0;
   bool final_pass = false;
+  double t_final = 0.0;
   for (;;) {
     const bool q = quit_.load();
     MachineInputs in;
@@ -293,6 +377,17 @@ void TaskRuntime::taskLoop() {
     in.loop_reason = in.loop_finished ? "control loop finished" : "";
     in.jitter_fault = sh_.jitter_fault.load();
     in.abort = abort_ != nullptr && *abort_ != 0;
+    in.guard_valid = sh_.guard_valid.load(std::memory_order_relaxed);
+    in.e_pos_m = sh_.e_pos_m.load(std::memory_order_relaxed);
+    in.f_ext_n = sh_.f_ext_n.load(std::memory_order_relaxed);
+    if (grip_) {
+      const grip::GripperWorker::Status g = grip_->status();
+      in.grip_done_id = g.done_id;
+      in.grip_done_ok = g.done_ok;
+      in.grip_is_grasped = g.is_grasped;
+      in.grip_state_valid = g.state_valid;
+      in.grip_width = g.state_valid ? g.width : kNaN;
+    }
 
     if (m_.needsValidation() && in.activation_ready && in.sat_have && in.now_s - in.sat.rx_s < hw_.p.sat_timeout_s) runValidation(in);
     if (m_.needsConfirmation()) {
@@ -308,8 +403,7 @@ void TaskRuntime::taskLoop() {
     }
     const MachineActions a = m_.update(in);
     sh_.task_state.store(static_cast<int>(m_.state()), std::memory_order_relaxed);
-    if (a.send_start) send(static_cast<std::uint16_t>(sat::CommandType::kStart));
-    if (a.send_stop) send(static_cast<std::uint16_t>(sat::CommandType::kStop));
+    executeActions(a, *this);
     hb_enabled_.store(a.hb_enable);
     sh_.source_cmd.store(static_cast<int>(a.source), std::memory_order_release);
     if (a.end_loop) sh_.end_requested.store(true, std::memory_order_release);
@@ -320,8 +414,13 @@ void TaskRuntime::taskLoop() {
                   ev[printed].detail.c_str());
     }
     std::fflush(stdout);
-    if (final_pass) break;
-    if (q) final_pass = true;  // one more pass after quit with loop_finished = true
+    if (final_pass) {
+      // the hand must not stay closed on the object: keep serving the machine (bounded) until it has reopened
+      if (!(grip_ && m_.gripperHolding() && monoNow() < t_final + hw_.p.open_timeout_s + 1.0)) break;
+    } else if (q) {
+      final_pass = true;  // one more pass after quit with loop_finished = true
+      t_final = monoNow();
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   hb_enabled_.store(false);

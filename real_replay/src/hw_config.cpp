@@ -133,6 +133,9 @@ HwConfig loadHwConfig(const std::string& path) {
   c.robot2.ramp_s = num(ct, "ramp_s", "robot2.control");
   c.robot2.stop_ramp_s = num(ct, "stop_ramp_s", "robot2.control");
   c.robot2.hold_s = num(ct, "hold_s", "robot2.control");
+  if (ct["stop_hard_ramp_s"]) c.robot2.stop_hard_ramp_s = num(ct, "stop_hard_ramp_s", "robot2.control");
+  check(c.robot2.stop_hard_ramp_s > 0.0 && c.robot2.stop_hard_ramp_s <= c.robot2.stop_ramp_s,
+        "robot2.control.stop_hard_ramp_s must be in (0, stop_ramp_s]");
   check(c.robot2.ramp_s > 0.0 && c.robot2.ramp_s <= 60.0 && c.robot2.stop_ramp_s > 0.0 && c.robot2.stop_ramp_s <= 60.0 &&
             c.robot2.hold_s >= 0.0 && c.robot2.hold_s <= 60.0,
         "robot2.control ramps in (0, 60] s, hold in [0, 60] s");

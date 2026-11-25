@@ -70,7 +70,8 @@ robot2:
     kd: [15.0, 15.0, 15.0, 15.0, 8.0, 6.0, 3.0]
     max_track_err_rad: 0.05
     ramp_s: 2.0
-    stop_ramp_s: 2.0
+    stop_ramp_s: 2.0                   # rampa di STOP normale (comando STOP_RAMP del task layer: RELEASE), e di Ctrl-C / heartbeat perso
+    stop_hard_ramp_s: 0.5              # rampa del STOP duro (comando STOP: guasti del task layer). <= stop_ramp_s
     hold_s: 1.0
     max_travel_deg: 0.0                # 0 = solo la finestra limita la corsa
     max_wait_start_s: 120.0            # in WAIT_START senza START per piu' di cosi': uscita (exit 3)
@@ -115,10 +116,39 @@ task:                                  # task layer del robot 1 (real_replay --m
   trigger_max_age_s: 0.2               # eta' massima del campione per armare/far scattare il trigger
   omega_meas_tol_deg_s: 0.1            # |omega_meas - omega_cmd| (solo con omega_valid): oltre = guasto
   trigger_max_d_deg: 90.0              # lo scatto richiede |d_k| < questo (nessuno scatto su un salto di fase)
-  hb_send_hz: 20.0                     # heartbeat verso satellite_node (thread dedicato)
+  hb_send_hz: 20.0                     # heartbeat verso satellite_node (thread dedicato, MA vincolato al ciclo a 1 kHz: vedi hb_stall_s)
+  hb_stall_s: 0.1                      # il heartbeat NON parte piu' se il ciclo di controllo non gira da piu' di cosi' (loop fermo, eccezione):
+                                       # satellite_node si ferma da solo dopo udp.T_hb_s dall'ultimo heartbeat
   jitter_period_s: 0.003               # periodo del ciclo a 1 kHz oltre cui si conta un ciclo in ritardo
   jitter_consecutive: 3                # tanti cicli consecutivi oltre jitter_period_s = guasto
+  guard:                               # PROPOSTE (non validate su hardware), attive da CLOSE_FOLLOW in poi, solo in modalita' robot.
+    # K*e_pos = forza equivalente dell'errore di posizione del target (K 2000 N/m: 1 mm = 2 N). Riferimenti dal sim: d_close 3.08 mm,
+    # slip 0.471 mm, ricentraggio ~1.2 mm; il peso del mockup (0.4 kg = 3.9 N) non compensato da setLoad da' ~2 mm statici.
+    # Warn a ~2x lo spostamento atteso, fault a ~4x. F_ext e' |O_F_ext_hat_K| (parte di forza), stima non filtrata: soglie larghe.
+    enabled: true
+    stiffness_n_per_m: 2000.0
+    feq_warn_n: 8.0                    # = 4 mm
+    feq_fault_n: 16.0                  # = 8 mm
+    fext_warn_n: 10.0
+    fext_fault_n: 20.0
+    debounce_s: 0.05                   # la soglia di fault deve essere superata per tanto
   fault_linger_s: 0.0                  # 0 = nello stato di guasto il processo resta vivo fino a Ctrl-C
+
+gripper:                               # Franka Hand del robot 1 (stadio 3). enabled: false = comportamento dello stadio 2 (APPROACH -> HOLD_SAFE)
+  enabled: false                       # true: apertura prima dell'avvicinamento, CLOSE_FOLLOW, SQUEEZE, HOLD, RELEASE
+  host: null                           # null = robot1.ip (la Hand sta sullo stesso indirizzo del braccio, connessione separata)
+  open_width_m: 0.080                  # apertura TOTALE (0.040 per dito). Max 0.080
+  speed_m_s: 0.02                      # (0, 0.03]; oltre = rifiutato
+  # ATTENZIONE: libfranka documenta `force` come "Grasping force" SENZA dire se e' per dito o totale. NON e' assunto:
+  # il valore e' passato a Gripper::grasp() cosi' com'e'. Limite duro 10 N (maggiore = rifiutato, non troncato).
+  force_n: 5.0
+  grasp_width_m: 0.009                 # larghezza comandata = spessore parete del collare (ASSUNTO, non misurato)
+  eps_in_m: 0.010                      # tolleranze di is_grasped (NON la larghezza raggiunta): [w - eps_in, w + eps_out], max 0.01
+  eps_out_m: 0.010
+  squeeze_s: 2.0                       # SQUEEZE = tenere la presa alla forza sopra per questo tempo (< timing.T_follow_s). Nessun setpoint
+                                       # di posizione negativo come nel sim: in Gazebo -0.05 m era oltre il limite fisico
+  open_timeout_s: 10.0                 # apertura iniziale / RELEASE senza conferma entro questo tempo = guasto
+  poll_period_s: 0.1                   # polling dello stato della Hand quando il worker e' inattivo
 
 paths:
   libfranka_examples_dir: "/root/comanipulation_dualpanda/libfranka-active-control-non-rt/build/examples"
@@ -133,3 +163,6 @@ plan:                                  # soglie di hw.py plan
   omega_tol_deg_s: 0.1                 # |omega comando - scene.omega_deg_s|
   omega_domain_deg_s: [2.0, 3.0]       # |omega| attesi: fuori = avviso
   tau_tol_s: 1.0e-6                    # |contact_time_s - tau dei pesi|
+  reach_min_margin_deg: 5.0            # verifica cinematica (hw/reach_check.py): margine di giunto minimo lungo il follow completo
+  reach_step_deg: 0.5                  # passo dell'IK continua nel follow
+  # reach_urdf: "../../fer_flat_effort.urdf"   # URDF del planner (default); assente = verifica non eseguita (avviso)

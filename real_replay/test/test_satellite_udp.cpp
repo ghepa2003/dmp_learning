@@ -59,11 +59,11 @@ int main() {
   bad[0] = 'X';
   check(!unpackState(bad, sizeof bad, q), "wrong magic refused");
   std::memcpy(bad, buf, sizeof bad);
-  bad[4] = 1;
-  check(!unpackState(bad, sizeof bad, q), "old version 1 refused (v2 added flags)");
+  bad[4] = 2;
+  check(!unpackState(bad, sizeof bad, q), "old version 2 refused (v3: STOP_RAMP command, hard STOP)");
   std::uint16_t ver = 0;
   std::memcpy(&ver, buf + 4, 2);
-  check(ver == 2 && kProtocolVersion == 2, "protocol version 2");
+  check(ver == 3 && kProtocolVersion == 3, "protocol version 3");
 
   std::printf("command datagram\n");
   CommandPacket c;

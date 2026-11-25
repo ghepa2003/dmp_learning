@@ -27,6 +27,8 @@ import sys
 import threading
 import time
 
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # matrici 6x7: i thread BLAS rallentano (tempo di sistema)
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 import yaml
 
@@ -41,9 +43,9 @@ CMD_FMT = "<IHHIIQ"
 CMD_SIZE = struct.calcsize(CMD_FMT)  # 24
 STATE_MAGIC = 0x53544153  # 'SATS'
 CMD_MAGIC = 0x43544153  # 'SATC'
-PROTOCOL_VERSION = 2  # v2: campo flags (bit 0 omega_valid) al posto di reserved
+PROTOCOL_VERSION = 3  # v2: campo flags (bit 0 omega_valid); v3: comando STOP_RAMP (4), STOP (3) = stop duro (layout invariato)
 FLAG_OMEGA_VALID = 1 << 0
-CMD_HEARTBEAT, CMD_START, CMD_STOP = 1, 2, 3
+CMD_HEARTBEAT, CMD_START, CMD_STOP, CMD_STOP_RAMP = 1, 2, 3, 4
 STATE_NAMES = {0: "INIT", 1: "WAIT_START", 2: "RUNNING", 3: "STOPPING", 4: "HOLD", 5: "DONE"}
 FAULT_NAMES = {0: "window", 1: "heartbeat", 2: "tracking", 3: "safety", 4: "phase_mismatch(warn)", 5: "stop_command",
                6: "signal", 7: "non_finite", 8: "start_timeout", 9: "log_full"}
@@ -592,6 +594,9 @@ def check_poses(cmd):
             return False, "%s mancante o null" % key
         try:
             pos = [float(x) for x in p["position_m"]]
+            if key == "start_pose" and p.get("quaternion_wxyz") is None:  # opzionale (avviso: l'orientazione di start non e' controllata)
+                det.append("start_pose [%.4f %.4f %.4f] SENZA quaternione (opzionale, orientazione non controllata)" % tuple(pos))
+                continue
             q = [float(x) for x in p["quaternion_wxyz"]]
         except (KeyError, TypeError, ValueError):
             return False, "%s: position_m [3] e quaternion_wxyz [4] richiesti" % key
@@ -604,9 +609,35 @@ def check_poses(cmd):
     return True, ", ".join(det) + ", k %s, wrist_flip %s" % (cmd.get("k"), cmd.get("wrist_flip"))
 
 
+REACH_LABEL = "verifica cinematica (senza carico/collisioni)"
+_REACH_CACHE = {}
+
+
 def check_robot1_reach(cfg, cmd, plan):
-    """PUNTO DI ESTENSIONE (stadio 2): portata del robot 1 lungo contatto + follow. None = non verificata."""
-    return None
+    """Portata cinematica del robot 1 sul goal e lungo il follow (hw/reach_check.py, stessa URDF/cinematica del planner).
+    NON e' una verifica completa: carico del mockup (0.4 kg), collisioni, dinamica e limiti di coppia non sono modellati.
+    Ritorna il dict di reach_check.analyse(), oppure None se non eseguibile (URDF assente / goal_pose mancante)."""
+    try:
+        import reach_check
+        urdf = os.path.normpath(os.path.join(cfg["_dir"], cfg["plan"].get("reach_urdf", "../../fer_flat_effort.urdf")))
+        if not os.path.exists(urdf) or not isinstance(cmd.get("goal_pose"), dict):
+            return None
+        step = float(cfg["plan"].get("reach_step_deg", 0.5))
+        key = json.dumps([urdf, step, cmd["goal_pose"], cmd["omega_deg_s"], cfg["scene"]["center_m"], cfg["timing"]], sort_keys=True, default=str)
+        if key not in _REACH_CACHE:  # pura funzione degli ingressi: plan_feasibility puo' essere chiamata molte volte (test)
+            _REACH_CACHE[key] = reach_check.analyse(reach_check.Arm(urdf), cmd, cfg, step_deg=step)
+        return _REACH_CACHE[key]
+    except (ImportError, KeyError, ValueError, TypeError):
+        return None
+
+
+def reach_summary(r):
+    if r is None:
+        return "%s: NON eseguita (URDF o goal_pose assenti)" % REACH_LABEL
+    if not r["goal_ik_ok"]:
+        return "%s: IK del goal FALLITA (errore %.2e m)" % (REACH_LABEL, r["goal_err"][0])
+    return ("%s: IK goal OK (margine %.1f deg), follow 0..%.0f deg: margine minimo %.1f deg, salto massimo tra passi %.2f deg"
+            % (REACH_LABEL, float(min(r["goal_margins_deg"])), r["d_full_deg"], r["min_margin_full_deg"], r["max_jump_deg"]))
 
 
 def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
@@ -692,7 +723,12 @@ def plan_feasibility(cfg, cmd, weights_path, theta0_deg=None):
     info["t_trigger_s"] = t_trig
     # timeout come real_replay --mode task: tempo dall'invio di START (rampa smoothstep: + ramp_s/2) + margine
     info["trigger_timeout_s"] = t_trig + float(ctl["ramp_s"]) / 2.0 + float(tm["trigger_timeout_margin_s"])
-    info["robot1_reach"] = check_robot1_reach(cfg, cmd, info)
+    reach = check_robot1_reach(cfg, cmd, info)
+    info["robot1_reach"] = reach
+    if reach is not None:
+        mm = float(pl.get("reach_min_margin_deg", 5.0))
+        good = bool(reach["all_ik_ok"] and reach["branch_ok"] and reach["min_margin_full_deg"] >= mm)
+        add("%s: IK di goal e follow, margine >= %.1f deg, nessun salto di ramo" % (REACH_LABEL, mm), good, reach_summary(reach))
     return all(c[1] for c in checks if c[3]), checks, info
 
 
@@ -716,7 +752,9 @@ def cmd_plan(args, cfg):
         print("  theta_end %.3f deg; trigger atteso dopo %.2f s, timeout trigger %.2f s" % (info["theta_end"], info["t_trigger_s"], info["trigger_timeout_s"]))
     for name, good, detail, blocking in checks:
         print("  [%s] %s: %s" % ("PASS" if good else ("FAIL" if blocking else "WARN"), name, detail))
-    print("  portata robot 1: NON verificata" if info.get("robot1_reach") is None else "  portata robot 1: %s" % info["robot1_reach"])
+    if info.get("robot1_reach") is None:
+        print("  %s" % reach_summary(None))
+    print("  (carico del mockup 0.4 kg, collisioni e dinamica NON modellati: la portata completa NON e' verificata)")
     print("ESITO: %s" % ("FATTIBILE" if ok else "NON FATTIBILE"))
     return 0 if ok else 1
 
@@ -769,7 +807,8 @@ TASK_EXIT = {0: "HOLD_SAFE completato (stadio 2), STOP inviato al satellite",
              2: "annullato dall'operatore prima di prendere il controllo",
              3: "eccezione libfranka / controllo",
              5: "FAULT_NOMOTION: guasto prima dell'avvicinamento (STOP inviato, nessun movimento)",
-             6: "FAULT_MOTION: guasto durante/dopo l'avvicinamento (target congelato, STOP inviato)"}
+             6: "FAULT_MOTION: guasto durante/dopo l'avvicinamento (target congelato, STOP inviato)",
+             8: "FAULT_GRASP: guasto da CLOSE_FOLLOW in poi (STOP duro al satellite, poi apertura pinza) -- stadio 3"}
 
 
 def robot_ready(cfg, n, q_goal, tol_deg, max_dq=0.01):

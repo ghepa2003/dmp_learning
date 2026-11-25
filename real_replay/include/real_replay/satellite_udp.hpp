@@ -1,7 +1,7 @@
 #pragma once
 
-// UDP datagrams of satellite_node (protocol version 1) and a lock-free "latest value" mailbox.
-// Layout documented in hw/README.md; the Python side (hw/hw.py) uses the same struct formats (version 2):
+// UDP datagrams of satellite_node (protocol version 3) and a lock-free "latest value" mailbox.
+// Layout documented in hw/README.md; the Python side (hw/hw.py) uses the same struct formats (version 3; layout unchanged since v2):
 //   state   '<IHHIIQ5d3d3dII'  (120 bytes)
 //   command '<IHHIIQ'           (24 bytes)
 // Byte order: little-endian (host order, checked below). Angles in rad, angular speeds in rad/s, lengths in m.
@@ -20,7 +20,11 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "the datagram layout is
 
 constexpr std::uint32_t kStateMagic = 0x53544153u;    // bytes 'S','A','T','S'
 constexpr std::uint32_t kCommandMagic = 0x43544153u;  // bytes 'S','A','T','C'
-constexpr std::uint16_t kProtocolVersion = 2;  // v2: `flags` (was `reserved`) with kFlagOmegaValid
+// v2: `flags` (was `reserved`) with kFlagOmegaValid.
+// v3: CommandType::kStopRamp (normal stop, ramp robot2.control.stop_ramp_s); kStop is now the HARD stop (ramp
+//     robot2.control.stop_hard_ramp_s, used for faults). Layouts unchanged. A v2 peer is refused on both sides (version
+//     check), so a node that would ignore kStopRamp can never be paired with a task layer that sends it.
+constexpr std::uint16_t kProtocolVersion = 3;
 
 enum class SatState : std::uint32_t {
   kInit = 0,       ///< preflight, not controlling yet
@@ -73,7 +77,8 @@ struct StatePacket {
   std::uint32_t flags = 0;          ///< FlagBits (this sample)
 };
 
-enum class CommandType : std::uint16_t { kHeartbeat = 1, kStart = 2, kStop = 3 };
+/// kStop = hard stop (fault): short ramp. kStopRamp = normal stop (RELEASE / end of run): the nominal ramp.
+enum class CommandType : std::uint16_t { kHeartbeat = 1, kStart = 2, kStop = 3, kStopRamp = 4 };
 
 struct CommandPacket {
   std::uint32_t magic = kCommandMagic;
@@ -114,7 +119,7 @@ inline bool unpackCommand(const std::uint8_t* buf, std::size_t len, CommandPacke
   CommandPacket p;
   std::memcpy(&p, buf, sizeof p);
   if (p.magic != kCommandMagic || p.version != kProtocolVersion) return false;
-  if (p.type < static_cast<std::uint16_t>(CommandType::kHeartbeat) || p.type > static_cast<std::uint16_t>(CommandType::kStop)) return false;
+  if (p.type < static_cast<std::uint16_t>(CommandType::kHeartbeat) || p.type > static_cast<std::uint16_t>(CommandType::kStopRamp)) return false;
   out = p;
   return true;
 }

@@ -222,7 +222,8 @@ std::string parseCli(int argc, char** argv, Cli& cli) {
 struct Comms {
   std::atomic<std::uint32_t> hb_count{0};
   std::atomic<std::uint32_t> start_count{0};
-  std::atomic<std::uint32_t> stop_count{0};
+  std::atomic<std::uint32_t> stop_count{0};       // hard stop (kStop)
+  std::atomic<std::uint32_t> stop_ramp_count{0};  // normal stop ramp (kStopRamp)
   std::atomic<std::uint32_t> bad_datagrams{0};
   std::atomic<std::uint64_t> send_errors{0};
   std::atomic<std::uint64_t> sent{0};
@@ -339,6 +340,7 @@ struct Comms {
           ++hb_count;  // START also arms / feeds the heartbeat monitor
           break;
         case sat::CommandType::kStop: ++stop_count; break;
+        case sat::CommandType::kStopRamp: ++stop_ramp_count; break;
       }
     }
   }
@@ -452,6 +454,7 @@ struct Params {
   double omega_window_s = 5.0, omega_sample_s = 0.01;
   double mismatch_warn = 0.5 * kDeg;
   double hb_timeout_s = 0.5;
+  double stop_hard_ramp_s = 0.5;  ///< ramp of the hard STOP command (faults of the task layer)
   double max_wait_s = 120.0;
   bool autostart = false;
   double omega_cmd_nominal = 0.0;  ///< scene omega [rad/s]
@@ -507,7 +510,8 @@ class Controller {
         }
       };
       if (g_sig != 0) set(Stop::kUserSignal, "Ctrl-C / SIGTERM");
-      if (comms_.stop_count.load(std::memory_order_relaxed) != 0) set(Stop::kStopCommand, "STOP command received");
+      if (comms_.stop_count.load(std::memory_order_relaxed) != 0) set(Stop::kStopCommand, "STOP (hard) command received");
+      else if (comms_.stop_ramp_count.load(std::memory_order_relaxed) != 0) set(Stop::kStopCommand, "STOP_RAMP command received");
       if (hb_timeout) set(Stop::kHeartbeat, "no heartbeat for more than T_hb_s");
       {
         const real_replay::StopReason r = guard_.checkCycle(in.period_s, last_cb_us_, in.success_rate, cycle_);
@@ -543,6 +547,8 @@ class Controller {
           d_stop_ = nom.d;
           v_stop_ = nom.v;
           t_stop_ = t_;
+          stop_len_ = (stop_ == Stop::kStopCommand && comms_.stop_count.load(std::memory_order_relaxed) != 0) ? p_.stop_hard_ramp_s
+                                                                                                              : prof_.params().stop_ramp_s;
           hold_len_ = 0.0;
         }
       } else if (phase_ == Phase::kWait && (p_.autostart || comms_.start_count.load(std::memory_order_relaxed) != 0)) {
@@ -567,9 +573,19 @@ class Controller {
         ref = {d_hold_, 0.0};
       }
     } else if (phase_ == Phase::kStopping) {
+      // a HARD stop arriving while a normal ramp runs shortens it: restart from the CURRENT reference (position and
+      // velocity continuous) with the hard ramp
+      if (stop_len_ > p_.stop_hard_ramp_s + 1e-9 && comms_.stop_count.load(std::memory_order_relaxed) != 0) {
+        const J7Ref cur = real_replay::stopFrom(d_stop_, v_stop_, stop_len_, t_ - t_stop_);
+        d_stop_ = cur.d;
+        v_stop_ = cur.v;
+        t_stop_ = t_;
+        stop_len_ = p_.stop_hard_ramp_s;
+        msg_hard_restart_ = true;
+      }
       const double ts = t_ - t_stop_;
-      ref = real_replay::stopFrom(d_stop_, v_stop_, prof_.params().stop_ramp_s, ts);
-      if (ts >= prof_.params().stop_ramp_s) {
+      ref = real_replay::stopFrom(d_stop_, v_stop_, stop_len_, ts);
+      if (ts >= stop_len_) {
         phase_ = Phase::kHold;
         d_hold_ = ref.d;
         t_hold_ = t_;
@@ -725,7 +741,8 @@ class Controller {
   long cycle_ = 0;
   double t_ = 0.0, t_start_ = 0.0, next_omega_t_ = 0.0;
   double last_cb_us_ = 0.0, max_cb_us_ = 0.0;
-  double t_stop_ = 0.0, d_stop_ = 0.0, v_stop_ = 0.0;
+  double t_stop_ = 0.0, d_stop_ = 0.0, v_stop_ = 0.0, stop_len_ = 2.0;
+  bool msg_hard_restart_ = false;
   double d_hold_ = 0.0, t_hold_ = 0.0, hold_len_ = 0.0;
   double max_mismatch_ = 0.0, max_held_err_ = 0.0, max_e7_ = 0.0;
 };
@@ -780,6 +797,7 @@ int makeParams(const Cli& cli, const real_replay::HwConfig& hw, const real_repla
   p.prof.speed_rad_s = std::fabs(w);
   p.prof.ramp_s = r2.ramp_s;
   p.prof.stop_ramp_s = r2.stop_ramp_s;
+  p.stop_hard_ramp_s = r2.stop_hard_ramp_s;
   p.prof.hold_s = r2.hold_s;
 
   const sat::SatGeom g = sat::computeSatGeom(p.phase, q0);

@@ -40,6 +40,7 @@ struct HwRobot2 {
   std::array<double, 7> kp{}, kd{};
   double max_track_err_rad = 0.05;
   double ramp_s = 2.0, stop_ramp_s = 2.0, hold_s = 1.0;
+  double stop_hard_ramp_s = 0.5;  ///< ramp of the HARD stop (command kStop, faults); <= stop_ramp_s
   double max_travel_rad = 0.0;  ///< 0 = window only
   double max_wait_start_s = 120.0;
   int countdown_s = 3;

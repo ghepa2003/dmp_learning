@@ -52,7 +52,25 @@ class PlanTest(unittest.TestCase):
         self.assertAlmostEqual(hi, -5.0, places=9)
         # timeout = (theta_trig - theta0)/omega + ramp_s/2 + margine (come real_replay --mode task)
         self.assertAlmostEqual(info["trigger_timeout_s"], 30.968 / 2.0 + 1.0 + 5.0, places=6)
-        self.assertIsNone(info["robot1_reach"])
+        r = info["robot1_reach"]
+        self.assertIsNotNone(r)  # verifica cinematica (reach_check.py), NON "portata verificata": senza carico/collisioni
+        self.assertTrue(r["goal_ik_ok"] and r["all_ik_ok"] and r["branch_ok"])
+        self.assertGreater(r["min_margin_full_deg"], 5.0)
+        names = [c[0] for c in checks]
+        self.assertTrue(any(n.startswith("verifica cinematica (senza carico/collisioni)") for n in names))
+        self.assertFalse(any("portata verificata" in n.lower() for n in names))
+
+    def test_goal_irraggiungibile_blocca_il_plan(self):
+        self.cmd["goal_pose"]["position_m"] = [0.0, 1.6, 0.7]
+        ok, checks, info = self.plan()
+        self.assertFalse(ok)
+        self.assertTrue(any(n.startswith("verifica cinematica") for n in failed(checks)), failed(checks))
+        self.assertFalse(info["robot1_reach"]["goal_ik_ok"])
+
+    def test_start_senza_quaternione_e_accettato(self):
+        del self.cmd["start_pose"]["quaternion_wxyz"]  # opzionale
+        ok, checks, _ = self.plan()
+        self.assertTrue(ok, failed(checks))
 
     def test_theta0_troppo_vicino_al_trigger(self):
         ok, checks, _ = self.plan(theta0=-35.0)  # B chiede theta0 >= -30.968, A >= -24.968
@@ -158,14 +176,14 @@ class IkTest(unittest.TestCase):
 class ProtocolTest(unittest.TestCase):
     def test_roundtrip_state(self):
         import struct
-        buf = struct.pack(hw.STATE_FMT, hw.STATE_MAGIC, 2, 120, 7, 2, 123, -1.0, float("nan"), -1.01, 0.5, -0.03,
+        buf = struct.pack(hw.STATE_FMT, hw.STATE_MAGIC, hw.PROTOCOL_VERSION, 120, 7, 2, 123, -1.0, float("nan"), -1.01, 0.5, -0.03,
                           0.0, 0.72, 0.7, 0.0, 0.0, 1.0, 0x30, hw.FLAG_OMEGA_VALID)
         self.assertEqual(buf[:4], b"SATS")
         p = hw.decode_state(buf)
         self.assertEqual((p["seq"], p["state"], p["faults"], p["flags"]), (7, 2, 0x30, 1))
         self.assertTrue(p["omega_valid"])
-        old = struct.pack(hw.STATE_FMT, hw.STATE_MAGIC, 1, 120, 7, 2, 123, *([0.0] * 11), 0, 0)
-        self.assertIsNone(hw.decode_state(old))  # versione 1 rifiutata
+        old = struct.pack(hw.STATE_FMT, hw.STATE_MAGIC, 2, 120, 7, 2, 123, *([0.0] * 11), 0, 0)
+        self.assertIsNone(hw.decode_state(old))  # versione 2 rifiutata (v3: STOP_RAMP)
         self.assertTrue(math.isnan(p["omega_meas"]))
         self.assertIsNone(hw.decode_state(buf[:-1]))
         self.assertIsNone(hw.decode_state(b"X" + buf[1:]))

@@ -51,6 +51,7 @@
 #include "real_replay/safety.hpp"
 #include "real_replay/sha256.hpp"
 #include "real_replay/target_source.hpp"
+#include "real_replay/gripper_franka.hpp"
 #include "real_replay/task_logic.hpp"
 #include "real_replay/task_runtime.hpp"
 
@@ -86,6 +87,7 @@ struct Cli {
   std::string hw_config;
   std::string weights;
   double fault_linger_s = -1.0;  ///< < 0: from hw_config task.fault_linger_s
+  double hang_loop_after_s = -1.0;  ///< TEST ONLY (dry-run): the 1 kHz loop stops cycling (no exception, no loop_finished) after S s
 };
 
 void printUsage(const char* argv0) {
@@ -130,6 +132,10 @@ bool parseCli(int argc, char** argv, Cli& cli, std::string& err) {
       cli.yes = true;
     } else if (a == "--mass-sensitivity") {
       cli.mass_sensitivity = true;
+    } else if (a == "--hang-loop-after-s") {
+      std::string v;
+      if (!value(v)) return false;
+      cli.hang_loop_after_s = std::stod(v);
     } else if (a == "--preflight-only") {
       cli.preflight_only = true;
     } else if (a == "--check-joint-limits") {
@@ -971,6 +977,7 @@ struct TaskCycleCtx {
   int jitter_n = 3;
   int jitter_count = 0;
   bool activation_published = false;
+  bool guard_enabled = false;   ///< publish e_pos / F_ext for the machine's guard (robot mode only)
 };
 
 double monoNowS() {
@@ -983,6 +990,7 @@ double monoNowS() {
 /// No allocation, no network syscall.
 franka::Torques runTaskCycle(ReplayLoop& loop, const franka::RobotState& s, double period_s, TaskCycleCtx& c) {
   const franka::Torques tq = runCycle(loop, s, period_s);
+  c.sh->loop_cycles.fetch_add(1, std::memory_order_relaxed);  // liveness of the control loop (heartbeat gate)
   const double t = monoNowS();
   const std::size_t n = loop.logger().size();
   if (n > 0) {
@@ -1006,6 +1014,12 @@ franka::Torques runTaskCycle(ReplayLoop& loop, const franka::RobotState& s, doub
       c.activation_published = true;
     }
     c.log->record(*c.sh, t, r.e_pos, r.e_rot);
+    if (c.guard_enabled) {
+      const double fx = s.O_F_ext_hat_K[0], fy = s.O_F_ext_hat_K[1], fz = s.O_F_ext_hat_K[2];
+      c.sh->e_pos_m.store(std::sqrt(r.e_pos[0] * r.e_pos[0] + r.e_pos[1] * r.e_pos[1] + r.e_pos[2] * r.e_pos[2]), std::memory_order_relaxed);
+      c.sh->f_ext_n.store(std::sqrt(fx * fx + fy * fy + fz * fz), std::memory_order_relaxed);
+      c.sh->guard_valid.store(true, std::memory_order_relaxed);
+    }
   }
   if (period_s > c.jitter_period_s) {
     if (++c.jitter_count >= c.jitter_n) c.sh->jitter_fault.store(true);
@@ -1030,6 +1044,15 @@ void printTaskFigures(const task::TaskMachine& m) {
     const double e_trig = std::remainder(f.theta_trig - f.theta_at_trigger, 2.0 * M_PI);
     std::printf("  TRIGGER ERROR (theta_trig - theta measured at the trigger): %+.4f deg  (d_k %+.4f deg, sample age %.1f ms)\n", e_trig * D,
                 f.d_at_trigger * D, f.age_at_trigger * 1e3);
+  }
+  if (std::isfinite(f.t_grasp_cmd)) {
+    std::printf("  GRASP: commanded at +%.3f s after the end of APPROACH; %s", f.t_grasp_cmd - f.t_approach_end,
+                std::isfinite(f.t_grasp_ok) ? "" : "no success\n");
+    if (std::isfinite(f.t_grasp_ok)) std::printf("OK after %.3f s, width %.4f m\n", f.t_grasp_ok - f.t_grasp_cmd, f.grasp_width_m);
+  }
+  if (std::isfinite(f.t_release)) {
+    std::printf("  RELEASE: STOP ramp at +%.3f s after the grasp; STOPPED after %.3f s; hand open %.3f s after STOPPED\n", f.t_release - f.t_grasp_ok,
+                f.t_stopped - f.t_release, f.t_open_after_release - f.t_stopped);
   }
   if (std::isfinite(f.t_approach_end)) {
     const double dur = f.t_approach_end - f.t_trigger;
@@ -1084,7 +1107,7 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   TaskMachine machine(hw.p, sv.tau, sat::kFaultPhaseMismatch);
   machine.submitCommand(cmd);
   const double nominal = cfg.run.max_duration_s - cfg.safety.stop_duration_s - 1.0;
-  ReplayLoop loop(cfg, urdf_xml, std::make_unique<TaskSource>(std::move(approach), sh, nominal));
+  ReplayLoop loop(cfg, urdf_xml, std::make_unique<TaskSource>(std::move(approach), sh, nominal, nullptr, cmd.omega));
   loop.setExternalStopFlag(&g_stop_requested);
   const std::string csv_path = logPath(cli, cfg, cli.dry_run ? "dryrun" : "robot");
   const std::string base = csv_path.substr(0, csv_path.size() - 4);
@@ -1109,6 +1132,59 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
     loop.prepareDamping(q, &r.lambda_min, &r.lambda_max);
   };
 
+  if (cli.preflight_only) {  // --mode task --preflight-only: read-only, no control(), no setEE/setLoad/collision settings, no START
+    std::printf("=== TASK PREFLIGHT ONLY: %s (read-only; no control(), no setEE/setLoad/setCollisionBehavior, no command to the satellite) ===\n",
+                cfg.robot.ip.c_str());
+    if (report.failures > 0 && cfg.preflight.abort_on_failure) {
+      std::printf("preflight failed, not connecting.\n");
+      return 1;
+    }
+    try {
+      franka::Robot robot(cfg.robot.ip, franka::RealtimeConfig::kIgnore);
+      const franka::RobotState s0 = robot.readOnce();
+      std::printf("preflight:\n");
+      pathCheck(s0.q);
+      preflightRobot(robot, s0, loop, cfg, report, /*moves=*/true, /*settings_applied=*/false);
+      if (hw.grip.enabled) {
+        try {
+          auto g = grip::makeFrankaGripper(hw.grip.host);
+          const grip::GripperState gs = g->readState();
+          std::printf("  gripper %s: width %.4f m, max_width %.4f m, is_grasped %d (read only, no motion)\n", hw.grip.host.c_str(), gs.width,
+                      gs.max_width, gs.is_grasped ? 1 : 0);
+          report.check("gripper reachable and homed (max_width >= 0.05 m)", gs.max_width >= 0.05, fmt("max_width %.4f m", gs.max_width));
+        } catch (const std::exception& e) {
+          report.check("gripper reachable and homed", false, e.what());
+        }
+      }
+      const std::vector<Check> sc = validateCommand(cmd, hw.p, [&] {
+        ValidationContext x;
+        x.now_unix_s = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+        x.tau = sv.tau;
+        x.weights_sha256 = sv.weights_sha256;
+        x.tcp_p = cmd.start_p;  // NOT measured here: the TCP comparison is excluded below
+        x.tcp_q = cmd.start_q;
+        x.path_checked = sv.path_checked;
+        x.path_ok = sv.path_ok;
+        x.path_detail = sv.path_detail;
+        x.stop_at_fraction = sv.stop_at_fraction;
+        return x;
+      }());
+      std::printf("command checks (offline):\n");
+      for (const Check& c : sc) {
+        if (c.name.rfind("|start_position", 0) == 0 || c.name.rfind("angle(start", 0) == 0) continue;  // need the measured TCP (control frame): not read here
+        report.check(c.name, c.ok || !c.blocking, c.detail);
+      }
+      std::printf(
+          "NOT checked in this mode: the TCP vs start_pose comparison (needs the control frame = setEE, a write to the controller), the\n"
+          "  satellite phase (theta0, feasibility A-E: done by hw.py plan and by VALIDATE), the load in effect during a run.\n");
+    } catch (const franka::Exception& e) {
+      std::fprintf(stderr, "franka::Exception: %s\n", e.what());
+      return 3;
+    }
+    std::printf("task preflight-only %s (%d failure(s), %d warning(s))\n", report.failures == 0 ? "OK" : "FAILED", report.failures, report.warnings);
+    return report.failures == 0 ? 0 : 1;
+  }
+
   const std::size_t max_cycles = static_cast<std::size_t>((cfg.run.max_duration_s + cfg.safety.stop_duration_s) / kNominalCycleS) + 100;
   TaskCycleLog tlog(max_cycles);
   TaskCycleCtx cc;
@@ -1116,8 +1192,34 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   cc.log = &tlog;
   cc.jitter_period_s = hw.jitter_period_s;
   cc.jitter_n = hw.jitter_consecutive;
+  cc.guard_enabled = !cli.dry_run && hw.p.guard_enabled;  // dry-run: fixed state, e_pos is meaningless
+  std::unique_ptr<grip::GripperWorker> gw;  // declared BEFORE rt: destroyed after it
   std::unique_ptr<TaskRuntime> rt;
   int exit_code = 0;
+  // INIT of the hand (only if gripper.enabled): own connection, own thread; a failure here means no satellite command is sent.
+  auto startGripper = [&]() -> bool {
+    if (!hw.grip.enabled) return true;
+    try {
+      std::unique_ptr<grip::IGripper> g;
+      if (cli.dry_run) {
+        auto fg = std::make_unique<grip::FakeGripper>();  // dry-run: no hand is touched
+        fg->move_delay_s = 0.5;
+        fg->grasp_delay_s = 1.0;
+        g = std::move(fg);
+      } else {
+        g = grip::makeFrankaGripper(hw.grip.host);
+      }
+      gw = std::make_unique<grip::GripperWorker>(std::move(g), hw.grip);
+      gw->start();
+      std::printf("  gripper: %s on %s, open %.3f m, grasp width %.4f m, speed %.3f m/s, force %.1f N (per-finger or total: NOT documented by libfranka)\n",
+                  cli.dry_run ? "FakeGripper (dry-run)" : "FrankaGripper", cli.dry_run ? "-" : hw.grip.host.c_str(), hw.grip.open_width_m,
+                  hw.grip.grasp_width_m, hw.grip.speed_m_s, hw.grip.force_n);
+      return true;
+    } catch (const std::exception& e) {
+      std::printf("INIT: gripper connection failed: %s -> no satellite command sent\n", e.what());
+      return false;
+    }
+  };
 
   if (cli.dry_run) {
     applyRuntimeFlags(cfg);
@@ -1127,13 +1229,22 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
       std::printf("INIT: %d preflight failure(s): no satellite command sent\n", report.failures);
       return 1;
     }
+    if (!startGripper()) return 1;
     rt = std::make_unique<TaskRuntime>(hw, machine, sh, sv, cli.yes, &g_stop_requested);
+    rt->setGripper(gw.get());
     rt->start();
     franka::RobotState state{};
     state.q = cfg.dry_run.q;
     state.control_command_success_rate = 1.0;
     auto next = SteadyClock::now();
+    const double t_hang = cli.hang_loop_after_s >= 0.0 ? monoNowS() + cli.hang_loop_after_s : -1.0;
     for (std::size_t i = 0; i < max_cycles; ++i) {
+      if (t_hang > 0.0 && monoNowS() >= t_hang) {  // TEST ONLY: a stalled control loop (threads alive, no cycles, no loop_finished)
+        std::printf("[test] control loop hung on purpose (--hang-loop-after-s): the heartbeat must stop\n");
+        std::fflush(stdout);
+        for (int k = 0; k < 600 && !g_stop_requested; ++k) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        break;
+      }
       const franka::Torques tq = runTaskCycle(loop, state, kNominalCycleS, cc);
       if (tq.motion_finished) break;
       next += std::chrono::microseconds(1000);
@@ -1171,7 +1282,9 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
         }
       }
       applyRuntimeFlags(cfg);
+      if (!startGripper()) return 1;
       rt = std::make_unique<TaskRuntime>(hw, machine, sh, sv, cli.yes, &g_stop_requested);
+      rt->setGripper(gw.get());
       rt->start();
       std::function<franka::Torques(const franka::RobotState&, franka::Duration)> callback =
           [&loop, &cc](const franka::RobotState& s, franka::Duration d) { return runTaskCycle(loop, s, d.toSec(), cc); };
@@ -1260,7 +1373,6 @@ int main(int argc, char** argv) {
                 cfg.paths.urdf.c_str(), cfg.robot.ee_frame.c_str());
     if (cli.preflight_only && cli.dry_run) throw std::runtime_error("--preflight-only and --dry-run are mutually exclusive");
     if (cli.mode == "task") {
-      if (cli.preflight_only) throw std::runtime_error("--preflight-only is not supported with --mode task");
       return runTask(cli, cfg, urdf_xml);
     }
     if (cli.preflight_only) return runPreflightOnly(cli, cfg, urdf_xml);

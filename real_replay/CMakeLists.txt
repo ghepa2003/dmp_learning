@@ -115,12 +115,12 @@ target_link_libraries(rr_lib PUBLIC fcc_core hdl_core sgp_jps ${YAML_TARGET} Eig
 target_compile_options(rr_lib PRIVATE -Wall -Wextra)
 
 # stage 2 task layer (pure logic + runtime threads; no libfranka, no ROS)
-add_library(task_lib STATIC src/task_logic.cpp src/task_runtime.cpp)
+add_library(task_lib STATIC src/task_logic.cpp src/task_runtime.cpp src/gripper.cpp)
 target_include_directories(task_lib PUBLIC include)
 target_link_libraries(task_lib PUBLIC rr_lib ${YAML_TARGET} Eigen3::Eigen Threads::Threads)
 target_compile_options(task_lib PRIVATE -Wall -Wextra)
 
-add_executable(real_replay src/main.cpp)
+add_executable(real_replay src/main.cpp src/gripper_franka.cpp)
 target_link_libraries(real_replay PRIVATE task_lib rr_lib Franka::Franka Threads::Threads)
 target_compile_options(real_replay PRIVATE -Wall -Wextra)
 
@@ -185,6 +185,17 @@ if(REAL_REPLAY_BUILD_TESTS)
 endif()
 
 # ---- satellite J7 driver (standalone tool: joint PD, only J7 moves; no ReplayLoop) -----------------
+# standalone hardware tools (libfranka only / rr_lib): they existed as hand-built binaries, now they have targets
+add_executable(gripper_test tools/gripper_test.cpp)
+target_link_libraries(gripper_test PRIVATE Franka::Franka Threads::Threads)
+target_link_options(gripper_test PRIVATE -Wl,--disable-new-dtags)
+add_executable(gripper_grasp_test tools/gripper_grasp_test.cpp)
+target_link_libraries(gripper_grasp_test PRIVATE Franka::Franka Threads::Threads)
+target_link_options(gripper_grasp_test PRIVATE -Wl,--disable-new-dtags)
+add_executable(friction_id tools/friction_id.cpp)
+target_link_libraries(friction_id PRIVATE rr_lib Franka::Franka Threads::Threads)
+target_link_options(friction_id PRIVATE -Wl,--disable-new-dtags)
+
 add_executable(satellite_j7 tools/satellite_j7.cpp)
 target_link_libraries(satellite_j7 PRIVATE rr_lib Franka::Franka Threads::Threads)
 target_compile_options(satellite_j7 PRIVATE -Wall -Wextra)
@@ -238,6 +249,20 @@ if(REAL_REPLAY_BUILD_TESTS)
   add_executable(test_slerp_hw_goal test/test_slerp_hw_goal.cpp)
   target_link_libraries(test_slerp_hw_goal PRIVATE rr_lib)
   add_test(NAME slerp_hw_goal COMMAND test_slerp_hw_goal "${CMAKE_CURRENT_SOURCE_DIR}/../runs/20261124T165020_prodmp/weights.yaml")
+  add_executable(test_task_grasp test/test_task_grasp.cpp)
+  target_link_libraries(test_task_grasp PRIVATE task_lib)
+  add_test(NAME task_grasp COMMAND test_task_grasp "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/hw/examples/grasp_command_nominale.yaml")
+  add_executable(test_task_follow test/test_task_follow.cpp)
+  target_link_libraries(test_task_follow PRIVATE task_lib)
+  add_test(NAME task_follow COMMAND test_task_follow "${CMAKE_CURRENT_SOURCE_DIR}/../runs/20261124T165020_prodmp/weights.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/config/task_robot1_hand_ff.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/config/replay_demo1014_f10_hand_kr30_ffa100.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/config/task_robot1_hand.yaml")
+  add_executable(test_task_safety test/test_task_safety.cpp)
+  target_link_libraries(test_task_safety PRIVATE task_lib)
+  add_test(NAME task_safety COMMAND test_task_safety "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml"
+           "${CMAKE_CURRENT_SOURCE_DIR}/hw/examples/grasp_command_nominale.yaml")
   add_executable(test_task_logic test/test_task_logic.cpp)
   target_link_libraries(test_task_logic PRIVATE task_lib)
   add_test(NAME task_logic COMMAND test_task_logic "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml"

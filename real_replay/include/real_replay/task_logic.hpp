@@ -12,6 +12,8 @@
 
 #include <Eigen/Geometry>
 
+#include "real_replay/gripper.hpp"
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -23,9 +25,8 @@ namespace task {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 // ---- States -----------------------------------------------------------------------------------------------------
-/// The full set of stages 2 and 3. CLOSE_FOLLOW, SQUEEZE, RELEASE and FAULT_GRASP are STUBS in stage 2: they exist
-/// (and their transitions are declared in transitionAllowed()) so that stage 3 does not change the structure, but
-/// the stage-2 machine never enters them.
+/// The full set of stages 2 and 3. CLOSE_FOLLOW, SQUEEZE, HOLD, RELEASE and FAULT_GRASP are entered ONLY when the
+/// gripper is enabled (hw_config gripper.enabled); with it disabled the machine is the stage-2 one (APPROACH -> HOLD_SAFE).
 enum class TaskState : int {
   kInit = 0,           ///< preflight (start_pose_check, config sanity) - done before the control loop
   kWaitCmd = 1,        ///< hold; activation orientation read ONCE; waiting for the command and the activation
@@ -33,13 +34,14 @@ enum class TaskState : int {
   kWaitTrigger = 3,    ///< hold; phase crossing of theta_trig
   kApproach = 4,       ///< ProDMP rollout over tau
   kHoldSafe = 5,       ///< stage 2 end: frozen target, STOP to the satellite after T_hold_stage2_s, exit
-  kCloseFollow = 6,    ///< stage 3 stub
-  kSqueeze = 7,        ///< stage 3 stub
-  kRelease = 8,        ///< stage 3 stub
+  kCloseFollow = 6,    ///< stage 3: grasp() running, the hand follows the satellite; <= T_close_max_s
+  kSqueeze = 7,        ///< stage 3: grasp held at the configured force for squeeze_s (follow active)
+  kRelease = 8,        ///< stage 3: satellite stop ramp (follow active), then the hand opens only after STOPPED
   kFaultNoMotion = 9,  ///< fault before the approach: hold, STOP, process alive
   kFaultMotion = 10,   ///< fault during/after the approach: target frozen (v = 0), STOP, process alive
-  kFaultGrasp = 11,    ///< stage 3 stub
-  kDone = 12,          ///< stage 2 completed (HOLD_SAFE over), controlled stop of the loop requested
+  kFaultGrasp = 11,    ///< stage 3: fault from CLOSE_FOLLOW on: STOP to the satellite FIRST, then the hand opens
+  kDone = 12,          ///< completed (HOLD_SAFE over), controlled stop of the loop requested
+  kHold = 13,          ///< stage 3: grasp held, follow active until T_follow_s after the grasp succeeded
 };
 
 const char* toString(TaskState s);
@@ -48,7 +50,8 @@ bool isStage3Stub(TaskState s);
 bool transitionAllowed(TaskState from, TaskState to);
 
 /// Command to the target source running in the 1 kHz loop.
-enum class SourceCmd : int { kHold = 0, kApproach = 1, kFreeze = 2 };
+/// kFollow: the target rigidly follows the satellite phase (stage 3).
+enum class SourceCmd : int { kHold = 0, kApproach = 1, kFreeze = 2, kFollow = 3 };
 
 // ---- GraspCommand -----------------------------------------------------------------------------------------------
 struct GraspCommand {
@@ -63,6 +66,7 @@ struct GraspCommand {
   std::string weights_sha256;
   Eigen::Vector3d start_p = Eigen::Vector3d::Constant(kNaN);
   Eigen::Quaterniond start_q = Eigen::Quaterniond(kNaN, kNaN, kNaN, kNaN);
+  bool start_q_present = true;   ///< false: start_pose.quaternion_wxyz is optional; the orientation is then NOT checked (WARN)
   Eigen::Vector3d goal_p = Eigen::Vector3d::Constant(kNaN);
   Eigen::Quaterniond goal_q = Eigen::Quaterniond(kNaN, kNaN, kNaN, kNaN);
   int k = -1;
@@ -98,6 +102,19 @@ struct TaskParams {
   double omega_meas_tol = 0.1 * 3.14159265358979323846 / 180;
   double trigger_max_d = 3.14159265358979323846 / 2;
   double fault_linger_s = 0.0;          ///< 0 = stay alive in the fault state until Ctrl-C
+  // stage 3
+  bool grasp_enabled = false;           ///< gripper.enabled: CLOSE_FOLLOW .. RELEASE are entered
+  double squeeze_s = 2.0;               ///< gripper.squeeze_s
+  double open_timeout_s = 10.0;         ///< gripper.open_timeout_s
+  double sat_stop_ramp_s = 2.0;         ///< robot2.control.stop_ramp_s: STOPPED is expected within this + stop_wait_margin_s
+  double stop_wait_margin_s = 3.0;
+  // guard after the grasp (CLOSE_FOLLOW .. RELEASE): K*e_pos force equivalent and the estimated external force.
+  // PROPOSED values in hw_config (task.guard), NOT validated: see the comments there.
+  bool guard_enabled = false;
+  double guard_stiffness = 2000.0;       ///< K [N/m] of the Cartesian translational stiffness (1 mm = 2 N)
+  double guard_feq_warn_n = 8.0, guard_feq_fault_n = 16.0;     ///< K*e_pos [N]
+  double guard_fext_warn_n = 10.0, guard_fext_fault_n = 20.0;  ///< |O_F_ext_hat_K force| [N]
+  double guard_debounce_s = 0.05;        ///< the fault threshold must be exceeded for this long
 };
 
 struct HwTaskConfig {
@@ -108,6 +125,9 @@ struct HwTaskConfig {
   double hb_send_hz = 20.0;
   double jitter_period_s = 0.003;
   int jitter_consecutive = 3;
+  double hb_stall_s = 0.1;      ///< task.hb_stall_s: heartbeat stops when the 1 kHz loop has not cycled for this long
+  grip::GripperParams grip;     ///< hw_config `gripper:` (optional section: absent = disabled)
+  std::string robot1_ip;        ///< robot1.ip (default gripper host)
 };
 
 /// Reads the sections needed by the task layer. Throws std::runtime_error with the offending key.
@@ -171,6 +191,9 @@ struct SatSample {
   double omega_meas = kNaN;
   bool omega_valid = false;
   double rx_s = kNaN;  ///< receive time, CLOCK_MONOTONIC [s]
+  double omega_cmd = kNaN;                 ///< phase speed of the satellite reference in this cycle [rad/s] (profile: follows the stop ramp)
+  double center[3] = {kNaN, kNaN, kNaN};   ///< satellite centre, frame robot 1 [m]
+  double axis[3] = {0.0, 0.0, 1.0};        ///< rotation axis (upwards), unit
 };
 
 enum class SampleVerdict : int { kOk = 0, kSeq = 1, kClockBack = 2, kAge = 3, kNonFinite = 4 };
@@ -212,6 +235,22 @@ class PhaseTrigger {
   double d_prev_ = 0.0;
 };
 
+// ---- Heartbeat gate ---------------------------------------------------------------------------------------------
+/// The heartbeat to satellite_node is NOT an independent timer: it is sent only while the machine enables it AND the
+/// 1 kHz control loop is alive (its cycle counter advanced within stall_s). If the loop stops, hangs or throws, the
+/// heartbeat stops and satellite_node ramps down by itself after T_hb.
+class HeartbeatGate {
+ public:
+  explicit HeartbeatGate(double stall_s) : stall_s_(stall_s) {}
+  bool shouldSend(bool enabled, std::uint64_t loop_cycles, double now_s);
+
+ private:
+  double stall_s_;
+  bool have_ = false;
+  std::uint64_t last_ = 0;
+  double t_change_ = 0.0;
+};
+
 // ---- Machine ----------------------------------------------------------------------------------------------------
 struct MachineInputs {
   double now_s = 0.0;  ///< CLOCK_MONOTONIC [s]
@@ -227,14 +266,31 @@ struct MachineInputs {
   std::string loop_reason;
   bool jitter_fault = false;
   bool abort = false;  ///< Ctrl-C / SIGTERM
+  // gripper worker (ids are the ones the machine issued in MachineActions::gripper_id)
+  std::uint32_t grip_done_id = 0;
+  bool grip_done_ok = false;
+  bool grip_is_grasped = false;
+  bool grip_state_valid = false;
+  double grip_width = kNaN;
+  // robot-side guard inputs (published by the 1 kHz callback); guard_valid = false in dry-run (fixed state)
+  bool guard_valid = false;
+  double e_pos_m = 0.0;   ///< |target - measured| position error
+  double f_ext_n = 0.0;   ///< |O_F_ext_hat_K force part|
 };
+
+/// Gripper command requested by the machine; executed by the runtime AFTER send_start / send_stop (that order is
+/// the contract: on a fault the STOP to the satellite goes first, the hand opens right after, without waiting).
+enum class GripperCmd : int { kNone = 0, kOpen = 1, kGrasp = 2 };
 
 struct MachineActions {
   bool send_start = false;  ///< one shot
-  bool send_stop = false;   ///< one shot
+  bool send_stop = false;   ///< one shot; stop_hard selects the command: false = STOP_RAMP (normal), true = hard STOP (fault)
+  bool stop_hard = false;
   bool hb_enable = false;
   SourceCmd source = SourceCmd::kHold;
   bool end_loop = false;    ///< request the controlled stop of the 1 kHz loop
+  GripperCmd gripper = GripperCmd::kNone;  ///< one shot, executed after the satellite commands
+  std::uint32_t gripper_id = 0;            ///< strictly increasing, 0 = none
 };
 
 struct Event {
@@ -249,6 +305,8 @@ struct RunFigures {
   double t_omega_valid = kNaN;
   double t_trigger = kNaN, theta_at_trigger = kNaN, d_at_trigger = kNaN, age_at_trigger = kNaN;
   double t_approach_start = kNaN, t_approach_end = kNaN;
+  double t_grasp_cmd = kNaN, t_grasp_ok = kNaN, t_release = kNaN, t_stopped = kNaN, t_open_after_release = kNaN;
+  double grasp_width_m = kNaN;
   double theta_at_approach_end = kNaN, age_at_approach_end = kNaN;
   double theta_star = kNaN, theta_trig = kNaN, omega_cmd = kNaN, tau = kNaN;
 };
@@ -283,11 +341,17 @@ class TaskMachine {
   const RunFigures& figures() const { return fig_; }
   bool startSent() const { return start_sent_; }
   bool stopSent() const { return stop_sent_; }
-  int exitCode() const;  ///< 0 done, 5 FAULT_NOMOTION, 6 FAULT_MOTION, 4 still running (should not happen)
+  /// 0 done, 5 FAULT_NOMOTION, 6 FAULT_MOTION, 8 FAULT_GRASP (7 is hw.py's "satellite_node failed"), 4 still running
+  int exitCode() const;
+  /// True while the hand may hold the object (grasp commanded, not yet reopened): the runtime must open it at exit.
+  bool gripperHolding() const { return grasp_issued_ && !reopen_ok_; }
+  bool gripperOpened() const { return opened_; }
 
  private:
   void enter(TaskState s, double t, const std::string& why = "");
   void fault(const MachineInputs& in, const std::string& why);
+  bool guardTrip(const MachineInputs& in, std::string& why);
+  void issue(MachineActions& a, GripperCmd c, std::uint32_t* id_out = nullptr);
   void event(double t, const std::string& name, const std::string& detail = "");
   bool satFault(const MachineInputs& in, std::string& why) const;
 
@@ -299,8 +363,18 @@ class TaskMachine {
   bool have_cmd_ = false;
   bool validated_ = false, validation_failed_ = false, confirmed_ = false;
   bool start_sent_ = false, stop_sent_ = false, stop_pending_ = false, start_pending_ = false;
+  bool stop_hard_pending_ = false, hard_sent_ = false;
   bool armed_ = false, sat_running_seen_ = false;
   bool end_loop_ = false;
+  // stage 3
+  std::uint32_t grip_next_id_ = 0, open_id_ = 0, grasp_id_ = 0, reopen_id_ = 0;
+  bool opened_ = false, grasp_issued_ = false, reopen_issued_ = false, reopen_ok_ = false;
+  bool fault_open_needed_ = false;
+  int reopen_attempts_ = 0;
+  double t_reopen_ = kNaN, t_grasp_ok_ = kNaN, t_squeeze_ = kNaN, t_release_ = kNaN;
+  bool rel_stopped_ = false;
+  double guard_over_since_ = kNaN;
+  bool guard_warned_feq_ = false, guard_warned_fext_ = false;
   double t_state_ = 0.0, t_fault_ = kNaN;
   Feasibility feas_;
   PhaseTrigger trigger_{0.0, 1.0, 1.0};
