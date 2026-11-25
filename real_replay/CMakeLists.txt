@@ -172,4 +172,17 @@ if(REAL_REPLAY_BUILD_TESTS)
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=posix_memalign -Wl,--wrap=aligned_alloc)
   add_test(NAME replay_dryrun COMMAND test_replay_dryrun "${RR_CONFIG}" "${RR_URDF}")
   set_tests_properties(replay_dryrun PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(test_j7_profile test/test_j7_profile.cpp)
+  target_link_libraries(test_j7_profile PRIVATE rr_lib)
+  add_test(NAME j7_profile COMMAND test_j7_profile)
 endif()
+
+# ---- satellite J7 driver (standalone tool: joint PD, only J7 moves; no ReplayLoop) -----------------
+add_executable(satellite_j7 tools/satellite_j7.cpp)
+target_link_libraries(satellite_j7 PRIVATE rr_lib Franka::Franka Threads::Threads)
+target_compile_options(satellite_j7 PRIVATE -Wall -Wextra)
+set_target_properties(satellite_j7 PROPERTIES
+  BUILD_WITH_INSTALL_RPATH OFF
+  BUILD_RPATH "${FRANKA_NONRT_BUILD_DIR}")
+target_link_options(satellite_j7 PRIVATE -Wl,--disable-new-dtags)
