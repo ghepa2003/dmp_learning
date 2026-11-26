@@ -5,6 +5,7 @@
 //   pose_read --hw-config hw/hw_config_j1ns1.yaml [--robot1-ip IP] [--samples N] [--period-ms M] [--log-dir D]
 //             [--theta-from-robot2 [--robot2-ip IP]] [--phase-source q7|flange]
 //             [--grasp-command F] [--planner-config F]
+//   pose_read --hw-config F --grasp-command F --nominal-thetas-deg t1,t2,...   (offline: nominalPose() as CSV on stdout)
 //   pose_read --hw-config F --fk q1,...,q7 [deg] [--f-t-ee 16 numbers, column-major] [--grasp-command F]   (offline, no robot)
 //
 // What it prints (robot 1, frame = base of robot 1): robot_mode, current_errors / last_motion_errors, q [rad, deg],
@@ -56,6 +57,7 @@ struct Cli {
   std::string hw_config, robot1_ip, robot2_ip, log_dir, grasp_command, planner_config, phase_source = "q7";
   int samples = 1, period_ms = 100;
   bool theta = false, fk_only = false, have_ftee = false;
+  std::vector<double> nominal_thetas;  ///< --nominal-thetas-deg: offline nominalPose() at these phases [rad]
   std::array<double, 7> fk_q{};
   std::array<double, 16> f_t_ee{};
 };
@@ -104,6 +106,11 @@ bool parseCli(int argc, char** argv, Cli& c) {
       if (!parseList(val(), d, 7)) throw std::runtime_error("--fk needs 7 comma-separated angles in degrees");
       for (int k = 0; k < 7; ++k) c.fk_q[k] = d[k] * kDeg;
       c.fk_only = true;
+    } else if (a == "--nominal-thetas-deg") {
+      std::stringstream ss(val());
+      std::string tok;
+      while (std::getline(ss, tok, ',')) c.nominal_thetas.push_back(std::strtod(tok.c_str(), nullptr) * kDeg);
+      if (c.nominal_thetas.empty()) throw std::runtime_error("--nominal-thetas-deg needs a comma-separated list");
     } else if (a == "--f-t-ee") {
       if (!parseList(val(), c.f_t_ee.data(), 16)) throw std::runtime_error("--f-t-ee needs 16 comma-separated numbers (column-major)");
       c.have_ftee = true;
@@ -274,6 +281,17 @@ int main(int argc, char** argv) {
   try {
     const real_replay::HwConfig hw = real_replay::loadHwConfig(c.hw_config);
     if (c.fk_only) return runFk(c, hw);
+    if (!c.nominal_thetas.empty()) {  // offline: the nominal grasp pose of nominalPose() at the given phases (no robot)
+      if (c.grasp_command.empty()) throw std::runtime_error("--nominal-thetas-deg needs --grasp-command");
+      const real_replay::task::GraspCommand cmd = real_replay::task::loadGraspCommand(c.grasp_command);
+      std::printf("theta_deg,px,py,pz,qw,qx,qy,qz\n");
+      for (double th : c.nominal_thetas) {
+        const Nominal n = nominalPose(cmd, hw, th);
+        std::printf("%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n", th / kDeg, n.p.x(), n.p.y(), n.p.z(), n.q.w(), n.q.x(), n.q.y(),
+                    n.q.z());
+      }
+      return 0;
+    }
 
     sat::PhaseParams ph;  // as satellite_node phaseParams()
     ph.collar_offset_rad = hw.scene.collar_phase_offset_rad;
