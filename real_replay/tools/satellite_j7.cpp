@@ -54,6 +54,7 @@
 #include <thread>
 #include <vector>
 
+#include "real_replay/git_version.hpp"
 #include "real_replay/config.hpp"
 #include "real_replay/j7_profile.hpp"
 #include "real_replay/preflight_checks.hpp"
@@ -660,6 +661,7 @@ void writeMeta(const std::string& csv, const Cli& cli, const real_replay::Config
     if (!f) throw std::runtime_error("cannot create '" + meta + "'");
     std::fprintf(f, "csv: %s\nmode: %s\nargv: %s\nconfig_path: %s\nconfig_sha256: %s\n", csv.c_str(), kind, cli.argv_line.c_str(),
                  cfg.config_path.c_str(), real_replay::sha256FileHex(cfg.config_path).c_str());
+    std::fprintf(f, "git_head: %s\ngit_dirty: %s\ngit_diff_sha256: %s\n", RR_GIT_HEAD, RR_GIT_DIRTY, RR_GIT_DIFF_SHA256);
     std::fprintf(f, "robot_ip: %s\nsign: %d\nspeed_deg_s: %.9g\ntravel_deg: %.9g\nramp_s: %.9g\nstop_ramp_s: %.9g\nhold_s: %.9g\n",
                  cli.dry_run ? "(dry-run, none)" : cli.robot_ip.c_str(), p.sign, p.prof.speed_rad_s / kDeg, p.prof.travel_rad / kDeg,
                  p.prof.ramp_s, p.prof.stop_ramp_s, p.prof.hold_s);

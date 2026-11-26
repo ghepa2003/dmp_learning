@@ -62,6 +62,38 @@ struct TaskShared {
   std::atomic<double> e_pos_m{0.0}, f_ext_n{0.0};
   std::atomic<int> task_state{static_cast<int>(TaskState::kWaitCmd)};
   sat::LatestValue<SatSample> sat_latest;  ///< latest ACCEPTED satellite sample
+  // FOLLOW start, published once by the 1 kHz callback (release), logged by the task thread (acquire)
+  std::atomic<int> follow_start_kind{0};     ///< FollowStartKind: how the first follow cycle got its satellite sample
+  std::atomic<int> follow_freeze_reason{0};  ///< FollowFreezeReason: why startFollow went to FREEZE (0 = it did not)
+  std::atomic<double> follow_wait_s{0.0};    ///< time spent waiting for a readable sample before starting / freezing
+  std::atomic<std::uint64_t> follow_read_failures{0};  ///< seqlock reads that failed (contention) in startFollow
+};
+
+enum class FollowStartKind : int { kNone = 0, kFresh = 1, kKeptCopy = 2 };
+enum class FollowFreezeReason : int { kNone = 0, kNoSample = 1, kReadContention = 2, kInvalidSample = 3, kStaleSample = 4 };
+const char* toString(FollowStartKind k);
+const char* toString(FollowFreezeReason r);
+
+/// Task-thread reader of TaskShared::sat_latest (NOT for the 1 kHz callback: it may call sched_yield).
+/// A seqlock read that fails because the writer (rx thread) was mid-store is NOT "no sample": the reader keeps the last
+/// valid copy, so the satellite watchdog keeps measuring now - rx_s on it. have() is false only if no valid sample was
+/// ever read. On kContended it yields once and retries once (the writer, if preempted on this core, can finish).
+class SatSnapshotReader {
+ public:
+  struct Result {
+    bool have = false;         ///< a valid copy exists (fresh or kept from an earlier read)
+    bool load_failed = false;  ///< this read failed (kContended after the retry): `out` is the kept copy
+  };
+  Result read(const sat::LatestValue<SatSample>& src, SatSample& out);
+  bool everReceived() const { return have_; }
+  std::uint64_t loadFailures() const { return failures_; }     ///< cumulative kContended reads (after the retry)
+  std::uint64_t failStreak() const { return streak_; }          ///< consecutive failed reads up to now
+  std::uint64_t retriesRecovered() const { return recovered_; } ///< reads that failed the 64 attempts but succeeded after the yield
+
+ private:
+  bool have_ = false;
+  SatSample last_{};
+  std::uint64_t failures_ = 0, streak_ = 0, recovered_ = 0;
 };
 
 /// Target source of --mode task. HOLD: activation pose. APPROACH: the goal-mode ProDmpSource, started at the
@@ -78,7 +110,10 @@ class TaskSource final : public ITargetSource {
  public:
   using ClockFn = double (*)();  ///< CLOCK_MONOTONIC [s]; default = the system clock (tests inject a fake)
   static constexpr double kFollowFreshAgeS = 0.5;
-  TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s, ClockFn clock = nullptr, double omega_nominal = 0.0);
+  /// read_hold_s (hw_config task.follow_read_hold_s): how long the first follow cycle may wait for a readable sample when
+  /// the seqlock read fails (writer mid-store) and no valid copy was kept yet; beyond it: FREEZE (kReadContention).
+  TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s, ClockFn clock = nullptr, double omega_nominal = 0.0,
+             double read_hold_s = 0.05);
   void start(const Pose& activation) override;
   Pose sample(double dt) override;
   double progress() const override { return approach_started_ ? approach_->progress() : 0.0; }
@@ -96,6 +131,13 @@ class TaskSource final : public ITargetSource {
 
   ClockFn clock_;
   double omega_nominal_;
+  double read_hold_s_;
+  // last valid satellite sample read by the 1 kHz callback (kept across failed seqlock reads; no syscall, no allocation)
+  SatSample rt_last_{};
+  bool rt_have_ = false;
+  double f_wait_since_ = kNaN;  ///< first follow cycle that found no readable sample and no kept copy
+  void cacheSat();
+  void freezeFollow(FollowFreezeReason r, double now);
   bool approach_started_ = false;
   bool approach_done_ = false;
   bool follow_started_ = false;
@@ -173,6 +215,13 @@ class TaskRuntime : private IActionSink {
   void finish();
   std::uint64_t rejected(SampleVerdict v) const { return rej_[static_cast<int>(v)].load(); }
   std::uint64_t accepted() const { return rej_[0].load(); }
+  /// Task-thread health, readable after finish(): failed sat_latest reads, worst task-thread period, worst rx age seen.
+  struct TaskHealth {
+    std::uint64_t load_failures = 0, load_recovered = 0, max_fail_streak = 0;
+    double max_task_period_s = 0.0;
+    double max_rx_age_s = 0.0;  ///< max of now - sat.rx_s over the run (after the first valid sample)
+  };
+  TaskHealth health() const { return health_; }
 
  private:
   void rxLoop();
@@ -199,6 +248,7 @@ class TaskRuntime : private IActionSink {
   std::atomic<bool> confirm_asked_{false};
   std::atomic<std::uint32_t> tx_seq_{0};
   std::atomic<std::uint64_t> rej_[5];
+  TaskHealth health_;  ///< written by the task thread only; read after finish() (join)
   std::thread rx_, hb_, task_, confirm_;
 };
 

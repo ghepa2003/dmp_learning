@@ -120,7 +120,17 @@ target_include_directories(task_lib PUBLIC include)
 target_link_libraries(task_lib PUBLIC rr_lib ${YAML_TARGET} Eigen3::Eigen Threads::Threads)
 target_compile_options(task_lib PRIVATE -Wall -Wextra)
 
+# git state of the sources, regenerated at EVERY build (not only at configure): written into each run's .meta.txt
+set(RR_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_target(rr_git_version ALL
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${RR_GEN_DIR}/real_replay/git_version.hpp
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GitVersion.cmake
+  BYPRODUCTS ${RR_GEN_DIR}/real_replay/git_version.hpp
+  VERBATIM)
+
 add_executable(real_replay src/main.cpp src/gripper_franka.cpp)
+target_include_directories(real_replay PRIVATE ${RR_GEN_DIR})
+add_dependencies(real_replay rr_git_version)
 target_link_libraries(real_replay PRIVATE task_lib rr_lib Franka::Franka Threads::Threads)
 target_compile_options(real_replay PRIVATE -Wall -Wextra)
 
@@ -202,6 +212,8 @@ target_link_libraries(friction_id PRIVATE rr_lib Franka::Franka Threads::Threads
 target_link_options(friction_id PRIVATE -Wl,--disable-new-dtags)
 
 add_executable(satellite_j7 tools/satellite_j7.cpp)
+target_include_directories(satellite_j7 PRIVATE ${RR_GEN_DIR})
+add_dependencies(satellite_j7 rr_git_version)
 target_link_libraries(satellite_j7 PRIVATE rr_lib Franka::Franka Threads::Threads)
 target_compile_options(satellite_j7 PRIVATE -Wall -Wextra)
 set_target_properties(satellite_j7 PROPERTIES
@@ -217,6 +229,8 @@ target_link_libraries(sat_lib PUBLIC Eigen3::Eigen ${YAML_TARGET})
 target_compile_options(sat_lib PRIVATE -Wall -Wextra)
 
 add_executable(satellite_node tools/satellite_node.cpp)
+target_include_directories(satellite_node PRIVATE ${RR_GEN_DIR})
+add_dependencies(satellite_node rr_git_version)
 target_link_libraries(satellite_node PRIVATE sat_lib rr_lib Franka::Franka Threads::Threads)
 target_compile_options(satellite_node PRIVATE -Wall -Wextra)
 set_target_properties(satellite_node PROPERTIES

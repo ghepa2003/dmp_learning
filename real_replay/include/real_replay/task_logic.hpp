@@ -102,6 +102,9 @@ struct TaskParams {
   double omega_meas_tol = 0.1 * 3.14159265358979323846 / 180;
   double trigger_max_d = 3.14159265358979323846 / 2;
   double fault_linger_s = 0.0;          ///< 0 = stay alive in the fault state until Ctrl-C
+  /// task.follow_read_hold_s (optional): max wait of the first FOLLOW cycle for a readable satellite sample when the
+  /// seqlock read fails and no valid copy was kept; in (0, T_age_s]. See hw_config.yaml for the 50 ms default.
+  double follow_read_hold_s = 0.05;
   // stage 3
   bool grasp_enabled = false;           ///< gripper.enabled: CLOSE_FOLLOW .. RELEASE are entered
   double squeeze_s = 2.0;               ///< gripper.squeeze_s
@@ -257,8 +260,10 @@ struct MachineInputs {
   bool activation_ready = false;
   Eigen::Vector3d tcp_p = Eigen::Vector3d::Zero();  ///< latest measured TCP
   Eigen::Quaterniond tcp_q = Eigen::Quaterniond::Identity();
-  bool sat_have = false;      ///< at least one accepted sample
-  SatSample sat;              ///< latest ACCEPTED sample
+  bool sat_have = false;      ///< at least one accepted sample was ever read (sat = latest, or the last valid copy)
+  SatSample sat;              ///< latest ACCEPTED sample (kept copy when this cycle's seqlock read failed)
+  bool sat_load_failed = false;        ///< this cycle's read of the latest sample failed (contention): `sat` is the kept copy
+  std::uint64_t sat_load_fail_streak = 0;  ///< consecutive failed reads up to this cycle
   std::uint64_t rejected_seq = 0, rejected_clock = 0, rejected_nonfinite = 0, rejected_age = 0;  ///< cumulative
   bool approach_started = false;
   bool approach_done = false;
@@ -342,6 +347,8 @@ class TaskMachine {
   const RunFigures& figures() const { return fig_; }
   bool startSent() const { return start_sent_; }
   bool stopSent() const { return stop_sent_; }
+  /// Diagnostic event from the runtime (e.g. the 1 Hz satellite-link health line): logged, never changes the state.
+  void note(double t, const std::string& name, const std::string& detail) { event(t, name, detail); }
   /// 0 done, 5 FAULT_NOMOTION, 6 FAULT_MOTION, 8 FAULT_GRASP (7 is hw.py's "satellite_node failed"), 4 still running
   int exitCode() const;
   /// True while the hand may hold the object (grasp commanded, not yet reopened): the runtime must open it at exit.

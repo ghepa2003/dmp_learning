@@ -42,6 +42,7 @@
 #include <franka/robot.h>
 #include <franka/robot_state.h>
 
+#include "real_replay/git_version.hpp"
 #include "real_replay/config.hpp"
 #include "real_replay/controller_core.hpp"
 #include "real_replay/logger.hpp"
@@ -680,6 +681,7 @@ void writeMeta(const Config& cfg, const std::string& csv_path) {
     const FrictionFfConfig& ff = cfg.friction_ff;
     std::fprintf(f, "csv: %s\nconfig_path: %s\nconfig_sha256: %s\n", csv_path.c_str(), cfg.config_path.c_str(),
                  sha256FileHex(cfg.config_path).c_str());
+    std::fprintf(f, "git_head: %s\ngit_dirty: %s\ngit_diff_sha256: %s\n", RR_GIT_HEAD, RR_GIT_DIRTY, RR_GIT_DIFF_SHA256);
     std::fprintf(f, "friction_ff.enabled: %s\nfriction_ff.alpha: %.9g\nfriction_ff.eps_v_rad_s: %.9g\nfriction_ff.dls_lambda: %.9g\n",
                  ff.enabled ? "true" : "false", ff.alpha, ff.eps_v_rad_s, ff.dls_lambda);
     std::fclose(f);
@@ -1112,7 +1114,7 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
   TaskMachine machine(hw.p, sv.tau, sat::kFaultPhaseMismatch);
   machine.submitCommand(cmd);
   const double nominal = cfg.run.max_duration_s - cfg.safety.stop_duration_s - 1.0;
-  ReplayLoop loop(cfg, urdf_xml, std::make_unique<TaskSource>(std::move(approach), sh, nominal, nullptr, cmd.omega));
+  ReplayLoop loop(cfg, urdf_xml, std::make_unique<TaskSource>(std::move(approach), sh, nominal, nullptr, cmd.omega, hw.p.follow_read_hold_s));
   loop.setExternalStopFlag(&g_stop_requested);
   const std::string csv_path = logPath(cli, cfg, cli.dry_run ? "dryrun" : "robot");
   const std::string base = csv_path.substr(0, csv_path.size() - 4);
@@ -1322,6 +1324,11 @@ int runTask(const Cli& cli, const Config& cfg, const std::string& urdf_xml) {
                 static_cast<unsigned long long>(rt->rejected(SampleVerdict::kClockBack)),
                 static_cast<unsigned long long>(rt->rejected(SampleVerdict::kAge)),
                 static_cast<unsigned long long>(rt->rejected(SampleVerdict::kNonFinite)));
+    const TaskRuntime::TaskHealth th = rt->health();
+    std::printf("  task thread: sat_latest read failures %llu (recovered by yield %llu, max streak %llu), max rx age %.3f s, "
+                "max task period %.1f ms\n",
+                static_cast<unsigned long long>(th.load_failures), static_cast<unsigned long long>(th.load_recovered),
+                static_cast<unsigned long long>(th.max_fail_streak), th.max_rx_age_s, th.max_task_period_s * 1e3);
   }
   printTaskFigures(machine);
   writeLog(loop, cfg, csv_path);

@@ -15,6 +15,7 @@
 #include "real_replay/satellite_phase.hpp"
 #include "real_replay/satellite_udp.hpp"
 #include "real_replay/task_logic.hpp"
+#include "real_replay/task_runtime.hpp"
 
 using namespace real_replay;
 using namespace real_replay::task;
@@ -141,6 +142,20 @@ static void testFeasibility() {
 
 // ---- 4) machine ---------------------------------------------------------------------------------------------------
 /// Synthetic satellite + loop around the machine, 1 ms ticks of the task thread, 100 Hz satellite samples.
+/// LatestValue whose writer can be frozen mid-store (seq left odd), as if the rx thread were preempted inside store():
+/// every read then fails with kContended until release().
+struct StuckValue : sat::LatestValue<SatSample> {
+  bool held = false;
+  void holdOpen() {
+    if (!held) seq_.fetch_add(1);
+    held = true;
+  }
+  void release() {
+    if (held) seq_.fetch_add(1);
+    held = false;
+  }
+};
+
 struct Harness {
   TaskParams p;
   double tau = 24.474;
@@ -167,6 +182,9 @@ struct Harness {
   double age_offset = 0.0;                    // datagrams stamped this much in the past
   bool age_ramp = false;                      // age_offset grows by 1 ms per datagram (delivery delay)
   std::string file_sha;                       // sha256 of the weights file (empty = the command's)
+  bool via_seqlock = false;                   // inputs read like TaskRuntime: accepted -> LatestValue -> SatSnapshotReader
+  StuckValue lv;
+  SatSnapshotReader reader;
 
   Harness(const TaskParams& pp, const GraspCommand& c, bool submit = true)
       : p(pp), m(pp, 24.474, sat::kFaultPhaseMismatch), filter(pp.T_age_s), omega(c.omega) {
@@ -202,6 +220,7 @@ struct Harness {
     if (v == SampleVerdict::kOk) {
       last = s;
       have = true;
+      if (via_seqlock && !lv.held) lv.store(s);  // a frozen writer publishes nothing
     }
   }
 
@@ -224,8 +243,15 @@ struct Harness {
     in.activation_ready = true;
     in.tcp_p = m.command().start_p;
     in.tcp_q = m.command().start_q;
-    in.sat_have = have;
-    in.sat = last;
+    if (via_seqlock) {
+      const SatSnapshotReader::Result r = reader.read(lv, in.sat);
+      in.sat_have = r.have;
+      in.sat_load_failed = r.load_failed;
+      in.sat_load_fail_streak = reader.failStreak();
+    } else {
+      in.sat_have = have;
+      in.sat = last;
+    }
     in.rejected_seq = rej[1];
     in.rejected_clock = rej[2];
     in.rejected_age = rej[3];
@@ -307,6 +333,81 @@ static void testMachine() {
     check(transitionAllowed(TaskState::kApproach, TaskState::kCloseFollow) && transitionAllowed(TaskState::kRelease, TaskState::kHoldSafe) &&
               transitionAllowed(TaskState::kSqueeze, TaskState::kFaultGrasp) && !transitionAllowed(TaskState::kWaitTrigger, TaskState::kHoldSafe),
           "stage-3 transitions declared (APPROACH->CLOSE_FOLLOW->SQUEEZE->RELEASE->HOLD_SAFE, ->FAULT_GRASP)");
+  }
+
+  std::printf("satellite watchdog: seqlock read failures (writer frozen mid-store)\n");
+  auto toTrigger0 = [](Harness& h) { h.runUntil([&] { return h.in(TaskState::kWaitTrigger); }, 10.0); };
+  auto hasReason = [](const Harness& h, const char* key) { return h.m.faultReason().find(key) != std::string::npos; };
+  {  // (a) short freezes, many of them: the kept copy stays fresh -> no fault
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    toTrigger0(h);
+    for (int k = 0; k < 40; ++k) {  // 40 x (freeze 50 ms, run 50 ms) = 4 s, far beyond sat_timeout_s in total
+      h.lv.holdOpen();
+      h.runFor(0.05);
+      h.lv.release();
+      h.runFor(0.05);
+    }
+    check(h.in(TaskState::kWaitTrigger) && h.reader.loadFailures() > 1000,
+          "(a) repeated 50 ms read failures over 4 s: still WAIT_TRIGGER, no fault (" + std::to_string(h.reader.loadFailures()) +
+              " failed reads, state " + toString(h.m.state()) + ")");
+  }
+  {  // (a') one freeze shorter than the timeout
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    toTrigger0(h);
+    h.lv.holdOpen();
+    h.runFor(0.8 * g_params.sat_timeout_s);
+    check(h.in(TaskState::kWaitTrigger) && h.reader.failStreak() > 0,
+          f("(a') reads failing for %.2f s (< sat_timeout_s): no fault, kept copy used", 0.8 * g_params.sat_timeout_s));
+    // (b) the same freeze continues: the kept copy gets older than sat_timeout_s -> fault, message 'rx age'
+    h.runFor(0.4 * g_params.sat_timeout_s + 0.05);
+    expectFault("(b) reads failing beyond sat_timeout_s: kept copy too old", h, TaskState::kFaultNoMotion);
+    check(hasReason(h, "rx age") && hasReason(h, "seqlock contention"), "  ... reason names 'rx age' and the read failures: " + h.m.faultReason());
+  }
+  {  // (c1) never a sample: no datagram at all
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    h.produce = false;
+    h.runFor(g_params.sat_timeout_s + 0.5);
+    check(h.in(TaskState::kFaultNoMotion) && h.n_start == 0 && hasReason(h, "never received"),
+          std::string("(c1) no datagram ever: ") + toString(h.m.state()) + ", no START; reason: " + h.m.faultReason());
+  }
+  {  // (c2) never a sample: the very first store is frozen (seq 0 -> 1) -> kContended without any copy
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    h.lv.holdOpen();
+    h.runFor(g_params.sat_timeout_s + 0.5);
+    check(h.in(TaskState::kFaultNoMotion) && h.n_start == 0 && hasReason(h, "never received") && h.reader.loadFailures() > 0,
+          std::string("(c2) first store frozen: ") + toString(h.m.state()) + "; reason: " + h.m.faultReason());
+  }
+  {  // the plain timeout still works through the reader: satellite silent > sat_timeout_s
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    toTrigger0(h);
+    h.produce = false;
+    h.runFor(g_params.sat_timeout_s + 0.5);
+    expectFault("satellite silent through the reader", h, TaskState::kFaultNoMotion);
+    check(hasReason(h, "rx age") && !hasReason(h, "seqlock"), "  ... reason 'rx age' without read failures: " + h.m.faultReason());
+  }
+  {  // a nominal run through the reader reaches DONE
+    Harness h(g_params, nominalCmd());
+    h.via_seqlock = true;
+    h.runUntil([&] { return h.in(TaskState::kDone); }, 120.0);
+    check(h.in(TaskState::kDone) && h.reader.loadFailures() == 0, "nominal run through LatestValue + SatSnapshotReader: DONE, 0 read failures");
+  }
+  {  // LatestValue::tryLoad statuses
+    StuckValue v;
+    SatSample o;
+    const bool empty = v.tryLoad(o) == sat::LoadStatus::kEmpty;
+    SatSample x;
+    x.seq = 7;
+    v.store(x);
+    const bool ok = v.tryLoad(o) == sat::LoadStatus::kOk && o.seq == 7;
+    v.holdOpen();
+    const bool cont = v.tryLoad(o) == sat::LoadStatus::kContended && !v.load(o);
+    v.release();
+    check(empty && ok && cont && v.load(o), "LatestValue::tryLoad: kEmpty before any store, kOk after, kContended with the writer frozen");
   }
 
   std::printf("state machine: fault injection\n");

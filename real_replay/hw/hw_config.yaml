@@ -119,6 +119,10 @@ task:                                  # task layer del robot 1 (real_replay --m
   hb_send_hz: 20.0                     # heartbeat verso satellite_node (thread dedicato, MA vincolato al ciclo a 1 kHz: vedi hb_stall_s)
   hb_stall_s: 0.1                      # il heartbeat NON parte piu' se il ciclo di controllo non gira da piu' di cosi' (loop fermo, eccezione):
                                        # satellite_node si ferma da solo dopo udp.T_hb_s dall'ultimo heartbeat
+  follow_read_hold_s: 0.05             # (opzionale, default 0.05, in (0, udp.T_age_s]) primo ciclo di FOLLOW: se la lettura seqlock del
+                                       # campione satellite fallisce (writer a meta' store) e il loop a 1 kHz non ha ancora una copia valida,
+                                       # attende sul goal (twist zero) al massimo cosi', poi FREEZE. 50 ms = 5 periodi del satellite (100 Hz);
+                                       # deriva relativa nell'attesa |omega|*h*r = 3 deg/s * 0.05 s * 0.25 m ~ 0.65 mm << start_pos_tol_m
   jitter_period_s: 0.003               # periodo del ciclo a 1 kHz oltre cui si conta un ciclo in ritardo
   jitter_consecutive: 3                # tanti cicli consecutivi oltre jitter_period_s = guasto
   guard:                               # PROPOSTE (non validate su hardware), attive da CLOSE_FOLLOW in poi, solo in modalita' robot.

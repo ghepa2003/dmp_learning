@@ -204,6 +204,7 @@ HwTaskConfig loadHwTaskConfig(const std::string& path) {
     c.jitter_period_s = num(t, "jitter_period_s", "task");
     c.jitter_consecutive = static_cast<int>(num(t, "jitter_consecutive", "task"));
     if (t["hb_stall_s"]) c.hb_stall_s = num(t, "hb_stall_s", "task");
+    if (t["follow_read_hold_s"]) p.follow_read_hold_s = num(t, "follow_read_hold_s", "task");
     if (t["guard"] && t["guard"].IsMap()) {
       const YAML::Node g = t["guard"];
       if (g["enabled"]) p.guard_enabled = g["enabled"].as<bool>();
@@ -241,6 +242,7 @@ HwTaskConfig loadHwTaskConfig(const std::string& path) {
   bad(!(c.jitter_period_s > 0.001 && c.jitter_consecutive >= 1), "task.jitter_period_s > 1 ms, jitter_consecutive >= 1");
   bad(!(p.fault_linger_s >= 0.0), "task.fault_linger_s >= 0");
   bad(!(c.hb_stall_s >= 0.02 && c.hb_stall_s <= 1.0), "task.hb_stall_s in [0.02, 1]");
+  bad(!(p.follow_read_hold_s > 0.0 && p.follow_read_hold_s <= p.T_age_s), "task.follow_read_hold_s in (0, udp.T_age_s]");
   bad(!(p.guard_stiffness > 0.0 && p.guard_feq_warn_n > 0.0 && p.guard_feq_fault_n >= p.guard_feq_warn_n && p.guard_fext_warn_n > 0.0 &&
         p.guard_fext_fault_n >= p.guard_fext_warn_n && p.guard_debounce_s >= 0.0),
       "task.guard: warn > 0, fault >= warn, stiffness > 0, debounce >= 0");
@@ -557,6 +559,20 @@ static std::string satFaultNames(std::uint32_t bits) {
   return out;
 }
 
+/// Watchdog messages, one per branch (the old single text "no valid datagram for more than X s" hid which one fired).
+static std::string satNeverReceived(double timeout_s) {
+  return f("satellite: never received a valid datagram (timeout %.1f s)", timeout_s);
+}
+static std::string satRxAge(const MachineInputs& in, double timeout_s) {
+  std::string s = f("satellite: rx age %.3f s > timeout %.1f s (last valid datagram seq %.0f)", in.now_s - in.sat.rx_s, timeout_s,
+                    static_cast<double>(in.sat.seq));
+  if (in.sat_load_failed) {
+    s += f("; latest-sample read failed (seqlock contention) for %.0f consecutive task cycles, using the last valid copy",
+           static_cast<double>(in.sat_load_fail_streak));
+  }
+  return s;
+}
+
 bool TaskMachine::satFault(const MachineInputs& in, std::string& why) const {
   if (!rej_baseline_) return false;
   if (in.rejected_seq > rej_seq0_) {
@@ -572,9 +588,15 @@ bool TaskMachine::satFault(const MachineInputs& in, std::string& why) const {
     return true;
   }
   const bool sat_finished = stop_sent_ && in.sat_have && in.sat.state >= static_cast<std::uint32_t>(sat::SatState::kHold);
-  if ((!in.sat_have || in.now_s - in.sat.rx_s > p_.sat_timeout_s) && !sat_finished) {  // after our STOP the node ends on its own
-    why = f("satellite: no valid datagram for more than %.1f s", p_.sat_timeout_s);
-    return true;
+  if (!sat_finished) {  // after our STOP the node ends on its own
+    if (!in.sat_have) {
+      why = satNeverReceived(p_.sat_timeout_s);
+      return true;
+    }
+    if (in.now_s - in.sat.rx_s > p_.sat_timeout_s) {
+      why = satRxAge(in, p_.sat_timeout_s);
+      return true;
+    }
   }
   if (start_sent_ && !sat_finished) {
     // after our own STOP the satellite is expected to leave RUNNING and to latch the stop-command bit
@@ -632,8 +654,10 @@ MachineActions TaskMachine::update(const MachineInputs& in) {
         fault(in, fault_reason_);
       } else if (in.jitter_fault) {
         fault(in, "control-cycle jitter above the threshold");
-      } else if (in.now_s - t_state_ > p_.sat_timeout_s && (!in.sat_have || in.now_s - in.sat.rx_s > p_.sat_timeout_s)) {
-        fault(in, f("satellite: no valid datagram for more than %.1f s", p_.sat_timeout_s));
+      } else if (in.now_s - t_state_ > p_.sat_timeout_s && !in.sat_have) {
+        fault(in, satNeverReceived(p_.sat_timeout_s));
+      } else if (in.now_s - t_state_ > p_.sat_timeout_s && in.now_s - in.sat.rx_s > p_.sat_timeout_s) {
+        fault(in, satRxAge(in, p_.sat_timeout_s));
       } else if (satFault(in, why) && in.sat_have) {
         fault(in, why);
       } else if (validated_ && confirmed_ && !start_sent_) {

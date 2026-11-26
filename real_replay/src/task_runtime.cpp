@@ -7,6 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -38,9 +39,50 @@ constexpr double kDeg = sat::kDeg;
 }  // namespace
 
 // ---- TaskSource -------------------------------------------------------------------------------------------------
-TaskSource::TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s, ClockFn clock, double omega_nominal)
-    : approach_(std::move(approach)), shared_(shared), nominal_s_(nominal_s), clock_(clock ? clock : &monoNow), omega_nominal_(omega_nominal) {
+const char* toString(FollowStartKind k) {
+  switch (k) {
+    case FollowStartKind::kNone: return "not started";
+    case FollowStartKind::kFresh: return "fresh read";
+    case FollowStartKind::kKeptCopy: return "seqlock read failed (contention): last valid copy kept by the 1 kHz loop";
+  }
+  return "?";
+}
+
+const char* toString(FollowFreezeReason r) {
+  switch (r) {
+    case FollowFreezeReason::kNone: return "none";
+    case FollowFreezeReason::kNoSample: return "no satellite sample ever stored";
+    case FollowFreezeReason::kReadContention: return "seqlock read failing (contention) beyond follow_read_hold_s, no valid copy kept";
+    case FollowFreezeReason::kInvalidSample: return "satellite sample not finite / axis invalid";
+    case FollowFreezeReason::kStaleSample: return "satellite sample older than kFollowFreshAgeS";
+  }
+  return "?";
+}
+
+TaskSource::TaskSource(std::unique_ptr<ProDmpSource> approach, TaskShared& shared, double nominal_s, ClockFn clock, double omega_nominal,
+                       double read_hold_s)
+    : approach_(std::move(approach)),
+      shared_(shared),
+      nominal_s_(nominal_s),
+      clock_(clock ? clock : &monoNow),
+      omega_nominal_(omega_nominal),
+      read_hold_s_(read_hold_s) {
   if (!approach_) throw std::invalid_argument("TaskSource: no approach source");
+  if (!(read_hold_s_ > 0.0) || !std::isfinite(read_hold_s_)) throw std::invalid_argument("TaskSource: read_hold_s must be > 0");
+}
+
+void TaskSource::cacheSat() {
+  SatSample s;
+  if (shared_.sat_latest.tryLoad(s) == sat::LoadStatus::kOk) {  // bounded, no syscall
+    rt_last_ = s;
+    rt_have_ = true;
+  }
+}
+
+void TaskSource::freezeFollow(FollowFreezeReason r, double now) {
+  mode_ = SourceCmd::kFreeze;  // no usable phase: never move; the machine faults on the same data
+  shared_.follow_wait_s.store(std::isfinite(f_wait_since_) ? now - f_wait_since_ : 0.0, std::memory_order_relaxed);
+  shared_.follow_freeze_reason.store(static_cast<int>(r), std::memory_order_release);
 }
 
 void TaskSource::start(const Pose& activation) {
@@ -68,6 +110,7 @@ Pose TaskSource::sample(double dt) {
       last_ = act_;
       break;
     case SourceCmd::kApproach:
+      cacheSat();  // keeps a valid copy for the first follow cycle (its own read may fail on contention)
       last_ = approach_->sample(dt);
       if (!approach_done_ && approach_->done()) {
         approach_done_ = true;
@@ -86,13 +129,39 @@ Pose TaskSource::sample(double dt) {
 void TaskSource::startFollow() {
   SatSample s;
   const double now = clock_();
-  const bool ok = shared_.sat_latest.load(s) && std::isfinite(s.theta) && std::isfinite(s.center[0]) && std::isfinite(s.center[1]) &&
-                  std::isfinite(s.center[2]) && std::isfinite(s.axis[0]) && std::isfinite(s.axis[1]) && std::isfinite(s.axis[2]);
+  FollowStartKind kind = FollowStartKind::kFresh;
+  const sat::LoadStatus st = shared_.sat_latest.tryLoad(s);
+  if (st == sat::LoadStatus::kOk) {
+    rt_last_ = s;
+    rt_have_ = true;
+  } else if (st == sat::LoadStatus::kEmpty) {
+    freezeFollow(FollowFreezeReason::kNoSample, now);
+    return;
+  } else {  // kContended: the rx thread is mid-store. NOT "no sample".
+    shared_.follow_read_failures.fetch_add(1, std::memory_order_relaxed);
+    if (rt_have_) {
+      s = rt_last_;  // last valid copy (read in an earlier 1 kHz cycle); its age is checked below as any sample
+      kind = FollowStartKind::kKeptCopy;
+    } else {
+      // nothing kept yet: hold the end of the approach for this cycle and retry at the next one, within read_hold_s_
+      if (!std::isfinite(f_wait_since_)) f_wait_since_ = now;
+      if (now - f_wait_since_ > read_hold_s_) freezeFollow(FollowFreezeReason::kReadContention, now);
+      return;  // mode_ stays kApproach (goal pose, zero twist); follow_started_ stays false
+    }
+  }
+  const bool ok = std::isfinite(s.theta) && std::isfinite(s.center[0]) && std::isfinite(s.center[1]) && std::isfinite(s.center[2]) &&
+                  std::isfinite(s.axis[0]) && std::isfinite(s.axis[1]) && std::isfinite(s.axis[2]);
   const Eigen::Vector3d ax(s.axis[0], s.axis[1], s.axis[2]);
-  if (!ok || !(ax.norm() > 0.5) || now - static_cast<double>(s.t_mono_ns) * 1e-9 > kFollowFreshAgeS) {
-    mode_ = SourceCmd::kFreeze;  // no usable phase: never move; the machine faults on the same data
+  if (!ok || !(ax.norm() > 0.5)) {
+    freezeFollow(FollowFreezeReason::kInvalidSample, now);
     return;
   }
+  if (now - static_cast<double>(s.t_mono_ns) * 1e-9 > kFollowFreshAgeS) {
+    freezeFollow(FollowFreezeReason::kStaleSample, now);
+    return;
+  }
+  shared_.follow_wait_s.store(std::isfinite(f_wait_since_) ? now - f_wait_since_ : 0.0, std::memory_order_relaxed);
+  shared_.follow_start_kind.store(static_cast<int>(kind), std::memory_order_release);
   f_c_ = Eigen::Vector3d(s.center[0], s.center[1], s.center[2]);
   f_axis_ = ax.normalized();
   f_p_end_ = last_.p;  // the exact end of the approach (goal)
@@ -258,6 +327,32 @@ void TaskRuntime::gripper(GripperCmd c, std::uint32_t id) {
   grip_->request(c == GripperCmd::kOpen ? grip::GripperWorker::Kind::kOpen : grip::GripperWorker::Kind::kGrasp, id);
 }
 
+SatSnapshotReader::Result SatSnapshotReader::read(const sat::LatestValue<SatSample>& src, SatSample& out) {
+  Result r;
+  SatSample s;
+  sat::LoadStatus st = src.tryLoad(s);
+  if (st == sat::LoadStatus::kContended) {
+    // One yield, then one last try: if the rx thread was preempted mid-store on this core it can finish. The task
+    // thread is not real-time and runs every 2 ms, so a syscall here is harmless (never done in the 1 kHz callback).
+    std::this_thread::yield();
+    st = src.tryLoad(s);
+    if (st == sat::LoadStatus::kOk) ++recovered_;
+  }
+  if (st == sat::LoadStatus::kOk) {
+    last_ = s;
+    have_ = true;
+    streak_ = 0;
+  } else if (st == sat::LoadStatus::kContended) {
+    ++failures_;
+    ++streak_;
+    r.load_failed = true;
+  }
+  // kEmpty: nothing was ever stored -> have_ stays as it is (false)
+  r.have = have_;
+  if (have_) out = last_;
+  return r;
+}
+
 void TaskRuntime::rxLoop() {
   SatFilter filter(hw_.p.T_age_s);
   std::uint8_t buf[512];
@@ -356,17 +451,36 @@ void TaskRuntime::taskLoop() {
   std::size_t printed = 0;
   bool final_pass = false;
   double t_final = 0.0;
+  SatSnapshotReader sat_reader;
+  double t_prev = kNaN, period_max_1s = 0.0, t_health = kNaN;
+  std::uint64_t fail_at_last_health = 0;
+  bool follow_logged = false;
   for (;;) {
     const bool q = quit_.load();
     MachineInputs in;
     in.now_s = monoNow();
+    if (std::isfinite(t_prev)) {
+      const double dt = in.now_s - t_prev;
+      period_max_1s = std::max(period_max_1s, dt);
+      health_.max_task_period_s = std::max(health_.max_task_period_s, dt);
+    }
+    t_prev = in.now_s;
     in.activation_ready = sh_.activation_ready.load(std::memory_order_acquire);
     PoseSnap ms{};
     if (sh_.measured.load(ms)) {
       in.tcp_p = Eigen::Vector3d(ms.p[0], ms.p[1], ms.p[2]);
       in.tcp_q = Eigen::Quaterniond(ms.q[0], ms.q[1], ms.q[2], ms.q[3]);
     }
-    in.sat_have = sh_.sat_latest.load(in.sat);
+    {
+      const SatSnapshotReader::Result sr = sat_reader.read(sh_.sat_latest, in.sat);
+      in.sat_have = sr.have;
+      in.sat_load_failed = sr.load_failed;
+      in.sat_load_fail_streak = sat_reader.failStreak();
+      health_.load_failures = sat_reader.loadFailures();
+      health_.load_recovered = sat_reader.retriesRecovered();
+      health_.max_fail_streak = std::max(health_.max_fail_streak, sat_reader.failStreak());
+      if (in.sat_have) health_.max_rx_age_s = std::max(health_.max_rx_age_s, in.now_s - in.sat.rx_s);
+    }
     in.rejected_seq = rej_[static_cast<int>(SampleVerdict::kSeq)].load();
     in.rejected_clock = rej_[static_cast<int>(SampleVerdict::kClockBack)].load();
     in.rejected_nonfinite = rej_[static_cast<int>(SampleVerdict::kNonFinite)].load();
@@ -404,6 +518,38 @@ void TaskRuntime::taskLoop() {
       } else if (confirm_answer_.load() != 0) {
         m_.setConfirmed(confirm_answer_.load() == 1);
       }
+    }
+    if (!follow_logged) {  // FOLLOW start / freeze decided by the 1 kHz loop: logged once, with the reason
+      const int fr = sh_.follow_freeze_reason.load(std::memory_order_acquire);
+      const int fk = sh_.follow_start_kind.load(std::memory_order_acquire);
+      if (fr != 0 || fk != 0) {
+        char buf[320];
+        std::snprintf(buf, sizeof buf, "%s; waited %.1f ms, failed seqlock reads %llu",
+                      fr != 0 ? toString(static_cast<FollowFreezeReason>(fr)) : toString(static_cast<FollowStartKind>(fk)),
+                      sh_.follow_wait_s.load(std::memory_order_relaxed) * 1e3,
+                      static_cast<unsigned long long>(sh_.follow_read_failures.load(std::memory_order_relaxed)));
+        m_.note(in.now_s, fr != 0 ? "FOLLOW target FROZEN" : "FOLLOW started", buf);
+        follow_logged = true;
+      }
+    }
+    if (!std::isfinite(t_health)) t_health = in.now_s;
+    if (in.now_s - t_health >= 1.0) {  // 1 Hz satellite-link health line (events CSV + stdout)
+      char buf[320];
+      std::snprintf(buf, sizeof buf,
+                    "rx_age %s s, accepted %llu, rej seq %llu clock %llu age %llu nonfinite %llu, load_fail %llu (+%llu in 1 s, "
+                    "recovered by yield %llu, streak %llu), task period max %.1f ms",
+                    in.sat_have ? std::to_string(in.now_s - in.sat.rx_s).c_str() : "none",
+                    static_cast<unsigned long long>(rej_[0].load()), static_cast<unsigned long long>(in.rejected_seq),
+                    static_cast<unsigned long long>(in.rejected_clock), static_cast<unsigned long long>(in.rejected_age),
+                    static_cast<unsigned long long>(in.rejected_nonfinite),
+                    static_cast<unsigned long long>(sat_reader.loadFailures()),
+                    static_cast<unsigned long long>(sat_reader.loadFailures() - fail_at_last_health),
+                    static_cast<unsigned long long>(sat_reader.retriesRecovered()),
+                    static_cast<unsigned long long>(sat_reader.failStreak()), period_max_1s * 1e3);
+      m_.note(in.now_s, "sat_link", buf);
+      fail_at_last_health = sat_reader.loadFailures();
+      period_max_1s = 0.0;
+      t_health = in.now_s;
     }
     const MachineActions a = m_.update(in);
     sh_.task_state.store(static_cast<int>(m_.state()), std::memory_order_relaxed);

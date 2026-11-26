@@ -126,13 +126,18 @@ inline bool unpackCommand(const std::uint8_t* buf, std::size_t len, CommandPacke
 
 /// Single-writer / multi-reader seqlock. Every word is a std::atomic (no data race); store() and load() never
 /// allocate, never block, never call the OS. load() returns false if no value was stored yet or if it could not get
-/// a consistent copy in a few attempts (the reader just retries at its next period).
+/// a consistent copy in a few attempts (the reader just retries at its next period). tryLoad() tells the two cases
+/// apart: kEmpty (nothing ever stored) vs kContended (a writer was mid-store for all the attempts, e.g. preempted).
+enum class LoadStatus : int { kOk = 0, kEmpty = 1, kContended = 2 };
+
 template <class T>
 class LatestValue {
   static_assert(std::is_trivially_copyable<T>::value, "LatestValue needs a trivially copyable type");
   static constexpr std::size_t kWords = (sizeof(T) + 7) / 8;
 
  public:
+  static constexpr int kAttempts = 64;
+
   void store(const T& v) noexcept {
     std::uint64_t buf[kWords] = {};
     std::memcpy(buf, &v, sizeof(T));
@@ -143,25 +148,28 @@ class LatestValue {
     seq_.store(s + 2, std::memory_order_release);
   }
 
-  bool load(T& out) const noexcept {
-    for (int attempt = 0; attempt < 64; ++attempt) {
+  /// Same contract as load() (no syscall, bounded), with the reason of a failure. `out` is written only on kOk.
+  LoadStatus tryLoad(T& out) const noexcept {
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
       const std::uint64_t s1 = seq_.load(std::memory_order_acquire);
-      if (s1 == 0) return false;
+      if (s1 == 0) return LoadStatus::kEmpty;
       if (s1 & 1u) continue;
       std::uint64_t buf[kWords];
       for (std::size_t i = 0; i < kWords; ++i) buf[i] = w_[i].load(std::memory_order_relaxed);
       std::atomic_thread_fence(std::memory_order_acquire);
       if (seq_.load(std::memory_order_relaxed) == s1) {
         std::memcpy(&out, buf, sizeof(T));
-        return true;
+        return LoadStatus::kOk;
       }
     }
-    return false;
+    return LoadStatus::kContended;
   }
+
+  bool load(T& out) const noexcept { return tryLoad(out) == LoadStatus::kOk; }
 
   std::uint64_t version() const noexcept { return seq_.load(std::memory_order_acquire) / 2; }
 
- private:
+ protected:  // protected (not private) only so that a test can hold a store open (odd seq) to force kContended
   std::atomic<std::uint64_t> seq_{0};
   std::array<std::atomic<std::uint64_t>, kWords> w_{};
 };
