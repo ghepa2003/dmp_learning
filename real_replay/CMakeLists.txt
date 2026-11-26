@@ -238,6 +238,15 @@ set_target_properties(satellite_node PROPERTIES
   BUILD_RPATH "${FRANKA_NONRT_BUILD_DIR}")
 target_link_options(satellite_node PRIVATE -Wl,--disable-new-dtags)
 
+# READ-ONLY probe (readOnce only: no control loop, no setter, no gripper): poses of robot 1, satellite phase of robot 2
+add_executable(pose_read tools/pose_read.cpp)
+target_link_libraries(pose_read PRIVATE sat_lib task_lib Franka::Franka Threads::Threads)
+target_include_directories(pose_read PRIVATE ${RR_GEN_DIR})
+add_dependencies(pose_read rr_git_version)
+target_compile_options(pose_read PRIVATE -Wall -Wextra)
+set_target_properties(pose_read PROPERTIES BUILD_WITH_INSTALL_RPATH OFF BUILD_RPATH "${FRANKA_NONRT_BUILD_DIR}")
+target_link_options(pose_read PRIVATE -Wl,--disable-new-dtags)
+
 if(REAL_REPLAY_BUILD_TESTS)
   set(HW_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/hw/hw_config.yaml")
 
